@@ -21,7 +21,7 @@ External: OpenAI Responses API · NVIDIA Nemotron Parse (build.nvidia.com, optio
 
 Run: `./run.sh` (builds frontend if needed, starts uvicorn on :8000). Dev: `uvicorn app.main:app --reload` + `npm run dev`.
 
-## 2. Files on disk
+## 2. Files on disk (DB paths are stored relative to the data dir, so the data folder can move)
 
 ```
 data/books/<book_id>/book.pdf
@@ -158,7 +158,7 @@ A lesson = intro (why it matters, the idea, notation, visual) + 2-3 **knowledge 
 - **KP pass**: 2 *independent* correct answers **in a row** (no hints, no solution reveal). Then the next KP starts. All KPs passed → lesson **passed**: status learned, FSRS card created (`review_card(Rating.Good)`), XP = est_minutes (clamped 3-20) + 2 bonus if no wrong answers.
 - A hint-assisted or revealed correct answer resets the streak to 0 but isn't "wrong". A wrong answer resets the streak.
 - **KP fail**: the KP's pool is exhausted (max 5 questions incl. any easier-step swaps) without 2 in a row → lesson **halted**: outcome failed, 0 XP, `cooldown_until = now + 2h` (it returns later — the selector re-offers it), `kp_failures[kp] += 1`. On the **second failure at the same KP** → remediation: the skill's direct prerequisites with the highest encompassing weights (top 2) are made due now (remedial reviews) and the result carries `suggestion="review_prerequisite"`.
-- **Proof KPs**: if a KP's pool contains a free-response question, passing it also requires one independent, self-graded "correct" written answer; that question is served no later than the KP's 2nd question.
+- **Proof KPs**: if a KP's pool contains a free-response question, passing it also requires one independent, self-graded "correct" written answer (served no later than the KP's 2nd question; lessons for proof skills carry two written proofs per KP). An assisted, too-short (< 15 characters) or partial/incorrect written answer never fails the KP by itself: the next unseen written question is served; if none is left the requirement is waived, the KP passes on 2-in-a-row, and the lesson's first FSRS rating is Hard (earlier first review — the proof comes back there). Reviews of proof skills include one written question.
 - Easier step: available only after ≥ 1 wrong answer in the current KP (else 409); after 2 consecutive wrong answers the result also suggests it. `POST /easier` swaps in an unseen, strictly lower-tier question; a correct answer on it neither advances nor breaks the 2-in-a-row streak.
 - Integrity: hints are recorded server-side (`POST /api/questions/{qid}/hint`, `QuestionPublic.hints_used`); revealing the solution before answering makes the attempt assisted, except a free-response *comparison* after a committed answer (`RevealRequest.response`). Answers equal in value but not simplified (e.g. retyping the question's expression) get a 422 "simplify" message and are not counted.
 - Questions are served in pool order, never repeating a question within a task; on a later retry of the lesson prefer questions never seen before.
@@ -182,6 +182,7 @@ Candidates:
 - **Lessons**: available/in_progress skills with lesson ready and not in cooldown. importance = 1 + 0.3 × #transitive dependents + **repetition compression** bonus Σ w(S→P) over due prerequisites P (a lesson that implicitly practises due reviews is preferred; if it covers a due review with w ≥ 0.5, that review is dropped from the menu — the lesson's success will credit it).
 - Lesson floor: if the last 3 completed tasks were all reviews and a lesson exists, the top option is a lesson.
 - Interleave: no two consecutive options for the same skill; ties by order_index.
+Locked skills are never offered (a learner may still start one with "Learn anyway" = `force`; once started, it can be resumed without `force`).
 Every option carries a human-readable `reason` ("Review due — estimated recall 78%", "Next new skill — unlocks 3 others", "Also refreshes S2 and S4 which are due").
 Nothing available → `message`: "All caught up — next review …" or "Lessons are still being generated…".
 Session: daily goal 30 XP (kv `daily_goal`); `goal_reached` lets the UI show a clean stopping point. Course progress % = learned skills / total (Math Academy shows topics completed, not XP). Estimated completion = remaining XP (Σ est_minutes of unlearned skills) / avg XP per active day (last 7 days, default 30).
@@ -201,7 +202,7 @@ Markdown everywhere through one `<Markdown>` component (react-markdown + remark-
 
 ## 9. Maintenance
 
-`backend/scripts/regenerate.py --data-dir ../data --course <id> [--skills S1,S4] [--only lessons,visuals,verify] [--dry-run]` rewrites a course's lessons/visuals/verification with the current prompts while keeping learner progress (answered questions are retired, not deleted; a DB backup is written first). `backend/scripts/try_parse.py <pdf> <page>…` shows how a page is transcribed.
+`backend/scripts/regenerate.py --data-dir ../data --course <id> [--skills S1,S4] [--only lessons,visuals,verify] [--dry-run]` rewrites a course's lessons/visuals/verification with the current prompts while keeping learner progress (answered questions are retired, not deleted; a DB backup is written first). It refuses to write while the app answers on :8000 (stop it first, or `--force`); questions stay servable during re-verification and Ctrl-C leaves a resumable job. `backend/scripts/try_parse.py <pdf> <page>…` shows how a page is transcribed.
 
 ## 10. Testing
 

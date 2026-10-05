@@ -46,6 +46,7 @@ def health() -> Health:
         nvidia=settings.has_nvidia,
         fake_llm=settings.fake_llm,
         parse_engine=settings.parse_engine,
+        max_course_pages=settings.max_course_pages,
         models={
             "vision": f"{settings.model_vision} ({settings.effort_vision})",
             "graph": f"{settings.model_graph} ({settings.effort_graph})",
@@ -70,6 +71,8 @@ def spa(full_path: str):
     if full_path.startswith("api/"):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     dist = FRONTEND_DIST.resolve()
+    if "\x00" in full_path:
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
     candidate = (dist / full_path).resolve()
     # Only ever serve files that live inside frontend/dist (blocks ../ and absolute-path tricks).
     if full_path and candidate.is_relative_to(dist) and candidate.is_file():

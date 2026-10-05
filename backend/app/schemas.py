@@ -237,6 +237,8 @@ class QuestionPublic(BaseModel):
     source_exercise: str | None = None
     flagged: bool = False
     hints_used: int = 0  # hints already shown for the current attempt (server-recorded; survives reloads)
+    revealed: bool = False  # the solution was revealed for the current attempt (server-recorded)
+    committed_response: str | None = None  # free_response: the answer committed before a comparison reveal
 
 
 class KnowledgePoint(BaseModel):
@@ -306,6 +308,8 @@ class TaskProgress(BaseModel):
     answered: int  # total answered in this task (excl. voided)
     correct: int  # total correct in this task
     total_questions: int  # reviews: questions in the set; lessons: 0 (open-ended)
+    kp_wrong: int = 0  # wrong answers so far in the current KP (lesson)
+    easier_available: bool = False  # POST /easier would succeed now (after a miss, and an easier question exists)
 
 
 class Task(BaseModel):
@@ -412,6 +416,7 @@ class Health(BaseModel):
     nvidia: bool
     fake_llm: bool
     parse_engine: str
+    max_course_pages: int = 80
     models: dict[str, str]
 
 

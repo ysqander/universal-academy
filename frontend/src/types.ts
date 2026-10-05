@@ -268,6 +268,8 @@ export interface QuestionPublic {
   source_exercise: string | null;
   flagged: boolean;
   hints_used: number; // hints already shown for this attempt (server-recorded)
+  revealed: boolean; // solution revealed for the current attempt (server-recorded)
+  committed_response: string | null; // free_response: answer committed before a comparison reveal
 }
 
 export interface SkillRef {
@@ -331,6 +333,8 @@ export interface TaskProgress {
   answered: number;
   correct: number;
   total_questions: number; // reviews: size of the set; lessons: 0
+  kp_wrong: number; // wrong answers so far in the current KP
+  easier_available: boolean; // POST /easier would succeed now
 }
 
 export interface Task {
@@ -422,5 +426,6 @@ export interface Health {
   nvidia: boolean;
   fake_llm: boolean;
   parse_engine: string;
+  max_course_pages: number;
   models: Record<string, string>;
 }

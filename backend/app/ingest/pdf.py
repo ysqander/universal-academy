@@ -12,6 +12,7 @@ import os
 import re
 import tempfile
 import threading
+import unicodedata
 from collections import Counter, OrderedDict
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -126,10 +127,10 @@ def read_book_meta(pdf_path: Path, display_name: str | None = None) -> BookMeta:
         meta = doc.metadata or {}
         labels = [doc[i].get_label() or str(i + 1) for i in range(doc.page_count)]
         has_text = any(len(doc[i].get_text("text").strip()) > 200 for i in range(min(30, doc.page_count)))
-        toc = doc.get_toc(simple=True)
+        toc = toc_with_positions(doc)
         page_count = doc.page_count
     outline = outline_from_toc(toc, page_count, labels) if len(toc) >= 2 else []
-    title = _clean_meta_title(meta.get("title") or "") or prettify_filename(display_name or pdf_path.name)
+    title = prettify_title(_clean_meta_title(meta.get("title") or "")) or prettify_filename(display_name or pdf_path.name)
     return BookMeta(
         title=title,
         author=" ".join((meta.get("author") or "").split()),
@@ -160,45 +161,124 @@ def prettify_filename(name: str) -> str:
     return text or "Untitled book"
 
 
+TOP_OF_PAGE = 0.12  # a section whose heading is this close to the top of its page starts the page
+_RUNNING_HEADER_BAND = 0.07  # fraction of the page height that holds the running header
+
+
+def toc_with_positions(doc: pymupdf.Document) -> list[list[Any]]:
+    """get_toc rows [level, title, 1-based page, starts_mid_page]. A section starts mid-page when its
+    destination lies below body text of that page (it then shares the page with the previous section)."""
+    rows: list[list[Any]] = []
+    for row in doc.get_toc(simple=False):
+        level, title, page = row[0], row[1], row[2]
+        dest = row[3] if len(row) > 3 and isinstance(row[3], dict) else {}
+        mid = False
+        if 1 <= page <= doc.page_count:
+            pg = doc[page - 1]
+            mid = starts_mid_page(pg, _dest_y(pg, dest), str(title))
+        rows.append([level, title, page, mid])
+    return rows
+
+
+def _dest_y(page: pymupdf.Page, dest: dict[str, Any]) -> float | None:
+    """Top-left y of an outline destination, None if unknown. PyMuPDF reports direct /GoTo targets in page
+    (top-left) coordinates but resolved named destinations in raw PDF (bottom-left) coordinates."""
+    to = dest.get("to")
+    if to is None:
+        return None
+    try:
+        point = pymupdf.Point(to)
+        y = (point * page.transformation_matrix).y if dest.get("kind") == pymupdf.LINK_NAMED else point.y
+    except Exception:  # malformed destination
+        return None
+    height = page.rect.height
+    if not 0 <= y <= height or y > 0.95 * height:  # off-page, or /Fit-style "bottom-left corner" targets
+        return None
+    return float(y)
+
+
+def starts_mid_page(page: pymupdf.Page, y: float | None, title: str) -> bool:
+    """True if body text precedes the section start at `y` on its page. Without a position the title is searched
+    for on the page; if it cannot be found either, the page is assumed shared (better one page too many)."""
+    height = page.rect.height
+    if y is None:
+        hits = [r for r in page.search_for(title.strip()[:80]) if r.y0 >= _RUNNING_HEADER_BAND * height] if title.strip() else []
+        if not hits:
+            return True
+        y = min(r.y0 for r in hits)
+    if y <= TOP_OF_PAGE * height:
+        return False
+    for _x0, y0, _x1, y1, text, *_ in page.get_text("blocks"):
+        if text.strip() and y0 >= _RUNNING_HEADER_BAND * height and y1 <= y - 2:
+            return True
+    return False
+
+
 def outline_from_toc(toc: Sequence[Sequence[Any]], page_count: int, labels: list[str]) -> list[OutlineNode]:
-    """Build the OutlineNode tree from get_toc() rows [level, title, 1-based page]."""
-    flat: list[tuple[int, str, int | None]] = []
+    """Build the OutlineNode tree from get_toc() rows [level, title, 1-based page(, starts_mid_page)]."""
+    flat: list[tuple[int, str, int | None, bool]] = []
     for row in toc:
         level, title, page = int(row[0]), " ".join(str(row[1]).split()), int(row[2])
-        flat.append((max(1, level), title or "Untitled", page - 1 if page >= 1 else None))
+        mid = bool(row[3]) if len(row) > 3 and isinstance(row[3], bool) else False
+        flat.append((max(1, level), title or "Untitled", page - 1 if page >= 1 else None, mid))
     return build_outline(flat, page_count, labels)
 
 
-def build_outline(entries: Sequence[tuple[int, str, int | None]], page_count: int, labels: list[str]) -> list[OutlineNode]:
-    """entries: (level, title, 0-based start or None) in TOC order. end = next start at same/higher level − 1,
-    clamped to the parent's end; the last top-level node ends at the last page. Ids n0..nN in order."""
+def build_outline(
+    entries: Sequence[tuple[int, str, int | None] | tuple[int, str, int | None, bool]], page_count: int, labels: list[str]
+) -> list[OutlineNode]:
+    """entries: (level, title, 0-based start or None[, starts_mid_page]) in TOC order.
+
+    A node ends where the nearest later-starting entry at the same or higher level begins (page order, not TOC
+    order, so a misplaced 'Index' bookmark cannot swallow chapters): on that entry's start page when it starts
+    mid-page (the page is shared), else the page before. Clamped into the parent's range; the last top-level
+    node ends at the last page. Titles are prettified (R^n → Rⁿ). Ids n0..nN in TOC order."""
     if not entries or page_count <= 0:
         return []
     last = page_count - 1
+    levels = [e[0] for e in entries]
+    mids = [bool(e[3]) if len(e) > 3 else False for e in entries]  # type: ignore[misc]
     starts: list[int] = []
-    for i, (_, _, start) in enumerate(entries):
+    for i, entry in enumerate(entries):
+        start = entry[2]
         if start is None:  # no destination: take the next known start (or the previous one)
-            start = next((s for _, _, s in entries[i + 1 :] if s is not None), starts[-1] if starts else 0)
+            start = next((e[2] for e in entries[i + 1 :] if e[2] is not None), starts[-1] if starts else 0)
+            mids[i] = False
         starts.append(min(max(start, 0), last))
 
     roots: list[OutlineNode] = []
     stack: list[OutlineNode] = []
-    for i, (level, title, _) in enumerate(entries):
-        nxt = next((starts[j] for j in range(i + 1, len(entries)) if entries[j][0] <= level), None)
+    for i, entry in enumerate(entries):
+        level, title = entry[0], entry[1]
         while stack and stack[-1].level >= level:
             stack.pop()
         parent = stack[-1] if stack else None
-        end = (nxt - 1) if nxt is not None else last
+        start = starts[i]
+        if parent is not None:  # a child never leaves its parent's range (TOC typos)
+            start = min(max(start, parent.start_page), parent.end_page)
+        nxt = min(
+            (
+                (starts[j], j)
+                for j in range(len(entries))
+                if j != i and levels[j] <= level and (starts[j] > start or (starts[j] == start and j > i))
+            ),
+            default=None,
+        )
+        if nxt is None:
+            end = last
+        else:
+            start_j, j = nxt
+            end = start_j if mids[j] and start_j > start else start_j - 1
         if parent is not None:
             end = min(end, parent.end_page)
-        end = max(starts[i], end)
+        end = max(start, end)
         node = OutlineNode(
             id=f"n{i}",
-            title=title,
+            title=prettify_title(title) or title,
             level=level,
-            start_page=starts[i],
+            start_page=start,
             end_page=end,
-            label_start=_label(labels, starts[i]),
+            label_start=_label(labels, start),
             label_end=_label(labels, end),
         )
         (parent.children if parent else roots).append(node)
@@ -208,6 +288,35 @@ def build_outline(entries: Sequence[tuple[int, str, int | None]], page_count: in
 
 def _label(labels: list[str], page: int) -> str:
     return labels[page] if 0 <= page < len(labels) and labels[page] else str(page + 1)
+
+
+_TITLE_SUPERSCRIPTS = {
+    **dict(zip("0123456789+-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻")),
+    **dict(zip("abcdefghijklmnoprstuvwxyz", "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ")),
+    "T": "ᵀ",  # transpose; same table as the frontend's prettyTitle
+}
+_TITLE_EXPONENT_RE = re.compile(r"(?<!\\)\^(?:\{([^{}\s\\])\}|([^\s{}^\\]))(?![A-Za-z0-9])")
+_TITLE_MATH_RE = re.compile(r"\$[^$]*\$")
+
+
+def prettify_title(title: str) -> str:
+    r"""TeX-like carets in bookmark / TOC titles as Unicode: 'R^n and C^n' → 'Rⁿ and Cⁿ', 'x^2' → 'x²',
+    'F^\infty' → 'F^∞' (no superscript ∞ exists). Only single-character exponents with a Unicode superscript
+    are rewritten; text inside $…$ is left alone."""
+    if "^" not in title and "\\infty" not in title:
+        return title
+
+    def plain(part: str) -> str:
+        part = re.sub(r"\\infty(?![A-Za-z])", "∞", part).replace("^{∞}", "^∞")
+        return _TITLE_EXPONENT_RE.sub(lambda m: _TITLE_SUPERSCRIPTS.get(m.group(1) or m.group(2), m.group(0)), part)
+
+    out: list[str] = []
+    pos = 0
+    for m in _TITLE_MATH_RE.finditer(title):
+        out += [plain(title[pos : m.start()]), m.group(0)]
+        pos = m.end()
+    out.append(plain(title[pos:]))
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -260,14 +369,50 @@ async def detect_outline(pdf_path: Path, page_labels: list[str]) -> list[Outline
         return []
     if not toc.found or not toc.entries:
         return []
+    titled = [(" ".join(e.title.split()), e.printed_page.strip()) for e in toc.entries]
     offset = await _detect_page_offset(Path(pdf_path))
+    if offset is None and not _has_real_labels(page_labels):
+        offset = await asyncio.to_thread(_anchored_offset, Path(pdf_path), titled)
+    starts = [resolve_printed_page(printed, page_labels, offset, page_count) for _, printed in titled]
+    mids = await asyncio.to_thread(_mid_page_flags, Path(pdf_path), [t for t, _ in titled], starts)
     entries = [
-        (max(1, e.level), " ".join(e.title.split()), resolve_printed_page(e.printed_page, page_labels, offset, page_count))
-        for e in toc.entries
+        (max(1, e.level), title, start, mid)
+        for e, (title, _), start, mid in zip(toc.entries, titled, starts, mids)
+        if start is not None
     ]
-    entries = [e for e in entries if e[2] is not None]
     log.info("detected outline for %s: %d entries (offset %s)", Path(pdf_path).name, len(entries), offset)
     return build_outline(entries, page_count, page_labels)
+
+
+def _mid_page_flags(pdf_path: Path, titles: list[str], starts: list[int | None]) -> list[bool]:
+    with open_pdf(pdf_path) as doc:
+        return [starts_mid_page(doc[s], None, t) if s is not None else False for t, s in zip(titles, starts)]
+
+
+def _norm_words(text: str) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", text).lower()).split())
+
+
+def _anchored_offset(pdf_path: Path, titled: list[tuple[str, str]], max_pages: int = 400) -> int | None:
+    """Offset (pdf index − printed page) from where TOC titles appear as headings: the first page after the
+    table of contents whose top lines contain the title. None unless two entries agree."""
+    with open_pdf(pdf_path) as doc:
+        n = min(max_pages, doc.page_count)
+        tops = [_norm_words(" ".join(ln for ln in doc[i].get_text("text", sort=True).splitlines()[:6])) for i in range(n)]
+        bodies = [_norm_words(doc[i].get_text("text")) for i in range(min(DETECT_PAGES, n))]
+    keys = [(_norm_words(t), p) for t, p in titled if p.isdigit() and len(_norm_words(t)) >= 4]
+    # pages listing several of the titles are the table of contents itself: headings come after them
+    toc_pages = [i for i, body in enumerate(bodies) if sum(k in body for k, _ in keys[:30]) >= 3]
+    first = toc_pages[-1] + 1 if toc_pages else 0
+    votes: Counter[int] = Counter()
+    for key, printed in keys[:12]:
+        found = next((i for i in range(first, n) if key in tops[i]), None)
+        if found is not None:
+            votes[found - int(printed)] += 1
+    if not votes:
+        return None
+    offset, count = votes.most_common(1)[0]
+    return offset if count >= 2 else None
 
 
 async def _first_pages_text(pdf_path: Path) -> tuple[list[str], int]:
@@ -287,40 +432,61 @@ async def _detect_page_offset(pdf_path: Path) -> int | None:
     return await asyncio.to_thread(work)
 
 
+_PAGE_NUMBER_PATTERNS = (
+    re.compile(r"^(?:page|p\.)\s*(\d{1,4})(?:\s*(?:of|/)\s*\d{1,4})?$", re.I),  # "Page 5 of 300" votes on 5
+    re.compile(r"(\d{1,4})"),  # bare number (after stripping "- 5 -" decorations)
+    re.compile(r"^(\d{1,4})\s*[|·•–—-]"),  # "5 | Chapter 1"
+    re.compile(r"[|·•–—-]\s*(\d{1,4})$"),  # "Title · 5"
+    re.compile(r"^(\d{1,4})\s+[A-Za-z]"),  # "12 Chapter 1 Vector Spaces"
+    re.compile(r"[A-Za-z]\S*\s+(\d{1,4})$"),  # "Section 2A Span 31"
+)
+_DECORATION_RE = re.compile(r"^[\s\-–—\[\(|·•]+|[\s\-–—\]\)|·•]+$")
+
+
+def _page_number(candidate: str) -> int | None:
+    candidate = _DECORATION_RE.sub("", candidate)
+    if len(candidate) > 80:  # running text, not a header/footer
+        return None
+    for i, pattern in enumerate(_PAGE_NUMBER_PATTERNS):
+        m = pattern.fullmatch(candidate) if i == 1 else pattern.search(candidate)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def detect_page_offset(doc: pymupdf.Document, max_pages: int = 120) -> int | None:
     """Most common (pdf index − printed number) over pages whose first/last text lines carry a page number
-    (a bare number, or a running header/footer starting or ending with one). None without 3 agreeing pages."""
+    (a bare or decorated number, "Page N of M", or a running header/footer starting or ending with one).
+    None without 3 agreeing pages."""
     votes: Counter[int] = Counter()
     for i in range(min(max_pages, doc.page_count)):
         lines = [ln.strip() for ln in doc[i].get_text("text", sort=True).splitlines() if ln.strip()]
-        for candidate in (lines[:2] + lines[-2:]) if lines else []:
-            m = (
-                re.fullmatch(r"(\d{1,4})", candidate)
-                or re.match(r"^(\d{1,4})\s+[A-Za-z]", candidate)
-                or re.search(r"[A-Za-z]\S*\s+(\d{1,4})$", candidate)
-            )
-            if m:
-                votes[i - int(m.group(1))] += 1
-                break
+        numbers = {n for n in (_page_number(c) for c in (lines[:2] + lines[-2:])) if n is not None}
+        for n in numbers:  # a heading ending in a number must not hide the real footer
+            votes[i - n] += 1
     if not votes:
         return None
     offset, count = votes.most_common(1)[0]
     return offset if count >= 3 else None
 
 
+def _has_real_labels(labels: list[str]) -> bool:
+    return any(lbl != str(i + 1) for i, lbl in enumerate(labels))
+
+
 def resolve_printed_page(printed: str, labels: list[str], offset: int | None, page_count: int) -> int | None:
-    """Printed page → PDF index: exact page label match first (labels from /PageLabels), else number + offset."""
+    """Printed page → PDF index: exact page label match first (labels from /PageLabels), else number + offset.
+    None when neither is known (guessing 'printed page = index + 1' maps every entry to the wrong page)."""
     printed = printed.strip()
     if not printed:
         return None
-    has_real_labels = any(lbl != str(i + 1) for i, lbl in enumerate(labels))
-    if has_real_labels:
+    if _has_real_labels(labels):
         matches = [i for i, lbl in enumerate(labels) if lbl == printed]
         if matches:
             return matches[-1] if printed.isdigit() else matches[0]
-    if not printed.isdigit():
+    if not printed.isdigit() or offset is None:
         return None
-    index = int(printed) + (offset if offset is not None else -1)
+    index = int(printed) + offset
     return index if 0 <= index < page_count else None
 
 
@@ -385,6 +551,9 @@ GROUP_GAP = 60.0  # pt: max gap between fragments of one drawing (e.g. three sep
 SMALL_FRAGMENT_AREA = 4000.0  # pt²: only fragments this small are grouped across larger gaps
 LABEL_MARGIN = 6.0  # pt: text lines this close and mostly inside a figure are its labels
 MAX_LABEL_CHARS = 16
+GLYPH_LABEL_GAP = 8.0  # pt: tiny drawn glyph clusters (tick labels drawn as outlines) this close join a figure
+ROW_GAP = 4.0  # pt: text lines closer than this side by side form one visual row (a split-up equation)
+_RELATION_RE = re.compile(r"[=<>≤≥≠∈∉⊆⊂≈≡]")
 FIGURE_CLASSES = {"Picture", "Chart"}
 
 
@@ -430,12 +599,15 @@ def scan_figures(page: pymupdf.Page, blocks: Sequence[Block] = ()) -> FigureScan
     drawings = [p for p in paths if id(p) not in box_ids]
 
     vector: list[pymupdf.Rect] = []
+    label_bits: list[pymupdf.Rect] = []  # tiny rejected clusters: tick marks / glyph-outline labels near figures
     if drawings:
         for rect in page.cluster_drawings(drawings=drawings):
             rect = rect & page_rect
-            reason = _cluster_rejection(rect, _members(drawings, rect), page_rect)
+            reason = _cluster_rejection(rect, _members(drawings, rect), page_rect, lines)
             if reason:
                 rejected.append((_r4(rect), reason))
+                if reason in ("frame", "glyphs") and rect.width * rect.height < MIN_FIGURE_AREA:
+                    label_bits.append(rect)
             else:
                 vector.append(rect)
 
@@ -458,7 +630,10 @@ def scan_figures(page: pymupdf.Page, blocks: Sequence[Block] = ()) -> FigureScan
         candidates = _merge_nemotron(candidates, blocks, page_rect, lines, rejected)
     candidates = _merge_overlapping(candidates)
     for cand in candidates:
-        cand.bbox = _r4(_absorb_labels(pymupdf.Rect(cand.bbox), lines) & page_rect)
+        rect = pymupdf.Rect(cand.bbox)
+        if "vector" in cand.sources:
+            rect = _absorb_glyph_labels(rect, label_bits, lines)
+        cand.bbox = _r4(_absorb_labels(rect, lines) & page_rect)
     if blocks:
         _attach_captions(candidates, blocks, page_rect)
     candidates = _reading_order(candidates)
@@ -557,7 +732,9 @@ def _members(drawings: Sequence[dict[str, Any]], rect: pymupdf.Rect) -> list[dic
     return [p for p in drawings if grown.contains(p["rect"])]
 
 
-def _cluster_rejection(rect: pymupdf.Rect, members: Sequence[dict[str, Any]], page_rect: pymupdf.Rect) -> str | None:
+def _cluster_rejection(
+    rect: pymupdf.Rect, members: Sequence[dict[str, Any]], page_rect: pymupdf.Rect, lines: Sequence[_TextLine] = ()
+) -> str | None:
     if rect.is_empty or rect.width < MIN_RULE_THICKNESS or rect.height < MIN_RULE_THICKNESS:
         return "thin"
     if rect.width >= 0.9 * page_rect.width and rect.height >= 0.9 * page_rect.height:
@@ -569,11 +746,29 @@ def _cluster_rejection(rect: pymupdf.Rect, members: Sequence[dict[str, Any]], pa
         r = p["rect"] & rect
         if p.get("fill") is not None and _is_box_shape(p) and r.width * r.height >= 0.7 * cluster_area:
             return "box"
-    if all(_is_box_shape(p) for p in members):
+    glyphs = all(p.get("color") is None and max(p["rect"].width, p["rect"].height) <= 14 for p in members)
+    if glyphs and rect.width <= 14 and rect.height <= 14:
+        return "glyphs"  # a filled outline glyph (tick label), not a frame
+    # rules/rectangles only: a table or example frame when it encloses text and has no coloured fills;
+    # otherwise a rectilinear drawing (bar chart, histogram, grid, commutative square)
+    if all(_is_box_shape(p) for p in members) and _frames_text(rect, members, lines):
         return "frame"
-    if all(p.get("color") is None and max(p["rect"].width, p["rect"].height) <= 14 for p in members):
+    if glyphs:
         return "glyphs"
     return None
+
+
+def _frames_text(rect: pymupdf.Rect, members: Sequence[dict[str, Any]], lines: Sequence[_TextLine], min_chars: int = 3) -> bool:
+    filled = [p for p in members if p.get("fill") is not None and min(p["fill"]) < 0.98 and not _is_rule(p)]
+    empty = [p for p in filled if not any(inside_fraction(ln.rect, p["rect"]) >= 0.6 for ln in lines)]
+    if len(empty) * 2 > len(filled) > 0:
+        return False  # mostly empty coloured/grey rectangles: bars of a chart, not shaded table cells
+    return sum(len(ln.text) for ln in lines if inside_fraction(ln.rect, rect) >= 0.6) >= min_chars
+
+
+def _is_rule(path: dict[str, Any]) -> bool:
+    r = path["rect"]
+    return min(r.width, r.height) < MIN_RULE_THICKNESS
 
 
 def _size_rejection(rect: pymupdf.Rect) -> str | None:
@@ -596,12 +791,29 @@ def _gap(a: pymupdf.Rect, b: pymupdf.Rect) -> float:
 
 def _swallows_text(union: pymupdf.Rect, parts: Sequence[pymupdf.Rect], lines: Sequence[_TextLine]) -> bool:
     """True if merging would pull in body text that belongs to neither part (labels are allowed)."""
-    for ln in lines:
+    for ln in _text_rows(lines):
         if len(ln.text) <= MAX_LABEL_CHARS:
             continue
         if inside_fraction(ln.rect, union) >= 0.3 and not any(inside_fraction(ln.rect, p) >= 0.3 for p in parts):
             return True
     return False
+
+
+def _text_rows(lines: Sequence[_TextLine]) -> list[_TextLine]:
+    """Lines side by side on one visual row (vertical overlap ≥ 50%, horizontal gap ≤ ROW_GAP) joined: a display
+    equation split into several text lines is judged as a whole, not as a set of short labels."""
+    rows: list[_TextLine] = []
+    for ln in sorted(lines, key=lambda ln: (ln.rect.y0, ln.rect.x0)):
+        for i, row in enumerate(rows):
+            overlap = min(row.rect.y1, ln.rect.y1) - max(row.rect.y0, ln.rect.y0)
+            gap = max(row.rect.x0, ln.rect.x0) - min(row.rect.x1, ln.rect.x1)
+            if overlap >= 0.5 * min(row.rect.height, ln.rect.height) and gap <= ROW_GAP:
+                first, second = (row, ln) if row.rect.x0 <= ln.rect.x0 else (ln, row)
+                rows[i] = _TextLine(_union([row.rect, ln.rect]), f"{first.text} {second.text}")
+                break
+        else:
+            rows.append(_TextLine(pymupdf.Rect(ln.rect), ln.text))
+    return rows
 
 
 def _group_fragments(rects: list[pymupdf.Rect], lines: Sequence[_TextLine]) -> list[pymupdf.Rect]:
@@ -715,12 +927,36 @@ def _merge_nemotron(
 
 
 def _absorb_labels(rect: pymupdf.Rect, lines: Sequence[_TextLine]) -> pymupdf.Rect:
-    """Extend a figure to short text labels drawn at its edge (axis names, point labels)."""
+    """Extend a figure to short text labels drawn at its edge (axis names, point labels). Text is judged by
+    visual rows, and a relation (an equation such as 'a² + b² = 1') lying mostly outside the drawing is text
+    beside the figure, not a label."""
     grown = rect + (-LABEL_MARGIN, -LABEL_MARGIN, LABEL_MARGIN, LABEL_MARGIN)
     out = pymupdf.Rect(rect)
-    for ln in lines:
-        if len(ln.text) <= MAX_LABEL_CHARS and inside_fraction(ln.rect, grown) >= 0.6:
-            out |= ln.rect
+    for row in _text_rows(lines):
+        if len(row.text) > MAX_LABEL_CHARS or inside_fraction(row.rect, grown) < 0.6:
+            continue
+        if _RELATION_RE.search(row.text) and inside_fraction(row.rect, rect) < 0.5:
+            continue
+        out = _union([out, row.rect])
+    return out
+
+
+def _absorb_glyph_labels(rect: pymupdf.Rect, bits: list[pymupdf.Rect], lines: Sequence[_TextLine]) -> pymupdf.Rect:
+    """Pull in tiny drawn clusters (axis tick numbers drawn as glyph outlines, tick marks) next to a figure;
+    repeated until nothing changes so multi-glyph labels chain in. Absorbed bits leave the pool."""
+    out = pymupdf.Rect(rect)
+    changed = True
+    while changed:
+        changed = False
+        for bit in list(bits):
+            if _gap(out, bit) > GLYPH_LABEL_GAP:
+                continue
+            union = _union([out, bit])
+            if _swallows_text(union, [out, bit], lines):
+                continue
+            out = union
+            bits.remove(bit)
+            changed = True
     return out
 
 

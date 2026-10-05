@@ -139,9 +139,11 @@ interface FreeResponseProps {
   readOnly: boolean;
   onCommit: () => void;
   autoFocus: boolean;
+  /** Short advice shown under the field (e.g. the answer is too short to count as an attempt). */
+  note?: string | null;
 }
 
-export function FreeResponseInput({ value, onChange, readOnly, onCommit, autoFocus }: FreeResponseProps) {
+export function FreeResponseInput({ value, onChange, readOnly, onCommit, autoFocus, note = null }: FreeResponseProps) {
   const id = useId();
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -162,6 +164,7 @@ export function FreeResponseInput({ value, onChange, readOnly, onCommit, autoFoc
         readOnly={readOnly}
         rows={7}
         placeholder="Write your argument in words and symbols. $…$ renders as math."
+        aria-describedby={note ? `${id}-note` : undefined}
         onKeyDown={(event) => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
@@ -169,6 +172,11 @@ export function FreeResponseInput({ value, onChange, readOnly, onCommit, autoFoc
           }
         }}
       />
+      {note && (
+        <p id={`${id}-note`} className="field__hint free-response__note">
+          {note}
+        </p>
+      )}
       {value.includes("$") && (
         <div className="free-response__preview">
           <span className="math-input__preview-label">Preview</span>

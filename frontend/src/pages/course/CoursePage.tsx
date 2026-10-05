@@ -4,6 +4,7 @@ import { deleteCourse, getCourse, getGraph, getNext, isApiError } from "../../ap
 import { CourseProvider } from "../../components/CourseProvider";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
 import { ErrorState, LoadingState, StateMessage } from "../../components/StateMessage";
 import { TaskMenu } from "../../components/TaskMenu";
@@ -14,6 +15,7 @@ import { useResource } from "../../hooks/useResource";
 import { useStartTask } from "../../hooks/useStartTask";
 import type { FoundationNode, JobStatus, SkillNode, TaskOption } from "../../types";
 import { isJobActive } from "../../lib/job";
+import { plainText, prettyTitle } from "../../lib/markdown";
 import { BuildProgress } from "./BuildProgress";
 import { CourseHeader } from "./CourseHeader";
 import { GoalDialog } from "./GoalDialog";
@@ -53,7 +55,8 @@ export default function CoursePage({ courseId }: { courseId: string }) {
 
   const course = useResource(`course:${courseId}`, (signal) => getCourse(courseId, signal));
   const job = jobOverride ?? course.data?.job ?? null;
-  const building = course.data?.status === "building" || isJobActive(job);
+  // The job is the source of truth: an interrupted or failed build is not "building" even while the course row says so.
+  const building = job ? isJobActive(job) : course.data?.status === "building";
   const coursePolled = useResource(building ? `course-poll:${courseId}` : null, (signal) => getCourse(courseId, signal), {
     pollMs: COURSE_POLL_MS,
   });
@@ -63,14 +66,15 @@ export default function CoursePage({ courseId }: { courseId: string }) {
     pollMs: building ? GRAPH_POLL_MS : null,
   });
   const lessonsReady = graph.data?.skills.filter((s) => s.lesson_status === "ready").length ?? 0;
+  const failedLessons = graph.data?.skills.filter((s) => s.lesson_status === "failed").length ?? 0;
   // While building, newly written lessons change the menu; afterwards it only changes through actions.
   const next = useResource(
     courseData ? `next:${courseId}:${building ? lessonsReady : "ready"}` : null,
     (signal) => getNext(courseId, signal),
     { keepPrevious: true },
   );
-  const { continueNext, startSkill, pending } = useStartTask(courseId);
-  useDocumentTitle(courseData?.title ?? "Course");
+  const { continueNext, startSkill, pending, replaceDialog } = useStartTask(courseId, next.data?.task ?? null);
+  useDocumentTitle(courseData ? plainText(prettyTitle(courseData.title)) : "Course");
 
   const { reload: reloadCourse } = course;
   const { reload: reloadGraph, mutate: mutateGraph } = graph;
@@ -122,7 +126,8 @@ export default function CoursePage({ courseId }: { courseId: string }) {
   if (!courseData) return <LoadingState label="Opening the course…" />;
 
   const currentView: View = view ?? (narrow ? "list" : "map");
-  const showBuild = building || job?.state === "failed" || job?.state === "interrupted" || courseData.status === "failed";
+  const showBuild =
+    building || job?.state === "failed" || job?.state === "interrupted" || courseData.status === "failed" || failedLessons > 0;
   const options = next.data?.options ?? [];
   const graphData = graph.data;
   const hasSkills = Boolean(graphData && graphData.skills.length > 0);
@@ -138,7 +143,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           onEditGoal={() => setGoalOpen(true)}
         />
 
-        {showBuild && <BuildProgress courseId={courseId} initialJob={job} onChange={onJobChange} />}
+        {showBuild && <BuildProgress courseId={courseId} initialJob={job} onChange={onJobChange} failedLessons={building ? 0 : failedLessons} />}
 
         {next.data?.session.goal_reached && (
           <div className="callout callout--success course-page__goal">
@@ -225,7 +230,9 @@ export default function CoursePage({ courseId }: { courseId: string }) {
             <div className="disclosure__body">
               <ul>
                 {courseData.excluded.map((item, i) => (
-                  <li key={i}>{item}</li>
+                  <li key={i}>
+                    <Markdown inline>{item}</Markdown>
+                  </li>
                 ))}
               </ul>
             </div>
@@ -246,7 +253,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           selection={selection}
           onSelect={setSelection}
           onClose={() => setSelection(null)}
-          onLearn={(skill) => void startSkill(skill.id, "lesson")}
+          onLearn={(skill) => void startSkill(skill.id, "lesson", { force: skill.status === "locked" })}
           onReview={(skill) => void startSkill(skill.id, "review")}
           onPreview={(skill) => setPreviewSkill(skill)}
           onFoundationChange={onFoundationChange}
@@ -254,6 +261,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
         />
       )}
       <LessonPreviewDialog skill={previewSkill} onClose={() => setPreviewSkill(null)} />
+      {replaceDialog}
       <GoalDialog
         open={goalOpen}
         current={next.data?.session.daily_goal ?? courseData.stats.daily_goal}
@@ -280,7 +288,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
         }
       >
         <p>
-          “{courseData.title}”, its lessons and your progress and review history will be removed. The book itself stays in your
+          “{prettyTitle(courseData.title)}”, its lessons and your progress and review history will be removed. The book itself stays in your
           library. This can't be undone.
         </p>
       </Dialog>

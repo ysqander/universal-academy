@@ -233,6 +233,9 @@ class ImplicitEvent:
     skill_id: str
     kind: str  # "credit" | "push" | "penalty"
     weight: float
+    before_card_json: str = ""  # enough to undo the event (revert_implicit) when its cause is re-scored
+    after_card_json: str = ""
+    log_id: str = ""
 
 
 def _learned_cards(course_id: str) -> dict[str, Card]:
@@ -275,11 +278,11 @@ def apply_success_credit(course_id: str, skill_id: str, now: datetime, graph: Sk
             updated.due = utc(card.due) + push
             kind = "push"
         save_card(ancestor, updated, now, implicit_credit=True)
-        log_review(
+        log_id = log_review(
             course_id, ancestor, Rating.Good, now, implicit=True, weight=w, source_skill_id=skill_id,
             due_before=card.due, due_after=updated.due,
         )  # fmt: skip
-        events.append(ImplicitEvent(ancestor, kind, w))
+        events.append(ImplicitEvent(ancestor, kind, w, dump_card(card), dump_card(updated), log_id))
         log.info("FIRe %s: %s -> %s (w=%.2f, due %s -> %s)", kind, skill_id, ancestor, w, iso(card.due), iso(updated.due))
     return events
 
@@ -297,13 +300,34 @@ def apply_failure_penalty(course_id: str, skill_id: str, now: datetime, graph: S
         updated = Card.from_json(card.to_json())
         updated.due = limit
         save_card(dependent, updated, now)
-        log_review(
+        log_id = log_review(
             course_id, dependent, Rating.Again, now, implicit=True, weight=w, source_skill_id=skill_id,
             due_before=card.due, due_after=updated.due,
         )  # fmt: skip
-        events.append(ImplicitEvent(dependent, "penalty", w))
+        events.append(ImplicitEvent(dependent, "penalty", w, dump_card(card), dump_card(updated), log_id))
         log.info("FIRe penalty: %s -> %s (w=%.2f) due by %s", skill_id, dependent, w, iso(limit))
     return events
+
+
+def revert_implicit(events: list[dict]) -> int:
+    """Undo FIRe events (as dicts of ImplicitEvent) whose card has not changed since. Returns how many were undone."""
+    undone = 0
+    for e in reversed(events or []):
+        if not e.get("after_card_json") or not e.get("before_card_json"):
+            continue
+        row = db.query_one("SELECT card_json FROM progress WHERE skill_id = ?", (e["skill_id"],))
+        if not row or row["card_json"] != e["after_card_json"]:
+            continue  # touched since (a real review, another implicit event): leave it alone
+        before = Card.from_json(e["before_card_json"])
+        db.execute(
+            "UPDATE progress SET card_json = ?, status = ?, implicit_credits = MAX(0, implicit_credits - ?) WHERE skill_id = ?",
+            (e["before_card_json"], status_for(before), int(e.get("kind") in ("credit", "push")), e["skill_id"]),
+        )
+        if e.get("log_id"):
+            db.execute("DELETE FROM review_log WHERE id = ?", (e["log_id"],))
+        undone += 1
+        log.info("FIRe %s on %s undone", e.get("kind"), e["skill_id"])
+    return undone
 
 
 def remediate(course_id: str, skill_id: str, now: datetime, graph: SkillGraph | None = None) -> list[str]:

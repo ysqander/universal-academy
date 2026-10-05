@@ -6,7 +6,7 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { figureUrl } from "../api";
 import { useCourseContext, useFigureCatalog } from "../context/course";
-import { FIGURE_ALT_PREFIX, expandFigurePlaceholders, normalizeMath } from "../lib/markdown";
+import { FIGURE_ALT_PREFIX, expandFigurePlaceholders, localFigureId, normalizeMath } from "../lib/markdown";
 import { KATEX_MACROS } from "../lib/katex";
 import { Icon } from "./Icon";
 import "./Markdown.css";
@@ -22,7 +22,7 @@ interface MarkdownProps {
 }
 
 function BookFigureImage({ figureId, src }: { figureId: string; src: string }) {
-  const figure = useFigureCatalog()[figureId];
+  const figure = useFigureCatalog()[localFigureId(figureId)];
   const course = useCourseContext();
   const [failed, setFailed] = useState(false);
   if (failed) {

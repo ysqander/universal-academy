@@ -277,7 +277,35 @@ def test_nemotron_only_engine(axler_pdf: Path, tmp_path: Path, monkeypatch: pyte
         ("over $\textbf{F}$ and $\x08oldsymbol{R}^n$", r"over $\mathbf{F}$ and $\mathbf{R}^n$"),
         ("in $\x1b[1m\\mathbf{F}^n\x1b[0m$: addition", r"in $\mathbf{F}^n$: addition"),
         ("as desired. $\x00$\n\nNext", "as desired. $\\square$\n\nNext"),
-        ("a $\x00$ b", "a  b"),
+        ("a $\x00$ b", "a \u27e8?\u27e9 b"),  # a lost formula stays visible
+        # D13: runs of junk / ANSI-only formulas never collapse to "$$" (which would open a display)
+        ("Thus $\x00\x00$ and $x$ are.\n\nLater $$y$$", "Thus \u27e8?\u27e9 and $x$ are.\n\nLater $$y$$"),
+        ("over $\x1b[1m\x1b[0m$ and $x$", "over \u27e8?\u27e9 and $x$"),
+        ("Thus $\x1b[?]$ and", "Thus \u27e8?\u27e9 and"),
+        # a lost formula at a line end that does not finish a sentence is not the end-of-proof mark
+        ("the field $\x00$\n\nNext", "the field \u27e8?\u27e9\n\nNext"),
+        ("as desired. $\x1b[0m\\square$", "as desired. $\\square$"),
+        # junk before a correctly escaped command is dropped; DEL works like the other control characters
+        ("fields $\x00\\mathbf{R}$ and $\x7f\\textbf{F}^S$, $\x7fmathbf{C}$", r"fields $\mathbf{R}$ and $\mathbf{F}^S$, $\mathbf{C}$"),
+        ("lone \x00 junk", "lone \u27e8?\u27e9 junk"),
+        # display lines may start with u, i, e: \nu / \ni / \ne are only repaired in inline math
+        ("$$\nu + v = v + u\n$$", "$$\nu + v = v + u\n$$"),
+        ("$$\ni^2 = -1\n$$", "$$\ni^2 = -1\n$$"),
+        ("$$\ne^{x} = 1\n$$", "$$\ne^{x} = 1\n$$"),
+        ("$$\\begin{aligned}\nu &= v \\\\\ne &= f\n\\end{aligned}$$", "$$\\begin{aligned}\nu &= v \\\\\ne &= f\n\\end{aligned}$$"),
+        ("$$a \neq b$$ and $$\nabla f = 0$$", "$$a \\neq b$$ and $$\\nabla f = 0$$"),
+        # a row break followed by a variable is not an over-escaped command
+        (r"$$\begin{bmatrix}a & b\\c & d\end{bmatrix}$$", r"$$\begin{bmatrix}a & b\\c & d\end{bmatrix}$$"),
+        (r"$$\begin{cases} x & y\\z & w\end{cases}$$", r"$$\begin{cases} x & y\\z & w\end{cases}$$"),
+        (r"$f(x)=\begin{cases}1\\x\end{cases}$", r"$f(x)=\begin{cases}1\\x\end{cases}$"),
+        (r"$$\sum_{\substack{i\\j}}$$", r"$$\sum_{\substack{i\\j}}$$"),
+        (r"$$\\frac{1}{2} + \\lambda$$", r"$$\frac{1}{2} + \lambda$$"),
+        # one unpaired or escaped '$' does not merge list items, quote lines or table rows
+        ("1. Prove $a$ and $b.\n2. Show $c$.", "1. Prove $a$ and $b$.\n2. Show $c$."),
+        ("> The inverse in $U.\n>\n> Then $x$ is a vector.", "> The inverse in $U$.\n>\n> Then $x$ is a vector."),
+        ("- costs \\$5 each\n- buy $n$ items", "- costs \\$5 each\n- buy $n$ items"),
+        ("> **1.3 Theorem**\n>\n> For all $a, b \\in V$ and $c.\n> Then $x = y$.", "> **1.3 Theorem**\n>\n> For all $a, b \\in V$ and $c$.\n> Then $x = y$."),
+        ("It costs $5.", "It costs $5."),
         (r"space $\\\textbf{\\{0\\}}$", r"space $\textbf{\{0\}}$"),
         ("$$a \\\\\n b\\\\ c$$ and $x \neq 0$", "$$a \\\\\n b\\\\ c$$ and $x \\neq 0$"),
         ("subspace of $\n\\mathbf{F}^n$ of", r"subspace of $\mathbf{F}^n$ of"),
@@ -288,6 +316,87 @@ def test_nemotron_only_engine(axler_pdf: Path, tmp_path: Path, monkeypatch: pyte
 )
 def test_normalize_math(raw: str, expected: str) -> None:
     assert parse.normalize_math(raw) == expected
+
+
+def test_lost_formulas_lists_context() -> None:
+    raw = "Thus $\x00$ and $\x00$ are fields. Proof done. $\x00$\n\nNext $\x01mathbf{R}$."
+    lost = parse.lost_formulas(raw)
+    assert len(lost) == 2 and all("Thus" in c for c in lost)  # the end-of-proof mark and the repairable one are not lost
+    assert parse.lost_formulas("clean $x$") == []
+
+
+def test_unbalanced_math_lines() -> None:
+    md = "ok $x$ line\nIt costs $5.\nbroken $x + y gets\n$$\na $ b\n$$\n> also $a$ and $b"
+    assert parse.unbalanced_math_lines(md) == ["broken $x + y gets", "> also $a$ and $b"]
+
+
+def test_transcription_quality_flags_lost_formulas() -> None:
+    blocks = [parse._TextBlock((0, 0, 100, 100), "Thus R and C are fields")]
+    bad = transcription("Thus $\x00$ and $\x00$ are fields")
+    quality = parse.transcription_quality(bad, blocks)
+    assert len(quality.lost) == 2 and not quality.ok
+    good = parse.transcription_quality(transcription("Thus $\\mathbf{R}$ and $\\mathbf{C}$ are fields"), blocks)
+    assert good.ok and good.rank() > quality.rank()
+
+
+def test_lost_formulas_are_retried_with_escape_reminder(
+    axler_pdf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_mode: None
+) -> None:
+    body = " ".join(b.text for b in parse._text_blocks(axler_pdf, 23))
+    broken = transcription(body + " Thus $\x00$ and $\x00$ are fields.")
+    fixed = transcription(body + " Thus $\\mathbf{R}$ and $\\mathbf{C}$ are fields.")
+    calls = canned(monkeypatch, broken, fixed)
+    page = asyncio.run(parse.parse_page(axler_pdf, 23, "10", tmp_path))
+    assert len(calls) == 2 and page.raw["attempts"] == 2
+    assert "IMPORTANT" not in calls[0]["text"] and "\\\\mathbf{R}" in calls[1]["text"]  # JSON-escaping reminder
+    assert "\u27e8?\u27e9" in calls[1]["text"] and "Thus" in calls[1]["text"]
+    assert "$\\mathbf{R}$ and $\\mathbf{C}$" in page.markdown and page.uncertain == []
+    # the text-layer hint carries no Unicode math-bold letters (𝐑 → \mathbf{R})
+    assert "\U0001d411" not in calls[0]["text"] and "\\mathbf{R} and \\mathbf{C} are fields" in calls[0]["text"]
+
+    calls = canned(monkeypatch, broken, broken)
+    page = asyncio.run(parse.parse_page(axler_pdf, 23, "10", tmp_path / "again"))
+    assert len(calls) == 2 and page.markdown.count("\u27e8?\u27e9") == 2  # visible, never deleted
+    assert page.raw["lost_formulas"] and any("2 formula(s) could not be read" in u for u in page.uncertain)
+
+
+def test_hint_text_maps_math_alphanumerics() -> None:
+    assert parse._hint_text("Thus \U0001d411and \U0001d402are fields, \U0001d465 \u2208 \u211d") == (
+        "Thus \\mathbf{R} and \\mathbf{C} are fields, x \u2208 \\mathbb{R}"
+    )
+
+
+def test_hallucinated_mark_does_not_shift_new_figures(
+    axler_pdf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_mode: None
+) -> None:
+    body = " ".join(b.text for b in parse._text_blocks(axler_pdf, 16))  # no candidates on this page
+    markdown = body + "\n\n[[figure:new1]]\n\nMore text at the end."
+    figures = [
+        FigureRef(mark="M2", bbox=None, caption="", description="invented"),
+        FigureRef(mark=None, bbox=[0.1, 0.5, 0.6, 0.8], caption="A sketch", description="Unmarked."),
+    ]
+    canned(monkeypatch, transcription(markdown, figures))
+    page = asyncio.run(parse.parse_page(axler_pdf, 16, "3", tmp_path))
+    assert [f.caption for f in page.figures] == ["A sketch"]
+    assert page.markdown.endswith("[[figure:p16-f1]]\n\nMore text at the end.")
+    assert any("'M2'" in u for u in page.uncertain)
+
+
+def test_nemotron_garbage_never_aborts_a_page(
+    axler_pdf: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_mode: None
+) -> None:
+    from app.ingest import nemotron
+
+    async def broken_layout(png: bytes) -> list:
+        raise ValueError("Expecting ',' delimiter: line 1 column 9000")  # e.g. a truncated tool-call JSON
+
+    monkeypatch.setattr(nemotron, "enabled", lambda: True)
+    monkeypatch.setattr(nemotron, "parse_layout", broken_layout)
+    good = " ".join(b.text for b in parse._text_blocks(axler_pdf, 21))
+    canned(monkeypatch, transcription(good))
+    page = asyncio.run(parse.parse_page(axler_pdf, 21, "8", tmp_path))
+    assert page.engine == f"openai:{settings.model_vision}"  # no "+nemotron"
+    assert page.raw["nemotron_error"].startswith("ValueError") and "nemotron" not in page.raw
 
 
 def test_tidy_drops_headings_that_repeat_an_item() -> None:

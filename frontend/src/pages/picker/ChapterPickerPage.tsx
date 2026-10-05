@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { createCourse, errorMessage, getBook } from "../../api";
 import { Icon } from "../../components/Icon";
@@ -6,8 +6,10 @@ import { Spinner } from "../../components/Spinner";
 import { ErrorState, LoadingState } from "../../components/StateMessage";
 import { useToast } from "../../context/toast";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useResource } from "../../hooks/useResource";
 import { buildEstimate, pageRangeLabel, plural } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import {
   ancestorIds,
   coveredSections,
@@ -22,7 +24,10 @@ import { OutlineTree } from "./OutlineTree";
 import { ThumbnailStrip } from "./ThumbnailStrip";
 import "./ChapterPickerPage.css";
 
-const LARGE_SELECTION = 80;
+/** Server limit (UA_MAX_COURSE_PAGES, default 80): larger selections are rejected by POST /api/courses. */
+const MAX_COURSE_PAGES = 80;
+/** Above this a course still builds, but one chapter usually works better. */
+const LARGE_SELECTION = 40;
 
 type Pick =
   | { mode: "none" }
@@ -103,13 +108,18 @@ function Picker({ book }: { book: Book }) {
   const [title, setTitle] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Touch screens have no Shift key: "Select several" makes every tap extend the selection instead.
+  const [extendMode, setExtendMode] = useState(false);
+  const coarsePointer = useMediaQuery("(pointer: coarse)");
+  const formRef = useRef<HTMLFormElement>(null);
 
   const { range, sections, manualError } = useMemo(() => resolvePick(pick, flat, book.page_count), [pick, flat, book.page_count]);
   const pageCount = range ? range.end - range.start + 1 : 0;
+  const tooLarge = pageCount > MAX_COURSE_PAGES;
 
   const defaultTitle = useMemo(() => {
-    if (sections.length === 1) return sections[0].title;
-    if (sections.length > 1) return `${sections[0].title} – ${sections[sections.length - 1].title}`;
+    if (sections.length === 1) return prettyTitle(sections[0].title);
+    if (sections.length > 1) return `${prettyTitle(sections[0].title)} – ${prettyTitle(sections[sections.length - 1].title)}`;
     return range ? `${book.title}, ${rangeLabel(labelOf, range)}` : "";
   }, [sections, range, book.title, labelOf]);
   // An emptied title falls back to the selection's default rather than blocking the build.
@@ -124,10 +134,15 @@ function Picker({ book }: { book: Book }) {
     });
   }, []);
 
-  const onSelect = useCallback((id: string, extend: boolean) => {
-    setSubmitError(null);
-    setPick((prev) => (extend && prev.mode === "outline" ? { ...prev, focusId: id } : { mode: "outline", anchorId: id, focusId: id }));
-  }, []);
+  const onSelect = useCallback(
+    (id: string, extend: boolean) => {
+      setSubmitError(null);
+      setPick((prev) =>
+        (extend || extendMode) && prev.mode === "outline" ? { ...prev, focusId: id } : { mode: "outline", anchorId: id, focusId: id },
+      );
+    },
+    [extendMode],
+  );
 
   const endpoints = useMemo(() => new Set(pick.mode === "outline" ? [pick.anchorId, pick.focusId] : []), [pick]);
   const visibleExpanded = useMemo(() => {
@@ -146,7 +161,7 @@ function Picker({ book }: { book: Book }) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!range || !effectiveTitle) return;
+    if (!range || !effectiveTitle || tooLarge) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -155,7 +170,7 @@ function Picker({ book }: { book: Book }) {
         title: effectiveTitle,
         start_page: range.start,
         end_page: range.end,
-        sections: sections.map((s) => s.title),
+        sections: sections.map((s) => prettyTitle(s.title)),
       });
       toast.show("Course build started. The map appears as soon as the chapter is parsed.", "success");
       navigate(`/courses/${encodeURIComponent(course.id)}`);
@@ -167,7 +182,11 @@ function Picker({ book }: { book: Book }) {
 
   const estimate = buildEstimate(pageCount);
   const summaryTitle =
-    sections.length === 1 ? sections[0].title : sections.length > 1 ? `${sections[0].title} → ${sections[sections.length - 1].title}` : "Custom page range";
+    sections.length === 1
+      ? prettyTitle(sections[0].title)
+      : sections.length > 1
+        ? `${prettyTitle(sections[0].title)} → ${prettyTitle(sections[sections.length - 1].title)}`
+        : "Custom page range";
 
   return (
     <div className="page picker">
@@ -189,9 +208,28 @@ function Picker({ book }: { book: Book }) {
           <div className="picker__panel-head">
             <h2 id="outline-heading">Contents</h2>
             {hasOutline && (
-              <span className="picker__panel-hint">
-                Click a chapter to select it · <kbd>Shift</kbd>-click to extend
-              </span>
+              <div className="picker__panel-tools">
+                <span className="picker__panel-hint">
+                  {extendMode ? (
+                    `${coarsePointer ? "Tap" : "Click"} more sections to extend the selection`
+                  ) : coarsePointer ? (
+                    "Tap a chapter to select it"
+                  ) : (
+                    <>
+                      Click a chapter to select it · <kbd>Shift</kbd>-click to extend
+                    </>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--sm picker__extend"
+                  aria-pressed={extendMode}
+                  onClick={() => setExtendMode(!extendMode)}
+                  title="When on, each section you choose is added to the selection (with everything in between)"
+                >
+                  <Icon name={extendMode ? "check" : "plus"} size={14} /> Select several
+                </button>
+              </div>
             )}
           </div>
           {hasOutline ? (
@@ -224,7 +262,7 @@ function Picker({ book }: { book: Book }) {
           )}
         </section>
 
-        <form className="picker__selection card" onSubmit={submit} aria-labelledby="selection-heading">
+        <form ref={formRef} className="picker__selection card" onSubmit={submit} aria-labelledby="selection-heading">
           <div className="picker__panel-head">
             <h2 id="selection-heading">Your selection</h2>
           </div>
@@ -292,7 +330,14 @@ function Picker({ book }: { book: Book }) {
             />
           </div>
 
-          {range && pageCount > LARGE_SELECTION && (
+          {range && tooLarge ? (
+            <div className="callout callout--danger" role="alert">
+              <Icon name="warning" size={18} />
+              <span>
+                That's {pageCount} pages — a course can have at most {MAX_COURSE_PAGES}. Choose a single chapter or a few sections.
+              </span>
+            </div>
+          ) : range && pageCount > LARGE_SELECTION ? (
             <div className="callout callout--warning">
               <Icon name="warning" size={18} />
               <span>
@@ -300,9 +345,9 @@ function Picker({ book }: { book: Book }) {
                 more focused map.
               </span>
             </div>
-          )}
+          ) : null}
 
-          {range && (
+          {range && !tooLarge && (
             <p className="picker__estimate">
               <Icon name="clock" size={16} />
               <span>
@@ -319,12 +364,32 @@ function Picker({ book }: { book: Book }) {
             </p>
           )}
 
-          <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={!range || !effectiveTitle || submitting}>
+          <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={!range || !effectiveTitle || tooLarge || submitting}>
             {submitting ? <Spinner size={16} label="Starting the build" /> : <Icon name="graph" size={18} />}
             {submitting ? "Starting…" : "Build course"}
           </button>
         </form>
       </div>
+
+      {/* Phones / narrow tablets: the selection panel sits below the whole outline, so keep a summary in reach. */}
+      {range && (
+        <div className="picker__bar">
+          <div className="picker__bar-text">
+            <span className="picker__bar-title">{summaryTitle}</span>
+            <span className="picker__bar-meta">
+              {rangeLabel(labelOf, range)} · {plural(pageCount, "page")}
+              {tooLarge ? ` · max ${MAX_COURSE_PAGES}` : ""}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn btn--primary btn--sm"
+            onClick={() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          >
+            Review &amp; build <Icon name="chevronDown" size={14} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

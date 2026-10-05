@@ -39,8 +39,9 @@ export function SourceViewer({ courseId, page, pageRange, onPageChange, onClose 
     return () => window.removeEventListener("keydown", onKey);
   }, [page, canPrev, canNext, onPageChange]);
 
-  const data = source.data;
-  const label = data && data.page === page ? `p. ${data.label}` : page !== null ? `PDF page ${page + 1}` : "";
+  // keepPrevious keeps the old page around while the next one loads; never show it under the new page's heading.
+  const data = source.data && source.data.page === page ? source.data : undefined;
+  const label = data ? `p. ${data.label}` : page !== null ? `PDF page ${page + 1}` : "";
 
   return (
     <Dialog
@@ -71,7 +72,7 @@ export function SourceViewer({ courseId, page, pageRange, onPageChange, onClose 
         </button>
       </div>
       <div className="source-viewer__content">
-        {source.error && !data ? (
+        {source.error ? (
           <ErrorState error={source.error} onRetry={() => void source.reload()} title="Couldn't open this page" />
         ) : !data ? (
           <LoadingState label="Opening the page…" />

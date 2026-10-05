@@ -61,7 +61,8 @@ FIELDS
 - title: ≤ 60 characters, names the ability.
 - summary: 1–2 sentences — what it is and why it matters at this point; keep the author's motivation.
 - source_pages: the PDF indexes (from the markers) where the skill is taught, usually 1–3.
-- source_refs: printed item numbers exactly as in the book (e.g. "1.3", "1.12"); [] if none.
+- source_refs: printed item numbers exactly as in the book (e.g. "1.3", "1.12", "Example 1.4"); never captions,
+  page numbers or notes; [] if none.
 - figure_ids: ids from the figure list that help teach this skill; [] if none.
 - misconceptions: specific, real confusions (e.g. "computes $(a+bi)(c+di)$ as $ac+bdi$"), never generic ones.
 - difficulty 1–5; est_minutes 5–20 for lesson + practice.
@@ -86,7 +87,9 @@ LESSON ANATOMY
   author's own motivation, margin-note insights and figures. No fake real-world fluff ("engineers use this daily"),
   no hype, no "in this lesson we will".
 - idea: the core explanation (about 80–250 words) in the author's notation. Quote the key definition or result
-  faithfully and cite its number ("Definition 1.1", "1.3"). Mention a book figure by its caption when it helps.
+  faithfully and cite its number ("Definition 1.1", "1.3").
+- Book figures: refer only to figures in the request's figure list for this skill — place one with [[figure:ID]] on
+  its own line where it helps (it is displayed there). Never describe a figure that is not in that list.
 - notation: the symbols used, with meanings ([] if none).
 - knowledge_points: 2–3 steps of increasing difficulty (basic case → general case → conceptual / transfer / proof
   step). Each has:
@@ -94,16 +97,31 @@ LESSON ANATOMY
   - worked_example: a problem, steps (each: the math + why it is valid — label the sub-goals) and a one-sentence
     takeaway. Check every computation;
   - questions: exactly 4 questions of THIS knowledge point's problem type with different numbers or objects,
-    tiers ramping 1 → 2 → 2 → 3.
+    tiers ramping 1 → 2 → 2 → 3. They are served in this order and the learner usually passes after 2 or 3, so
+    the first two must already assess the knowledge point.
 - missing_steps: the deeper justification or omitted algebra, for learners who click "Show the missing steps".
 - common_mistakes: concrete errors (wrong sign, conjugate instead of inverse, …).
 - connection: 1–2 sentences — what this enables next (name later skills from the course map) and what it builds on.
-- source_refs: printed item numbers used.
+- source_refs: printed item numbers used — short references only: "1.3", "Example 1.4", "Exercise 1A.3". Never
+  captions, page numbers ("p.8") or notes.
+
+PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove / Justify / Show)
+- Every knowledge point has a free_response question in which the learner writes the short proof or justification
+  of that knowledge point's statement: make it q2 (tier 2), with a model proof as the solution and a checklist of
+  2–5 concrete criteria (e.g. "takes arbitrary $x, y$", "applies the definition of addition coordinatewise", "cites
+  commutativity in $\\mathbf{{F}}$"). A later free_response (q4) may prove a variant.
+- The other questions check the ingredients machine-checkably: which law or hypothesis a step uses, true_false
+  claims about a step (with the reason or a counterexample in the solution), a computed instance.
 
 QUESTIONS
 - Self-contained: restate every object and value needed. Never refer to "the example above", the book or a figure.
 - Assess the stated objective, using only this lesson and its prerequisites.
-- Machine-checkable whenever possible — at least 3 of the 4 questions of a knowledge point:
+- Make the learner produce the answer. Computations → numeric or expression (typed answers). Conceptual claims →
+  true_false whose solution gives the reason or a counterexample. multiple_choice only when choosing among options
+  IS the skill (which hypothesis is missing, which step is invalid, which object fits a definition). At most 40% of
+  the lesson's questions are multiple_choice — at most one per knowledge point is a good default.
+- Machine-checkable whenever possible — at least 3 of the 4 questions of a knowledge point (2 of 4 for proof
+  skills):
   - numeric: answer is a plain number in SymPy syntax ("-3.5", "2/3", "sqrt(2)"); tolerance (e.g. 0.001) only
     when a decimal approximation is expected, else null.
   - expression: answer in SymPy syntax — ** for powers, * for every product, i for the imaginary unit ("-7+22*i"),
@@ -111,11 +129,15 @@ QUESTIONS
     "Enter your answer in the form $a+bi$" or "Enter the list as $(x_1, x_2, x_3)$").
   - multiple_choice: 3–5 choices; distractors come from real misconceptions (sign error, conjugate, coordinate-wise
     product, swapped order, a hypothesis dropped), never random values; exactly one correct; correct_choice is its
-    0-based index; vary its position across questions.
+    0-based index; vary its position across questions. All options have similar length, wording and level of
+    detail, so none stands out: the correct option must not be the longest or the only detailed one. When the
+    options are arguments, justifications or methods, every option is a complete argument and each wrong one
+    contains exactly one specific flaw (a circular step inside an otherwise full argument, only $k=1$ instead of
+    an arbitrary index, a single example, a wrong law cited, a dropped hypothesis or uniqueness step).
   - true_false: choices exactly ["True", "False"]; correct_choice 0 for True, 1 for False. Good for "always /
     sometimes" claims; the solution gives the reason or a counterexample.
   - free_response: for prove / explain / justify objectives only; answer ""; checklist of 2–5 concrete criteria a
-    correct answer must meet; solution is a model answer.
+    correct answer must meet; solution is a model answer (the learner compares and self-grades).
 - multiple_choice, true_false and free_response: answer "" and tolerance null. numeric and expression: choices []
   and correct_choice null.
 - hints: exactly 3, progressive — (1) which idea applies, (2) a partial step, (3) nearly the whole solution.
@@ -146,6 +168,11 @@ DECISION TABLE (need → format)
 - the definition is already clear → none
 
 RULES
+- ADD SOMETHING NEW. The lesson already shows its worked examples step by step; a visual that re-typesets a worked
+  example (the same computation as equation_steps) adds nothing. Pick a representation the lesson lacks — a
+  picture, a contrast table, a varying parameter, the book's figure — or none.
+- Geometric content (vectors as arrows, points or regions in the plane, $\\mathbf{{R}}^2$, the complex plane,
+  parallelograms, lengths and directions) gets a diagram_2d or the book's own figure.
 - Prefer the book's own figure when it already shows the point: format book_figure with book_figure_id from the
   figure list. Only listed ids are valid.
 - 'none' is a valid and often correct answer. Nothing decorative. Never 3D. No gratuitous interactivity — a parameter
@@ -174,7 +201,8 @@ You independently check an auto-generated practice question. Solve it yourself, 
   imaginary unit ("-7+22*i"), tuples for lists "(1, -2, 3)"; choice = null.
 - confidence: your probability (0-1) that your answer is correct.
 - problems: any defect of the question itself — ambiguous wording, missing information, no correct option, several
-  correct options, an unclear answer format; "" if there is none.
+  correct options, an unclear answer format, or a correct option that can be recognized without solving (it is the
+  only complete or much longer argument while the other options are one-line slogans); "" if there is none.
 """
 
 TOPUP_INSTRUCTIONS = f"""\
@@ -185,11 +213,14 @@ passage and the questions that already exist.
 - Write exactly the requested number of NEW questions of the same problem type and difficulty as the knowledge
   point, with different numbers or objects than every existing question (no rewordings).
 - Self-contained; assess the stated objective; only use this lesson and its prerequisites.
-- Machine-checkable whenever possible. numeric: a plain number in SymPy syntax. expression: SymPy syntax with ** for
-  powers, * for products, i for the imaginary unit, tuples "(1, -2, 3)" for lists, and the prompt states the form to
-  enter. multiple_choice: 3–5 choices with misconception-based distractors, correct_choice = 0-based index.
-  true_false: choices exactly ["True", "False"]. free_response (prove / explain only): answer "" and a 2–5 item
-  checklist.
+- Machine-checkable whenever possible; make the learner produce the answer: computations → numeric/expression,
+  conceptual claims → true_false (reason or counterexample in the solution), multiple_choice only when choosing is
+  the skill. numeric: a plain number in SymPy syntax. expression: SymPy syntax with ** for powers, * for products, i
+  for the imaginary unit, tuples "(1, -2, 3)" for lists, and the prompt states the form to enter. multiple_choice:
+  3–5 choices with misconception-based distractors, correct_choice = 0-based index; all options of similar length
+  and detail (the correct one must not be the longest or only detailed one; argument options are all complete
+  arguments, each wrong one with exactly one specific flaw). true_false: choices exactly ["True", "False"].
+  free_response (prove / explain only): answer "" and a 2–5 item checklist.
 - Exactly 3 progressive hints; a complete solution; answer_display in LaTeX; targets; source_exercise null unless
   adapted from a book exercise.
 - Solve each question again before writing its answer.

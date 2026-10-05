@@ -118,6 +118,7 @@ async def parse_page(pdf_path: Path, page_index: int, label: str, work_dir: Path
     raw["transcription"] = result.model_dump()
     raw["coverage"] = quality.coverage
     raw["missing_blocks"] = quality.missing
+    raw["lost_formulas"] = quality.lost
     raw["attempts"] = attempts
     if quality.coverage is not None and quality.coverage < MIN_USABLE_COVERAGE:
         log.warning("page %d: transcription unusable (coverage %.0f%%) — using the text layer", page_index, quality.coverage * 100)
@@ -133,6 +134,12 @@ async def parse_page(pdf_path: Path, page_index: int, label: str, work_dir: Path
     if quality.coverage is not None and quality.coverage < MIN_COVERAGE:
         page.uncertain.append(f"The transcription may be incomplete: only {quality.coverage:.0%} of the page's words were found.")
     page.uncertain += [f"Possibly missing from the transcription: \u201c{text[:80]}…\u201d" for text in quality.missing]
+    if quality.lost:
+        page.uncertain.append(
+            f"{len(quality.lost)} formula(s) could not be read and are shown as {LOST_MARK}, e.g. near "
+            f"\u201c{quality.lost[0]}\u201d; check the page image."
+        )
+    page.uncertain += [f"Unbalanced math delimiter ($) in: \u201c{line[:100]}\u201d" for line in unbalanced_math_lines(page.markdown)]
     return page
 
 
@@ -140,28 +147,44 @@ async def parse_page(pdf_path: Path, page_index: int, label: str, work_dir: Path
 class _Quality:
     coverage: float | None  # share of text-layer words found; None if the page has too little text to judge
     missing: list[str]  # text-layer paragraphs (margin notes, ...) that are mostly absent
+    lost: list[str] = field(default_factory=list)  # contexts of formulas destroyed by escape glitches (LOST_MARK)
 
     @property
     def ok(self) -> bool:
-        return not self.missing and (self.coverage is None or self.coverage >= MIN_COVERAGE)
+        return not self.missing and not self.lost and (self.coverage is None or self.coverage >= MIN_COVERAGE)
 
-    def rank(self) -> tuple[int, float]:
-        return (-len(self.missing), self.coverage if self.coverage is not None else 1.0)
+    def rank(self) -> tuple[int, int, float]:
+        return (-len(self.missing), -len(self.lost), self.coverage if self.coverage is not None else 1.0)
+
+
+def _escape_reminder(lost: Sequence[str]) -> str:
+    """Appended to the prompt of the retry when the first answer lost formulas to JSON escape glitches."""
+    examples = "; ".join(f"“{c}”" for c in lost[:6])
+    return (
+        f"\n\nIMPORTANT: in your previous answer for this page {len(lost)} formula(s) were destroyed (shown here as "
+        f"{LOST_MARK}): {examples}. This happens when a LaTeX backslash is not escaped inside the JSON string "
+        "(\\m, \\{ or \\b become control characters). Your answer is JSON: write every backslash of LaTeX as two "
+        'backslashes in the JSON source, e.g. "$\\\\mathbf{R}$", "$\\\\{0, 1\\\\}$", "$\\\\beta$". Never output '
+        "control characters (\\u0000-\\u001f, \\u007f) or terminal/ANSI escape codes. Transcribe those formulas "
+        "from the image again."
+    )
 
 
 async def _transcribe(
     images: list[bytes], prompt: str, page_index: int, text_blocks: Sequence[_TextBlock]
 ) -> tuple[PageTranscription, _Quality, int]:
-    """Vision call with a completeness check against the text layer; one retry, the better attempt wins.
-    Raises llm.LLMError only if the first attempt fails."""
+    """Vision call with a completeness check against the text layer; one retry (with an explicit reminder about
+    JSON escaping when formulas were lost), the better attempt wins. Raises llm.LLMError only if the first
+    attempt fails."""
     best: tuple[PageTranscription, _Quality] | None = None
     attempts = 0
+    text = prompt
     for attempt in range(TRANSCRIBE_ATTEMPTS):
         try:
             result = await llm.structured(
                 role="vision",
                 instructions=TRANSCRIBE_INSTRUCTIONS,
-                text=prompt,
+                text=text,
                 schema=PageTranscription,
                 images=images,
                 max_output_tokens=16000,
@@ -176,11 +199,12 @@ async def _transcribe(
         if quality.ok:
             return result, quality, attempts
         log.warning(
-            "page %d: transcription incomplete (coverage %s, %d paragraph(s) missing)",
-            page_index, quality.coverage, len(quality.missing),
+            "page %d: transcription incomplete (coverage %s, %d paragraph(s) missing, %d formula(s) lost)",
+            page_index, quality.coverage, len(quality.missing), len(quality.lost),
         )
         if best is None or quality.rank() > best[1].rank():
             best = (result, quality)
+        text = prompt + (_escape_reminder(quality.lost) if quality.lost else "")
     assert best is not None
     return best[0], best[1], attempts
 
@@ -190,9 +214,13 @@ _WORD_RE = re.compile(r"[A-Za-z]{4,}")
 
 def transcription_quality(result: PageTranscription, text_blocks: Sequence[_TextBlock]) -> _Quality:
     """Compare the transcription (incl. captions) with the text layer's plain words (4+ ASCII letters): overall
-    coverage, and paragraphs of at least BLOCK_MIN_WORDS words of which less than BLOCK_MIN_COVERAGE was found."""
+    coverage, and paragraphs of at least BLOCK_MIN_WORDS words of which less than BLOCK_MIN_COVERAGE was found.
+    Also lists formulas lost to JSON escape glitches (markdown, captions, item titles)."""
     produced = result.markdown + " " + " ".join(f.caption for f in result.figures)
     vocabulary = {w.lower() for w in _WORD_RE.findall(re.sub(r"\\[A-Za-z]+", " ", produced))}
+    lost = lost_formulas(result.markdown)
+    for extra in [f.caption for f in result.figures] + [i.title for i in result.items]:
+        lost += lost_formulas(extra)
     reference: list[str] = []
     missing: list[str] = []
     for block in text_blocks:
@@ -201,8 +229,8 @@ def transcription_quality(result: PageTranscription, text_blocks: Sequence[_Text
         if len(words) >= BLOCK_MIN_WORDS and sum(w in vocabulary for w in words) / len(words) < BLOCK_MIN_COVERAGE:
             missing.append(block.text)
     if len(reference) < MIN_WORDS_FOR_COVERAGE:
-        return _Quality(coverage=None, missing=missing)
-    return _Quality(coverage=round(sum(w in vocabulary for w in reference) / len(reference), 3), missing=missing)
+        return _Quality(coverage=None, missing=missing, lost=lost)
+    return _Quality(coverage=round(sum(w in vocabulary for w in reference) / len(reference), 3), missing=missing, lost=lost)
 
 
 # ---------------------------------------------------------------------------
@@ -223,14 +251,16 @@ async def _nemotron_blocks(
 ) -> tuple[list[nemotron.Block], str]:
     if not nemotron.enabled():
         return [], ""
-    png = await asyncio.to_thread(
-        pdf.render_page_zoom_png, pdf_path, page_index, nemotron.canvas_zoom(width_pt, height_pt)
-    )
     try:
+        png = await asyncio.to_thread(
+            pdf.render_page_zoom_png, pdf_path, page_index, nemotron.canvas_zoom(width_pt, height_pt)
+        )
         blocks = await nemotron.parse_layout(png)
-    except nemotron.NemotronError as e:
-        log.warning("nemotron failed for page %d: %s", page_index, e)
-        raw["nemotron_error"] = str(e)
+    except Exception as e:  # layout blocks are only a hint: any failure means "no layout", never a lost page
+        log.warning("nemotron failed for page %d: %s: %s", page_index, type(e).__name__, e)
+        raw["nemotron_error"] = f"{type(e).__name__}: {e}"
+        return [], ""
+    if not blocks:
         return [], ""
     raw["nemotron"] = [b.to_dict() for b in blocks]
     return blocks, "nemotron"
@@ -281,11 +311,32 @@ def _user_prompt(
     else:
         parts.append("No figure candidates were detected on this page (only one image is attached).")
     layer = "\n\n".join(b.text for b in text_blocks)
-    parts.append("PDF text layer (words reliable, math broken):\n<<<\n" + (layer or "(empty)") + "\n>>>")
+    parts.append("PDF text layer (words reliable, math broken):\n<<<\n" + (_hint_text(layer) or "(empty)") + "\n>>>")
     hint = _nemotron_hint(blocks) if len(_WORD_RE.findall(layer)) < LAYOUT_HINT_MAX_WORDS else ""
     if hint:
         parts.append("Layout model blocks (type, vertical extent, rough text):\n" + hint)
     return "\n\n".join(parts)
+
+
+def _hint_text(text: str) -> str:
+    r"""Text-layer hint without Unicode math alphanumerics: 𝐑 → \mathbf{R}, ℝ → \mathbb{R}, 𝑥 → x.
+    Bold set letters in the hint correlate with the vision model emitting broken JSON escapes there."""
+    out: list[str] = []
+    for i, ch in enumerate(text):
+        if ord(ch) < 0x2100:
+            out.append(ch)
+            continue
+        name = unicodedata.name(ch, "")
+        plain = unicodedata.normalize("NFKC", ch)
+        if len(plain) == 1 and plain.isascii() and plain.isalpha():
+            if name.startswith(("MATHEMATICAL BOLD CAPITAL", "MATHEMATICAL BOLD SMALL")):
+                plain = f"\\mathbf{{{plain}}}"
+            elif "DOUBLE-STRUCK" in name:
+                plain = f"\\mathbb{{{plain}}}"
+            if plain.startswith("\\") and i + 1 < len(text) and text[i + 1].isalpha():
+                plain += " "  # the text layer drops the space after a math letter ("𝐑and 𝐂are fields")
+        out.append(plain)
+    return "".join(out)
 
 
 def _nemotron_hint(blocks: Sequence[nemotron.Block]) -> str:
@@ -371,7 +422,7 @@ async def _assemble(
         label=label,
         markdown=markdown,
         figures=figures,
-        items=[item.model_dump() for item in result.items],
+        items=[{**item.model_dump(), "title": normalize_math(item.title)} for item in result.items],
         uncertain=uncertain,
         is_exercise_page=result.is_exercise_page,
         engine=engine,
@@ -379,10 +430,16 @@ async def _assemble(
     )
 
 
+_NEW_KEY_RE = re.compile(r"^new(\d+)$", re.I)
+
+
 def _accepted_figures(
     scan: pdf.FigureScan, result: PageTranscription, width_pt: float, height_pt: float, uncertain: list[str]
 ) -> list[_Accepted]:
-    """Resolve the model's figure refs and placeholders to bboxes (marks → candidate bbox, new → its bbox)."""
+    """Resolve the model's figure refs and placeholders to bboxes (marks → candidate bbox, new → its bbox).
+
+    Refs with mark null are the unmarked figures new1, new2, ... in order; a mark the scan does not know (an
+    invented 'M7') is reported and ignored without consuming a new-figure number."""
     by_label = {c.label: c for c in scan.candidates}
     placed = set(_PLACEHOLDER_RE.findall(result.markdown))
     rejected = {m.strip() for m in result.rejected_marks}
@@ -390,19 +447,32 @@ def _accepted_figures(
     new_index = 0
     for ref in result.figures:
         mark = (ref.mark or "").strip()
+        caption, description = normalize_math(ref.caption.strip()), normalize_math(ref.description.strip())
+        if mark not in by_label and mark.upper() in by_label:
+            mark = mark.upper()  # 'm2' → 'M2'
         if mark in by_label:
             if mark in rejected and mark not in placed:
                 continue
             cand = by_label[mark]
-            accepted.setdefault(mark, _Accepted(mark, cand.bbox, ref.caption.strip() or cand.caption, ref.description.strip()))
+            accepted.setdefault(mark, _Accepted(mark, cand.bbox, caption or cand.caption, description))
             continue
-        new_index += 1
-        key = f"new{new_index}"
+        new_key = _NEW_KEY_RE.match(mark)
+        if new_key:  # the model used its placeholder key as the mark
+            key = f"new{int(new_key.group(1))}"
+            new_index = max(new_index, int(new_key.group(1)))
+        elif mark:
+            uncertain.append(f"Figure entry with unknown mark '{mark}' was ignored.")
+            continue
+        else:
+            new_index += 1
+            while f"new{new_index}" in accepted:
+                new_index += 1
+            key = f"new{new_index}"
         bbox = _fraction_bbox(ref, width_pt, height_pt)
         if bbox is None:
-            uncertain.append(f"Figure '{ref.caption or key}' had no usable position and was not cropped.")
+            uncertain.append(f"Figure '{caption or key}' had no usable position and was not cropped.")
             continue
-        accepted[key] = _Accepted(key, bbox, ref.caption.strip(), ref.description.strip())
+        accepted[key] = _Accepted(key, bbox, caption, description)
     for mark in placed:  # placeholders for marks the model forgot to list
         if mark in by_label and mark not in accepted and mark not in rejected:
             cand = by_label[mark]
@@ -472,14 +542,72 @@ def _tidy_markdown(text: str) -> str:
     return _ITEM_HEADING_RE.sub("", text).strip()
 
 
-_MATH_RE = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.S)
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_LOST_GLYPH_RE = re.compile(r"\$[ ]*[\x00-\x08\x0b\x0e-\x1f][ ]*\$(?P<eol>[ ]*$)?", re.M)
-_CONTROL_RE = re.compile(r"[\x00-\x07\x0b\x0e-\x1f]")
+# Shown where the vision model's output destroyed a formula (never silently deleted); flagged in `uncertain`.
+LOST_MARK = "\u27e8?\u27e9"  # ⟨?⟩ — renders as text and inside KaTeX math
+
+# Pairs $$…$$ / $…$; an escaped dollar (\$5) neither opens nor closes math.
+_MATH_RE = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<![\\$])\$(?!\$)(.+?)(?<!\\)\$", re.S)
+# One unit of what the model emits in place of a backslash or a whole formula: a control/DEL character or an
+# ANSI/terminal escape sequence (also the malformed "ESC[?]").
+_JUNK = r"(?:[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]|\x1b\[[0-9;?]*[A-Za-z\]]?)"
+_LOST_GLYPH_RE = re.compile(r"(?<![\w}$\\])(?P<d>\$\$?)[ ]*" + _JUNK + r"(?:[ ]*" + _JUNK + r")*[ ]*(?P=d)(?![\w$])")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")  # formatting codes around valid content: dropped
+_ESC_GARBAGE_RE = re.compile(r"\x1b\[[0-9;?]*\]?")
+_CTRL = "[\x00-\x07\x0b\x0e-\x1f\x7f]"  # \b \t \n \f \r are repaired separately (they start real commands)
+_CTRL_BEFORE_COMMAND_RE = re.compile(_CTRL + r"(?=[A-Za-z{}])")  # "\x01mathbf" → "\mathbf", "\x01{" → "\{"
+_CTRL_BEFORE_BACKSLASH_RE = re.compile(_CTRL + r"+(?=\\)")  # "\x00\mathbf" (escaped correctly + junk)
+_CONTROL_RE = re.compile(_CTRL + "+")
+_END_OF_SENTENCE_RE = re.compile(r"[.!?][)\]*_]*$")
+# A newline right before these words was a JSON "\n" that ate the backslash of \neq, \nabla, \not, ...
+# Single letters (\nu, \ne, \ni) are only repaired in inline math: a display line may legitimately start with
+# the vector u, e^x or i^2 (multi-line $$…$$ blocks and environments).
 _EATEN_NEWLINE_RE = re.compile(r"\n(?=(?:eq|e|abla|u|ot|otin|eg|i|mid|leq|geq|subseteq|exists|ewline|orm)\b)")
-_DISPLAY_DOUBLE_RE = re.compile(r"(?<!\\)\\\\(?=[A-Za-z{}])")
-_INLINE_MULTI_RE = re.compile(r"\\{2,}(?=[A-Za-z{}])")
+_EATEN_NEWLINE_DISPLAY_RE = re.compile(r"\n(?=(?:eq|abla|ot|otin|eg|mid|leq|geq|subseteq|exists|ewline|orm)\b)")
+# Over-escaped commands ("\\frac", "\\{"): collapsed only before a known command name or a brace, so a row
+# break followed by a variable ("a & b\\c & d", "\begin{cases}1\\x\end{cases}") is never touched.
+_OVERESCAPED_CMDS = (
+    "frac|dfrac|tfrac|binom|sqrt|mathbf|mathbb|mathcal|mathfrak|mathscr|mathrm|mathit|mathsf|text|textbf|textit|"
+    "emph|boldsymbol|bm|operatorname|displaystyle|"
+    "alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|"
+    "tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|"
+    "in|notin|ni|ne|neq|le|leq|ge|geq|subset|subseteq|subsetneq|supset|supseteq|cup|cap|bigcup|bigcap|setminus|"
+    "emptyset|varnothing|times|cdot|cdots|ldots|dots|vdots|ddots|pm|mp|infty|sum|prod|int|iint|oint|lim|limsup|"
+    "liminf|sup|inf|max|min|det|dim|ker|deg|log|ln|exp|sin|cos|tan|to|mapsto|forall|exists|nexists|neg|lnot|"
+    "implies|iff|Rightarrow|Leftarrow|Leftrightarrow|rightarrow|leftarrow|leftrightarrow|approx|equiv|sim|simeq|"
+    "cong|propto|perp|parallel|oplus|otimes|circ|ast|star|wedge|vee|partial|nabla|ell|hbar|"
+    "overline|underline|bar|hat|widehat|tilde|widetilde|vec|dot|ddot|left|right|big|Big|bigg|Bigg|"
+    "langle|rangle|lvert|rvert|lVert|rVert|vert|Vert|mid|nmid|colon|lfloor|rfloor|lceil|rceil|"
+    "begin|end|square|blacksquare|boxed|qquad|quad|tag|label|prime"
+)
+_DISPLAY_DOUBLE_RE = re.compile(r"(?<!\\)\\\\(?=(?:" + _OVERESCAPED_CMDS + r")(?![A-Za-z])|[{}])")
+_INLINE_MULTI_RE = re.compile(r"\\{2,}(?=(?:" + _OVERESCAPED_CMDS + r")(?![A-Za-z])|[{}])")
 _BOLD_LETTER_RE = re.compile(r"\\(?:textbf|boldsymbol|bm)\{([A-Z])\}")
+# A "$…$" match running into another paragraph, quote line, table row, heading or list item: a '$' is
+# mismatched, so the span is left alone (and _close_dangling_dollars repairs the line that lost its '$').
+_BLOCK_LINE_RE = re.compile(r"\n[ \t]*(?:>|\||#|[-*+][ \t]|\d+[.)][ \t]|\([a-z]\)[ \t])")
+
+
+def _lost_glyph(m: re.Match[str]) -> str:
+    """A formula reduced to control characters. At the end of a line that finishes a sentence it was the
+    end-of-proof mark ("as desired. $\x00$"); anywhere else a symbol was lost: keep a visible marker."""
+    text = m.string
+    line_start = text.rfind("\n", 0, m.start()) + 1
+    line_end = text.find("\n", m.end())
+    after = text[m.end() : line_end if line_end >= 0 else len(text)]
+    before = text[line_start : m.start()].rstrip()
+    if m.group("d") == "$" and not after.strip() and _END_OF_SENTENCE_RE.search(before):
+        return "$\\square$"
+    return LOST_MARK
+
+
+def _repair_controls(text: str) -> str:
+    text = _LOST_GLYPH_RE.sub(_lost_glyph, text)
+    text = _ANSI_RE.sub("", text)
+    text = _ESC_GARBAGE_RE.sub(LOST_MARK, text)
+    text = text.replace("\x08", "\\b").replace("\x0c", "\\f")
+    text = _CTRL_BEFORE_COMMAND_RE.sub(lambda _: "\\", text)
+    text = _CTRL_BEFORE_BACKSLASH_RE.sub("", text)
+    return _CONTROL_RE.sub(LOST_MARK, text)
 
 
 def normalize_math(text: str) -> str:
@@ -487,37 +615,63 @@ def normalize_math(text: str) -> str:
 
     A LaTeX backslash written unescaped in the JSON string turns "\textbf" into TAB+"extbf", "\beta" into
     backspace+"eta", "\frac" into form feed+"rac", "\neq" into newline+"eq"; other glitches are stray control
-    characters or ANSI codes in place of a backslash, and doubled backslashes ("\\{"). Also: \( \) → $ $,
+    or DEL characters or ANSI codes in place of a backslash, and doubled backslashes ("\\{"). Anything that
+    cannot be repaired (a formula reduced to "\x00") becomes LOST_MARK, never an empty string. Also: \( \) → $ $,
     \[ \] → $$ $$, and bold capital letters as \mathbf (the prompt asks for all of this; this is the safety net).
     """
-    text = _ANSI_RE.sub("", text)
-    # a formula reduced to one control character: at a paragraph end it was the end-of-proof mark
-    text = _LOST_GLYPH_RE.sub(lambda m: "$\\square$" if m.group("eol") is not None else "", text)
-    text = text.replace("\x08", "\\b").replace("\x0c", "\\f")
-    text = re.sub(r"[\x00-\x07\x0b\x0e-\x1f](?=[A-Za-z{}])", lambda _: "\\", text)
-    text = _CONTROL_RE.sub("", text)
+    text = _repair_controls(text)
     text = re.sub(r"\\\[(.+?)\\\]", lambda m: f"$${m.group(1).strip()}$$", text, flags=re.S)
     text = re.sub(r"\\\((.+?)\\\)", lambda m: f"${m.group(1).strip()}$", text, flags=re.S)
 
     def fix(m: re.Match[str]) -> str:
         display = m.group(1) is not None
-        math = re.sub(r"[\t\r](?=[A-Za-z])", lambda e: "\\t" if e.group(0) == "\t" else "\\r", m.group(0))
-        math = _EATEN_NEWLINE_RE.sub(lambda _: "\\n", math)
-        # a row break (\\) is glued to a letter only in displays; inline math never has one
+        span = m.group(0)
+        if not display and ("\n\n" in span or _BLOCK_LINE_RE.search(span)):
+            return span  # mismatched '$': do not glue a list item / quote line / paragraph into one formula
+        math = re.sub(r"[\t\r](?=[A-Za-z])", lambda e: "\\t" if e.group(0) == "\t" else "\\r", span)
+        math = (_EATEN_NEWLINE_DISPLAY_RE if display else _EATEN_NEWLINE_RE).sub(lambda _: "\\n", math)
         math = (_DISPLAY_DOUBLE_RE if display else _INLINE_MULTI_RE).sub(lambda _: "\\", math)
-        if not display and "\n" in math and "\n\n" not in math:  # line break inside inline math (blank line = mismatched $)
+        if not display and "\n" in math:  # line break inside inline math
             math = "$" + " ".join(math[1:-1].split()) + "$"
         return _BOLD_LETTER_RE.sub(lambda b: f"\\mathbf{{{b.group(1)}}}", math)
 
     return _close_dangling_dollars(_MATH_RE.sub(fix, text).replace("\r", ""))
 
 
+def lost_formulas(text: str) -> list[str]:
+    """Context (~40 characters each side) of every formula normalize_math cannot repair (shown as LOST_MARK)."""
+    out = normalize_math(text)
+    new = out.count(LOST_MARK) - text.count(LOST_MARK)
+    if new <= 0:
+        return []
+    contexts = [" ".join(out[max(0, m.start() - 40) : m.end() + 40].split()) for m in re.finditer(re.escape(LOST_MARK), out)]
+    return contexts[:new]
+
+
+def unbalanced_math_lines(markdown: str) -> list[str]:
+    """Lines outside $$ displays that still have an unpaired '$' opening math (not a price like '$5')."""
+    out: list[str] = []
+    in_display = False
+    for line in markdown.split("\n"):
+        displays = line.count("$$")
+        if displays % 2:
+            in_display = not in_display
+        if displays or in_display:
+            continue
+        singles = [m.start() for m in re.finditer(r"(?<!\\)\$", line)]
+        if len(singles) % 2 and not line[singles[-1] + 1 : singles[-1] + 2].isdigit():
+            out.append(line.strip())
+    return out
+
+
 _DANGLING_RE = re.compile(r"\$([^\s$]{1,24}?)([.,;:!?)\]]*)(?=\s|$)")
+_AMOUNT_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
 def _close_dangling_dollars(text: str) -> str:
     """'... inverse in $U.' → '... inverse in $U$.': a line outside displays whose last inline '$' is unpaired and
-    opens a single short token gets its closing '$' back (the model dropped it)."""
+    opens a single short token gets its closing '$' back (the model dropped it). A plain amount ('costs $5.')
+    is a price, not math."""
     lines = text.split("\n")
     in_display = False
     for i, line in enumerate(lines):
@@ -531,7 +685,7 @@ def _close_dangling_dollars(text: str) -> str:
             continue
         pos = singles[-1]
         m = _DANGLING_RE.match(line, pos)
-        if m:
+        if m and not _AMOUNT_RE.fullmatch(m.group(1)):
             lines[i] = f"{line[:pos]}${m.group(1)}${m.group(2)}{line[m.end():]}"
     return "\n".join(lines)
 

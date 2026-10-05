@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import db
+from .pipeline.textutil import bare_latex, clean_source_refs, lesson_text, mentions_caption, placeholder_ids
 from .schemas import (
     Figure,
     KnowledgePoint,
@@ -35,14 +36,21 @@ def label_of(labels: list[str], page: int) -> str:
     return labels[page] if 0 <= page < len(labels) and labels[page] else str(page + 1)
 
 
+def local_figure_id(course_id: str, figure_id: str) -> str:
+    """The figure id the API exposes: the parser's local id ("p21-f1"), matching [[figure:p21-f1]] placeholders.
+    The figures table stores "<course_id>-p21-f1" (see pipeline.context.figure_db_id)."""
+    return figure_id.removeprefix(f"{course_id}-")
+
+
 def figure_view(row: dict[str, Any], labels: list[str]) -> Figure:
+    local = local_figure_id(row["course_id"], row["id"])
     return Figure(
-        id=row["id"],
+        id=local,
         page=row["page_index"],
         page_label=label_of(labels, row["page_index"]),
         caption=row["caption"],
         description=row["description"],
-        url=f"/api/courses/{row['course_id']}/figures/{row['id']}.png",
+        url=f"/api/courses/{row['course_id']}/figures/{local}.png",
     )
 
 
@@ -79,12 +87,16 @@ def visualization_view(viz: dict[str, Any] | None, course_id: str, labels: list[
     figure = None
     fid = viz.get("book_figure_id")
     if fid:
-        frow = db.query_one("SELECT * FROM figures WHERE id = ? AND course_id = ?", (fid, course_id))
+        frow = db.query_one(
+            "SELECT * FROM figures WHERE course_id = ? AND id IN (?, ?)", (course_id, fid, f"{course_id}-{fid}")
+        )
         if frow:
             figure = figure_view(frow, labels)
     fmt = viz.get("format", "none")
     if fmt == "book_figure" and figure is None:
         fmt = "none"
+    elif fmt == "none" and figure is not None:
+        fmt = "book_figure"  # a downgraded plan falls back to the figure the planner picked
     plot = viz.get("plot") or {}
     return Visualization(
         format=fmt,
@@ -95,13 +107,17 @@ def visualization_view(viz: dict[str, Any] | None, course_id: str, labels: list[
         caption=viz.get("caption", ""),
         figure=figure,
         table=viz.get("table"),
-        steps=viz.get("steps") or [],
+        # Stray $/$$ delimiters break KaTeX display rendering; courses built before the pipeline stripped them keep them.
+        steps=[{**step, "latex": bare_latex(step.get("latex", ""))} for step in viz.get("steps") or []],
         diagram=viz.get("diagram"),
         plot_x_range=plot.get("x_range"),
         plot_y_range=plot.get("y_range"),
         plot_parameter=plot.get("parameter"),
         plot_curves=[PlotCurve(**c) for c in viz.get("plot_curves", [])],
-        frames=[VisualizationFrame(**f) for f in viz.get("frames") or []],
+        frames=[
+            VisualizationFrame(**{**f, "latex": bare_latex(f["latex"]) if f.get("latex") else f.get("latex")})
+            for f in viz.get("frames") or []
+        ],
     )
 
 
@@ -124,19 +140,14 @@ def lesson_view(skill_id: str) -> Lesson | None:
                 question_count=sum(1 for q in questions if q["kp_index"] == i and not q["flagged"]),
             )
         )
-    figure_ids = db.loads(skill["figure_ids_json"], [])
-    figures = []
-    if figure_ids:
-        marks = ",".join("?" * len(figure_ids))
-        for frow in db.query(f"SELECT * FROM figures WHERE course_id = ? AND id IN ({marks})", (course_id, *figure_ids)):
-            figures.append(figure_view(frow, labels))
+    source_pages = db.loads(skill["source_pages_json"], [])
+    figures = [figure_view(r, labels) for r in lesson_figure_rows(skill, data)]
     prereqs = db.query(
         "SELECT s.* FROM edges e JOIN skills s ON s.id = e.src WHERE e.dst = ? ORDER BY s.order_index", (skill_id,)
     )
     unlocks = db.query(
         "SELECT s.* FROM edges e JOIN skills s ON s.id = e.dst WHERE e.src = ? ORDER BY s.order_index", (skill_id,)
     )
-    source_pages = db.loads(skill["source_pages_json"], [])
     return Lesson(
         skill_id=skill_id,
         skill_key=skill["key"],
@@ -150,7 +161,7 @@ def lesson_view(skill_id: str) -> Lesson | None:
         common_mistakes=data.get("common_mistakes", []),
         connection=data.get("connection", ""),
         visualization=visualization_view(db.loads(skill["viz_json"], None), course_id, labels),
-        source_refs=data.get("source_refs", db.loads(skill["source_refs_json"], [])),
+        source_refs=clean_source_refs(data.get("source_refs") or db.loads(skill["source_refs_json"], [])),
         source_pages=source_pages,
         page_labels=[label_of(labels, p) for p in source_pages],
         figures=figures,
@@ -158,3 +169,24 @@ def lesson_view(skill_id: str) -> Lesson | None:
         unlocks=[skill_ref(r) for r in unlocks],
         question_count=sum(1 for q in questions if not q["flagged"]),
     )
+
+
+def lesson_figure_rows(skill: dict[str, Any], lesson: dict[str, Any]) -> list[dict[str, Any]]:
+    """Figure rows a lesson shows: the figures attached to the skill, every figure its text places with
+    [[figure:ID]], and figures on its source pages whose caption the text quotes (lessons may only refer to figures
+    the learner can see)."""
+    course_id = skill["course_id"]
+    rows = db.query("SELECT * FROM figures WHERE course_id = ? ORDER BY page_index, id", (course_id,))
+    if not rows:
+        return []
+    attached = {f"{course_id}-{local_figure_id(course_id, f)}" for f in db.loads(skill["figure_ids_json"], [])}
+    text = lesson_text(lesson)
+    placed = {f"{course_id}-{local_figure_id(course_id, f)}" for f in placeholder_ids(text)}
+    pages = set(db.loads(skill["source_pages_json"], []))
+    return [
+        r
+        for r in rows
+        if r["id"] in attached
+        or r["id"] in placed
+        or (r["page_index"] in pages and r["caption"] and mentions_caption(text, r["caption"]))
+    ]

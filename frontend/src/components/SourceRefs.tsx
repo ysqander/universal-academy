@@ -1,5 +1,6 @@
 import { useCourseContext } from "../context/course";
 import { Icon } from "./Icon";
+import { Markdown } from "./Markdown";
 import "./SourceRefs.css";
 
 interface SourceRefsProps {
@@ -9,7 +10,7 @@ interface SourceRefsProps {
   compact?: boolean;
 }
 
-/** "Source: 1.3, 1.4 · p. 4 · p. 5" — page buttons open the source viewer. */
+/** "From the book": cited items (1.3, Example 1.4, …) as chips, then page buttons that open the source viewer. */
 export function SourceRefs({ refs, pages, labels, compact = false }: SourceRefsProps) {
   const course = useCourseContext();
   if (!refs.length && !pages.length) return null;
@@ -18,7 +19,15 @@ export function SourceRefs({ refs, pages, labels, compact = false }: SourceRefsP
       <span className="source-refs__label">
         <Icon name="source" size={14} /> From the book
       </span>
-      {refs.length > 0 && <span className="source-refs__items">{refs.join(", ")}</span>}
+      {refs.length > 0 && (
+        <ul className="source-refs__items" aria-label="Cited from the book">
+          {refs.map((ref, i) => (
+            <li key={i} className="source-refs__ref">
+              <Markdown inline>{ref}</Markdown>
+            </li>
+          ))}
+        </ul>
+      )}
       {pages.map((page, i) => (
         <button
           key={page}

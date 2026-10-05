@@ -111,7 +111,7 @@ def _lesson_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
         if db.loads(p["kp_failures_json"], {}):
             reason = "Second try — fresh questions after a pause"
         elif p["status"] == "in_progress":
-            reason = "Pick up the lesson you started"
+            reason = "Started before — begins again from the top"
         else:
             reason = "Next new skill"
         if n_desc:
@@ -271,8 +271,14 @@ def continue_task(course_id: str, now: datetime) -> Task:
         return _start(top.skill, top.type, top.reason, now)
 
 
-def start_task(course_id: str, skill_id: str, type_: str | None, now: datetime) -> Task:
-    """Manual override: learn or review a chosen skill. An unrelated active task is abandoned."""
+def start_task(
+    course_id: str, skill_id: str, type_: str | None, now: datetime, *, replace_active: bool = False, force: bool = False
+) -> Task:
+    """Manual override: learn or review a chosen skill.
+
+    Everything that could stop the new task is checked BEFORE the active task is touched. Another active task is a
+    409 ("Finish or leave … first.") unless `replace_active`, in which case it is abandoned. `force` starts a lesson
+    on a locked skill (the learner's override of prerequisite gating)."""
     with engine.lock:
         _require_course(course_id)
         skill = db.query_one("SELECT * FROM skills WHERE id = ? AND course_id = ?", (skill_id, course_id))
@@ -281,7 +287,7 @@ def start_task(course_id: str, skill_id: str, type_: str | None, now: datetime) 
         progress = db.query_one("SELECT status FROM progress WHERE skill_id = ?", (skill_id,))
         learned = bool(progress) and progress["status"] in scheduler.LEARNED
         type_ = type_ or ("review" if learned else "lesson")
-        if type_ == "lesson" and not learned:
+        if type_ == "lesson" and not learned and not force:
             blockers = unmet_prerequisites(course_id, skill_id)
             if blockers:
                 names = ", ".join(f"{b['key']} ({b['title']})" for b in blockers)
@@ -291,9 +297,14 @@ def start_task(course_id: str, skill_id: str, type_: str | None, now: datetime) 
         active = engine.active_task_row(course_id)
         if active and active["skill_id"] == skill_id and active["type"] == type_:
             return engine.build_task(active)
+        initial = engine.prepare_start(skill_id, type_)  # raises Conflict while the active task is still intact
         if active:
+            if not replace_active:
+                current = db.query_one("SELECT title FROM skills WHERE id = ?", (active["skill_id"],))
+                raise engine.Conflict(f"Finish or leave '{current['title'] if current else 'your open task'}' first.")
             engine.abandon(active["id"], now)
         menu = {(c.skill["id"], c.type): c for c in rank(course_id, now)}
         chosen = menu.get((skill_id, type_))
         reason = chosen.reason if chosen else ("Chosen by you" if type_ == "lesson" else "Extra review — chosen by you")
-        return _start(skill, type_, reason, now)
+        starter = engine.start_lesson if type_ == "lesson" else engine.start_review
+        return engine.get_task(starter(skill_id, reason, now, initial))

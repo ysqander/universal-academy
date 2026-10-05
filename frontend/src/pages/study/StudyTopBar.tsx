@@ -3,6 +3,7 @@ import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { ProgressBar } from "../../components/ProgressBar";
 import { TASK_LABEL } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import type { SessionInfo, Task } from "../../types";
 
 interface StudyTopBarProps {
@@ -28,7 +29,7 @@ export function StudyTopBar({ courseId, task, session, onEndTask }: StudyTopBarP
                 <Icon name={task.type === "lesson" ? "lesson" : "review"} size={13} /> {TASK_LABEL[task.type]}
               </span>
               <span className="study-bar__title">
-                <Markdown inline>{task.skill.title}</Markdown>
+                <Markdown inline>{prettyTitle(task.skill.title)}</Markdown>
               </span>
               {task.reason && <span className="study-bar__reason">{task.reason}</span>}
             </>

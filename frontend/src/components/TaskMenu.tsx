@@ -1,5 +1,6 @@
 import type { TaskOption } from "../types";
 import { TASK_LABEL } from "../lib/format";
+import { prettyTitle } from "../lib/markdown";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 import { Spinner } from "./Spinner";
@@ -40,7 +41,7 @@ export function TaskMenu({ options, onStart, pendingKey, disabled = false }: Tas
                   {TASK_LABEL[option.type]} · <span className="key">{option.skill.key}</span>
                 </span>
                 <span className="task-option__title">
-                  <Markdown inline>{option.skill.title}</Markdown>
+                  <Markdown inline>{prettyTitle(option.skill.title)}</Markdown>
                 </span>
                 <span className="task-option__reason">{option.reason}</span>
               </span>

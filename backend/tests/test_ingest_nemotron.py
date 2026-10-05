@@ -14,6 +14,13 @@ from PIL import Image
 from app.ingest import nemotron as nm
 
 
+@pytest.fixture(autouse=True)
+def closed_breaker():
+    nm.reset_breaker()
+    yield
+    nm.reset_breaker()
+
+
 def png_of(width: int, height: int) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (width, height), "white").save(buf, "PNG")
@@ -155,3 +162,86 @@ def test_parse_layout_raises_when_all_models_fail(mock_http) -> None:
     mock_http(lambda r: httpx.Response(422, json={"detail": "invalid"}))
     with pytest.raises(nm.NemotronError):
         asyncio.run(nm.parse_layout(png_of(100, 150)))
+
+
+# ---------------------------------------------------------------------------
+# Malformed responses never escape as anything but NemotronError; circuit breaker
+# ---------------------------------------------------------------------------
+
+
+def tool_call(arguments: Any) -> dict[str, Any]:
+    return {"choices": [{"message": {"tool_calls": [{"function": {"name": "markdown_bbox", "arguments": arguments}}]}}]}
+
+
+def test_parse_v1_response_malformed_arguments() -> None:
+    with pytest.raises(nm.NemotronError, match="unparseable"):
+        nm.parse_v1_response(tool_call('[[{"bbox": {"xmin": 0.1'))  # truncated at max_tokens
+    with pytest.raises(nm.NemotronError, match="not a list"):
+        nm.parse_v1_response(tool_call('{"error": "x"}'))
+    with pytest.raises(nm.NemotronError, match="not a list"):
+        nm.parse_v1_response(tool_call({"error": "x"}))
+    assert nm.parse_v1_response(tool_call(json.dumps([1, "two", None, [3]]))) == []
+    mixed = json.dumps([V1_BLOCKS[0], [V1_BLOCKS[1], "junk"]])
+    assert [b.type for b in nm.parse_v1_response(tool_call(mixed))] == ["Text", "Picture"]
+
+
+def test_truncated_v1_falls_back_to_v2(mock_http) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["model"] == nm.MODEL_V1:
+            return httpx.Response(200, json=tool_call('[[{"bbox": {"xmin": 0.1'))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "<x_0.1><y_0.1>A<x_0.2><y_0.2><class_Title>"}}]})
+
+    calls = mock_http(handler)
+    blocks = asyncio.run(nm.parse_layout(png_of(100, 150)))
+    assert [b.type for b in blocks] == ["Title"] and len(calls) == 2
+
+
+def test_non_json_200_is_retried_then_reported(mock_http) -> None:
+    calls = mock_http(lambda r: httpx.Response(200, text="<html>proxy error</html>"))
+    with pytest.raises(nm.NemotronError, match="non-JSON"):
+        asyncio.run(nm.parse_layout(png_of(100, 150)))
+    assert len(calls) == 2 * nm.MAX_ATTEMPTS  # both models, each with its retries
+
+
+def test_timeouts_open_the_circuit_breaker(mock_http) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    calls = mock_http(handler)
+    for _ in range(nm.BREAKER_THRESHOLD):
+        with pytest.raises(nm.NemotronError) as info:
+            asyncio.run(nm.parse_layout(png_of(100, 150)))
+        assert info.value.unreachable
+    assert len(calls) == nm.BREAKER_THRESHOLD * nm.MAX_ATTEMPTS  # the second model is not tried on a dead host
+    assert nm.breaker_open()
+    assert asyncio.run(nm.parse_layout(png_of(100, 150))) == []  # page 4: no HTTP call at all
+    assert len(calls) == nm.BREAKER_THRESHOLD * nm.MAX_ATTEMPTS
+
+
+def test_success_resets_the_failure_count(mock_http) -> None:
+    state = {"ok": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=v1_body(V1_BLOCKS)) if state["ok"] else httpx.Response(422, json={})
+
+    mock_http(handler)
+    for ok in (False, False, True, False, False):
+        state["ok"] = ok
+        try:
+            asyncio.run(nm.parse_layout(png_of(100, 150)))
+        except nm.NemotronError:
+            pass
+    assert not nm.breaker_open()
+
+
+def test_page_budget_bounds_a_hanging_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def hang(png: bytes) -> list[nm.Block]:
+        await asyncio.Event().wait()
+        return []
+
+    monkeypatch.setattr(nm, "enabled", lambda: True)
+    monkeypatch.setattr(nm, "_parse_any", hang)
+    monkeypatch.setattr(nm, "PAGE_BUDGET_S", 0.05)
+    with pytest.raises(nm.NemotronError, match="no answer") as info:
+        asyncio.run(nm.parse_layout(png_of(10, 10)))
+    assert info.value.unreachable

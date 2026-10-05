@@ -4,6 +4,7 @@ import { ProgressBar } from "../../components/ProgressBar";
 import { Spinner } from "../../components/Spinner";
 import { useStartTask } from "../../hooks/useStartTask";
 import { pageRangeLabel, plural } from "../../lib/format";
+import { plainText, prettyTitle } from "../../lib/markdown";
 import type { CourseSummary } from "../../types";
 
 export function CourseCard({ course }: { course: CourseSummary }) {
@@ -12,7 +13,8 @@ export function CourseCard({ course }: { course: CourseSummary }) {
   const href = `/courses/${encodeURIComponent(course.id)}`;
   const building = course.status === "building";
   const failed = course.status === "failed";
-  const canStudy = !failed && (stats.lessons_ready > 0 || stats.learned > 0);
+  // A stopped or partial build can still have lessons to study.
+  const canStudy = stats.lessons_ready > 0 || stats.learned > 0;
 
   return (
     <article className="course-card card" data-status={course.status}>
@@ -40,7 +42,7 @@ export function CourseCard({ course }: { course: CourseSummary }) {
       </div>
 
       <h3 className="course-card__title">
-        <Link to={href}>{course.title}</Link>
+        <Link to={href}>{plainText(prettyTitle(course.title))}</Link>
       </h3>
       <p className="course-card__book">{course.book_title}</p>
 

@@ -8,6 +8,7 @@ import { Spinner } from "../../components/Spinner";
 import { TaskMenu } from "../../components/TaskMenu";
 import { useResource } from "../../hooks/useResource";
 import { plural } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import type { NextTaskResponse, Task, TaskOption } from "../../types";
 
 interface CompletionScreenProps {
@@ -75,7 +76,7 @@ export function CompletionScreen({ task, xpEarned, onSession, onContinue, onStar
         </p>
         <h1 className="completion__title">{head.title}</h1>
         <p className="completion__skill">
-          <Markdown inline>{task.skill.title}</Markdown>
+          <Markdown inline>{prettyTitle(task.skill.title)}</Markdown>
         </p>
         {xpEarned > 0 ? (
           <p className="completion__xp" aria-label={`${xpEarned} XP earned`}>
@@ -102,7 +103,7 @@ export function CompletionScreen({ task, xpEarned, onSession, onContinue, onStar
               <li key={s.id}>
                 <Icon name="unlock" size={16} />
                 <span className="key">{s.key}</span>
-                <Markdown inline>{s.title}</Markdown>
+                <Markdown inline>{prettyTitle(s.title)}</Markdown>
               </li>
             ))}
           </ul>

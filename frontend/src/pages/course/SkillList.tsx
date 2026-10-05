@@ -4,6 +4,7 @@ import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
 import { StatusChip } from "../../components/StatusChip";
 import { kindLabel } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import type { CourseGraph, SkillNode } from "../../types";
 import type { GraphSelection } from "./selection";
 import "./SkillList.css";
@@ -56,7 +57,7 @@ export function SkillList({ graph, selection, onSelect }: SkillListProps) {
                   <span className="skill-row__key">{skill.key}</span>
                   <span className="skill-row__main">
                     <span className="skill-row__title">
-                      <Markdown inline>{skill.title}</Markdown>
+                      <Markdown inline>{prettyTitle(skill.title)}</Markdown>
                     </span>
                     <span className="skill-row__meta">
                       {kindLabel(skill.kind)} · ~{skill.est_minutes} min
@@ -93,7 +94,7 @@ export function SkillList({ graph, selection, onSelect }: SkillListProps) {
                   <span className="skill-row__key">{f.key}</span>
                   <span className="skill-row__main">
                     <span className="skill-row__title">
-                      <Markdown inline>{f.title}</Markdown>
+                      <Markdown inline>{prettyTitle(f.title)}</Markdown>
                     </span>
                     <span className="skill-row__meta">
                       {f.known === true ? "You know this" : f.known === false ? "Marked for a refresher" : "Quick self-check available"}

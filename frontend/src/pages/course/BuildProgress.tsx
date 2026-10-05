@@ -16,6 +16,8 @@ interface BuildProgressProps {
   initialJob: JobStatus | null;
   /** Called when the job leaves the running state (done / failed / interrupted) or is resumed. */
   onChange: (job: JobStatus) => void;
+  /** Skills whose lesson failed to generate (a finished build can still have some; resuming retries only those). */
+  failedLessons?: number;
 }
 
 function StageIcon({ stage }: { stage: JobStage }) {
@@ -41,7 +43,7 @@ const STATUS_TEXT: Record<JobStage["status"], string> = {
   skipped: "Skipped",
 };
 
-export function BuildProgress({ courseId, initialJob, onChange }: BuildProgressProps) {
+export function BuildProgress({ courseId, initialJob, onChange, failedLessons = 0 }: BuildProgressProps) {
   const toast = useToast();
   const [resuming, setResuming] = useState(false);
   const [pollActive, setPollActive] = useState(initialJob === null || isJobActive(initialJob));
@@ -96,11 +98,14 @@ export function BuildProgress({ courseId, initialJob, onChange }: BuildProgressP
   const doneCount = status.stages.filter((s) => s.status === "done" || s.status === "skipped").length;
   const current = status.stages.find((s) => s.status === "running") ?? status.stages.find((s) => s.status === "failed");
   const stopped = status.state === "failed" || status.state === "interrupted";
+  // A finished build whose failed lessons can be retried (the course is usable meanwhile).
+  const retryLessons = status.state === "done" && failedLessons > 0;
+  const lessonsWord = failedLessons === 1 ? "lesson" : "lessons";
 
   return (
-    <section className="build card" data-state={status.state} aria-labelledby="build-heading" aria-live="polite">
+    <section className="build card" data-state={retryLessons ? "partial" : status.state} aria-labelledby="build-heading" aria-live="polite">
       <div className="build__head">
-        {active ? <Spinner size={18} label="Building" /> : stopped ? <Icon name="warning" size={20} /> : <Icon name="check" size={20} />}
+        {active ? <Spinner size={18} label="Building" /> : stopped || retryLessons ? <Icon name="warning" size={20} /> : <Icon name="check" size={20} />}
         <div className="build__heading">
           <h2 id="build-heading" className="build__title">
             {status.state === "queued"
@@ -111,18 +116,27 @@ export function BuildProgress({ courseId, initialJob, onChange }: BuildProgressP
                   ? "The build was interrupted"
                   : status.state === "failed"
                     ? "The build stopped"
-                    : "Course built"}
+                    : retryLessons
+                      ? `Course built — ${failedLessons} ${lessonsWord} failed`
+                      : "Course built"}
           </h2>
           <p className="build__sub">
-            Stage {Math.min(doneCount + (active ? 1 : 0), status.stages.length)} of {status.stages.length}
-            {current ? ` · ${current.label}` : ""}
-            {active ? " · the map appears as soon as the chapter is mapped; lessons fill in as they are written." : ""}
+            {retryLessons ? (
+              `You can study everything else meanwhile. Retrying writes only the missing ${lessonsWord}.`
+            ) : (
+              <>
+                Stage {Math.min(doneCount + (active ? 1 : 0), status.stages.length)} of {status.stages.length}
+                {current ? ` · ${current.label}` : ""}
+                {active ? " · the map appears as soon as the chapter is mapped; lessons fill in as they are written." : ""}
+                {stopped ? " · resuming skips everything already finished." : ""}
+              </>
+            )}
           </p>
         </div>
-        {stopped && (
+        {(stopped || retryLessons) && (
           <button type="button" className="btn btn--primary" onClick={() => void resume()} disabled={resuming}>
-            {resuming ? <Spinner size={14} label="Resuming" /> : <Icon name="play" size={14} />}
-            Resume build
+            {resuming ? <Spinner size={14} label="Resuming" /> : <Icon name={stopped ? "play" : "review"} size={14} />}
+            {stopped ? "Resume build" : `Retry failed lessons (${failedLessons})`}
           </button>
         )}
       </div>
@@ -134,6 +148,7 @@ export function BuildProgress({ courseId, initialJob, onChange }: BuildProgressP
         </div>
       )}
 
+      {!retryLessons && (
       <ol className="stages">
         {status.stages.map((stage) => (
           <li key={stage.key} className="stage" data-status={stage.status}>
@@ -161,6 +176,7 @@ export function BuildProgress({ courseId, initialJob, onChange }: BuildProgressP
           </li>
         ))}
       </ol>
+      )}
 
       {status.log.length > 0 && (
         <details className="disclosure build__log">

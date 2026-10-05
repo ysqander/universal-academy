@@ -11,7 +11,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..learning import engine, selector, stats
-from ..schemas import AnswerResult, AnswerSubmit, FlagRequest, NextTaskResponse, RevealResponse, StartTaskRequest, Task
+from ..schemas import (
+    AnswerResult,
+    AnswerSubmit,
+    FlagRequest,
+    HintResponse,
+    NextTaskResponse,
+    RevealRequest,
+    RevealResponse,
+    StartTaskRequest,
+    Task,
+)
 
 log = logging.getLogger("ua.api.study")
 
@@ -46,7 +56,9 @@ def continue_learning(cid: str) -> Task:
 
 @router.post("/api/courses/{cid}/tasks", response_model=Task)
 def start_task(cid: str, body: StartTaskRequest) -> Task:
-    return _run(lambda: selector.start_task(cid, body.skill_id, body.type, _now()))
+    return _run(
+        lambda: selector.start_task(cid, body.skill_id, body.type, _now(), replace_active=body.replace_active, force=body.force)
+    )
 
 
 @router.get("/api/tasks/{tid}", response_model=Task)
@@ -74,9 +86,14 @@ def abandon_task(tid: str) -> Task:
     return _run(lambda: engine.abandon(tid, _now()))
 
 
+@router.post("/api/questions/{qid}/hint", response_model=HintResponse)
+def show_hint(qid: str) -> HintResponse:
+    return _run(lambda: engine.hint(qid, _now()))
+
+
 @router.post("/api/questions/{qid}/reveal", response_model=RevealResponse)
-def reveal_solution(qid: str) -> RevealResponse:
-    return _run(lambda: engine.reveal(qid, _now()))
+def reveal_solution(qid: str, body: RevealRequest | None = None) -> RevealResponse:
+    return _run(lambda: engine.reveal(qid, _now(), body.response if body else None))
 
 
 @router.post("/api/questions/{qid}/flag", response_model=Task)

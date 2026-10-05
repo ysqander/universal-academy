@@ -24,8 +24,11 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    jobs.mark_interrupted_jobs()
-    yield
+    jobs.mark_interrupted_jobs()  # builds of a previous process that never recorded their end
+    try:
+        yield
+    finally:
+        await jobs.shutdown()  # cancel this process's builds/top-ups and mark them interrupted (never left spinning)
 
 
 app = FastAPI(title="Universal Academy", lifespan=lifespan)

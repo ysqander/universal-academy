@@ -1,13 +1,14 @@
 import type { MouseEvent } from "react";
 import { Icon } from "../../components/Icon";
 import { pageRangeLabel } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import type { OutlineNode } from "../../types";
 
 interface OutlineTreeProps {
   nodes: OutlineNode[];
   expanded: Set<string>;
   onToggle: (id: string) => void;
-  /** `extend` = shift-click: grow the selection contiguously to this node. */
+  /** `extend` = shift-click (or "Select several" mode): grow the selection contiguously to this node. */
   onSelect: (id: string, extend: boolean) => void;
   range: { start: number; end: number } | null;
   endpoints: Set<string>;
@@ -48,7 +49,7 @@ function OutlineRow({ node, depth, ...props }: OutlineTreeProps & { node: Outlin
             type="button"
             className="outline__toggle"
             aria-expanded={open}
-            aria-label={`${open ? "Collapse" : "Expand"} ${node.title}`}
+            aria-label={`${open ? "Collapse" : "Expand"} ${prettyTitle(node.title)}`}
             onClick={() => onToggle(node.id)}
           >
             <Icon name={open ? "chevronDown" : "chevronRight"} size={16} />
@@ -61,9 +62,9 @@ function OutlineRow({ node, depth, ...props }: OutlineTreeProps & { node: Outlin
           className="outline__select"
           aria-pressed={inside}
           onClick={select}
-          title="Click to select · Shift-click to extend the selection"
+          title="Click to select · Shift-click (or “Select several”) to extend the selection"
         >
-          <span className="outline__title">{node.title}</span>
+          <span className="outline__title">{prettyTitle(node.title)}</span>
           <span className="outline__pages" title={`${pages} ${pages === 1 ? "page" : "pages"}`}>
             {pageRangeLabel(node.label_start, node.label_end)}
           </span>

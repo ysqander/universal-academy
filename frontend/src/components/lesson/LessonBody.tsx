@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { FigureCatalogContext } from "../../context/course";
-import { figureIdsIn } from "../../lib/markdown";
+import { figureIdsIn, localFigureId, prettyTitle } from "../../lib/markdown";
 import { kindLabel } from "../../lib/format";
 import type { Lesson } from "../../types";
 import { Icon } from "../Icon";
@@ -19,11 +19,15 @@ interface LessonBodyProps {
 
 /** The lesson introduction: objective → why it matters → the idea → notation → visual → depth on demand. */
 export function LessonBody({ lesson, kind, preview = false }: LessonBodyProps) {
-  const catalog = useMemo(() => Object.fromEntries(lesson.figures.map((f) => [f.id, f])), [lesson.figures]);
+  // Keyed by the local id ("p21-f1") that [[figure:…]] placeholders use (older responses carry "<course>-p21-f1").
+  const catalog = useMemo(() => Object.fromEntries(lesson.figures.map((f) => [localFigureId(f.id), f])), [lesson.figures]);
+  const viz = lesson.visualization;
+  const showViz = Boolean(viz && (viz.format !== "none" || viz.figure));
   const extraFigures = useMemo(() => {
     const used = new Set([...figureIdsIn(lesson.idea), ...figureIdsIn(lesson.why_it_matters)]);
-    if (lesson.visualization?.figure) used.add(lesson.visualization.figure.id);
-    return lesson.figures.filter((f) => !used.has(f.id));
+    // VisualizationView always shows the planner's book figure (also next to a diagram / table / steps).
+    if (lesson.visualization?.figure) used.add(localFigureId(lesson.visualization.figure.id));
+    return lesson.figures.filter((f) => !used.has(localFigureId(f.id)));
   }, [lesson]);
 
   return (
@@ -35,7 +39,7 @@ export function LessonBody({ lesson, kind, preview = false }: LessonBodyProps) {
             {kind ? ` · ${kindLabel(kind)}` : ""}
           </p>
           <h1 className="lesson__title">
-            <Markdown inline>{lesson.title}</Markdown>
+            <Markdown inline>{prettyTitle(lesson.title)}</Markdown>
           </h1>
           <div className="lesson__objective">
             <Icon name="target" size={18} />
@@ -84,10 +88,10 @@ export function LessonBody({ lesson, kind, preview = false }: LessonBodyProps) {
           </aside>
 
           <div className="lesson__main lesson__main--rest">
-            {lesson.visualization && lesson.visualization.format !== "none" && (
+            {viz && showViz && (
               <section className="lesson__section">
                 <h2 className="lesson__h">See it</h2>
-                <VisualizationView viz={lesson.visualization} />
+                <VisualizationView viz={viz} />
               </section>
             )}
             {extraFigures.length > 0 && (
@@ -138,8 +142,8 @@ function KnowledgePointsPreview({ lesson }: { lesson: Lesson }) {
           <p className="kicker">
             Knowledge point {kp.index + 1} of {lesson.knowledge_points.length} · {kp.question_count} practice questions
           </p>
-          <h2 className="lesson__h">
-            <Markdown inline>{kp.title}</Markdown>
+          <h2 className="lesson__kp-title">
+            <Markdown inline>{prettyTitle(kp.title)}</Markdown>
           </h2>
           <Markdown>{kp.explanation}</Markdown>
           <WorkedExampleView example={kp.worked_example} stepwise={false} />

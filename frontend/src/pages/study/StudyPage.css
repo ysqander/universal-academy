@@ -1068,3 +1068,35 @@
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+
+.question-card__flag {
+  margin-left: auto;
+}
+
+.free-response__note {
+  color: var(--warning);
+}
+
+/* Study page without an open task: Continue + the task menu (nothing starts by itself). */
+.study-ready {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.study-ready__head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.study-ready__title {
+  font-size: var(--text-2xl);
+}
+
+.study-ready__reason {
+  color: var(--ink-2);
+}

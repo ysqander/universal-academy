@@ -1,27 +1,48 @@
 """Answer checking (SPEC §6.1).
 
 Public interface (stable):
-    check_answer(kind, *, answer, correct_choice, tolerance, response, choice) -> GradeResult
+    check_answer(kind, *, answer, correct_choice, tolerance, response, choice, require_simplified=True) -> GradeResult
     is_checkable(kind, answer, correct_choice) -> bool      # does the answer key parse / exist?
 
 Math answers are parsed with SymPy's parser from a heavily normalized string (unicode, LaTeX-ish input,
 `i`/`j` as the imaginary unit, implicit multiplication). The parser only ever sees a whitelisted character
 set and identifiers resolved to SymPy objects, and every expression is size-checked on an unevaluated tree
-before SymPy is allowed to evaluate it (so inputs like 9^9^9 are rejected instead of hanging).
+before SymPy is allowed to evaluate it (so inputs like 9^9^9 are rejected instead of hanging). On top of that,
+math grading runs in a separate worker process with a hard time budget (GRADE_TIMEOUT_SECONDS): a pathological
+input is reported as "too complex to check" and the worker is killed, so grading can never block the server.
 
 Symbol convention: names starting with z or w are complex (z, w, z_1, w2 ...); every other letter is real.
 This mirrors complex-number texts (z = a + bi with a, b real) and lets |z|^2 and z^2 be told apart.
+Indexed names are canonical: x1, x_1, x_{1} and x₁ are the same symbol x_1.
+
+Letter runs: 'xy' is x*y, glued function names are peeled off ('sinx' -> sin(x), 'xsin(x)' -> x*sin(x)),
+'re'/'im'/'arg' are functions only when called ('re^(iθ)' is r·e^(iθ)), and an ASCII Greek name typed by the
+learner ('xi', 'eta', 'nu' ...) is kept whole only if the answer key uses that letter ('2xi' is 2·x·i).
+
+require_simplified (learner path): when the expected answer is a numeric constant in reduced form and the
+response has the same value but is not reduced (e.g. '(2+3i)(4+5i)' for -7+22i, '3+4-2i', '(1+2, 3)'), the
+result is invalid ("Same value — now simplify it …"): the learner is asked again and nothing is recorded.
 """
 
 from __future__ import annotations
 
+import atexit
+import json
 import logging
 import math
+import os
 import random
 import re
+import select
+import subprocess
+import sys
+import threading
+import time
 import unicodedata
+import warnings
 from dataclasses import dataclass, field
 from keyword import iskeyword
+from pathlib import Path
 
 import sympy as sp
 from sympy.parsing.sympy_parser import (
@@ -30,7 +51,6 @@ from sympy.parsing.sympy_parser import (
     implicit_application,
     implicit_multiplication,
     parse_expr,
-    split_symbols_custom,
     standard_transformations,
 )
 
@@ -57,9 +77,14 @@ MAX_NODES = 400  # nodes in one scalar expression tree
 MAX_ITEMS = 64  # components in a tuple / set / matrix
 MAX_LOG10 = 5000.0  # reject numbers that could exceed 10^5000 when evaluated
 MAX_SYMBOLIC_EXPONENT = 100
+MAX_EXPONENT = 1e4  # |exponent| bound (symbols probed at ~10) for any power
+MAX_FUNC_DEPTH = 6  # nested function applications, e.g. cos(cos(cos(...)))
 SIMPLIFY_MAX_OPS = 40
 EXACT_REL_TOL = 1e-10  # "exact" comparison of numbers typed as decimals
 DEFAULT_NUMERIC_TOL = 1e-6
+GRADE_TIMEOUT_SECONDS = 5.0  # hard budget for one math grading call (worker process is killed after it)
+
+TOO_COMPLEX = "That answer is too complex to check quickly — simplify it and try again."
 
 # ---------------------------------------------------------------------------
 # Normalization: unicode + LaTeX-ish input -> plain SymPy syntax
@@ -71,11 +96,13 @@ _GREEK = [
     "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lamda", "mu",
     "nu", "xi", "omicron", "rho", "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega",
 ]  # fmt: skip
+ALL_GREEK = frozenset(_GREEK)
 _GREEK_CHARS = {unicodedata.lookup(f"GREEK SMALL LETTER {name.upper()}"): name for name in _GREEK}
 _GREEK_CHARS["π"] = "pi"
 _GREEK_CHARS["ϕ"] = "phi"
 _GREEK_CHARS["ε"] = "epsilon"
 _GREEK_CHARS["ϵ"] = "epsilon"
+_GREEK_CHARS["ϑ"] = "theta"
 
 _UNICODE_OPS = {
     "\u2212": "-", "\u2013": "-", "\u2014": "-", "\u2010": "-", "\u2011": "-",
@@ -91,6 +118,7 @@ _SUPERSCRIPTS = {
     "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
     "⁻": "-", "⁺": "+", "ⁿ": "n",
 }  # fmt: skip
+_SUBSCRIPT_DIGITS = {chr(0x2080 + d): str(d) for d in range(10)}
 
 _LATEX_SYMBOLS = {
     "cdot": "*", "times": "*", "ast": "*", "div": "/", "pi": "pi", "lambda": "lamda", "Re": "re", "Im": "im",
@@ -107,7 +135,7 @@ _WRAPPERS = ("mathbf", "mathrm", "mathit", "boldsymbol", "bm", "vec", "text", "t
 _MATRIX_ENV = re.compile(r"\\begin\{([pbBvV]?matrix|smallmatrix|array)\}(?:\{[^}]*\})?(.*?)\\end\{\1\}", re.S)
 
 _FUNCTIONS: dict[str, object] = {
-    "sqrt": sp.sqrt, "root": sp.root, "exp": sp.exp, "ln": sp.log, "log": sp.log,
+    "sqrt": sp.sqrt, "cbrt": sp.cbrt, "root": sp.root, "exp": sp.exp, "ln": sp.log, "log": sp.log,
     "sin": sp.sin, "cos": sp.cos, "tan": sp.tan, "asin": sp.asin, "acos": sp.acos, "atan": sp.atan,
     "arcsin": sp.asin, "arccos": sp.acos, "arctan": sp.atan, "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
     "abs": sp.Abs, "Abs": sp.Abs, "conj": sp.conjugate, "conjugate": sp.conjugate, "bar": sp.conjugate,
@@ -115,6 +143,14 @@ _FUNCTIONS: dict[str, object] = {
 }  # fmt: skip
 _CONSTANTS: dict[str, object] = {"i": sp.I, "j": sp.I, "I": sp.I, "e": sp.E, "E": sp.E, "pi": sp.pi}
 _RESERVED = {"Symbol", "Integer", "Float", "Rational", "Number", "Add", "Mul", "Pow"}
+
+_KNOWN_NAMES = frozenset(_FUNCTIONS) | {"pi"}  # never split into letters
+_PAREN_ONLY = frozenset({"re", "im", "arg", "bar"})  # functions only when called: 're^(iθ)' is r·e^(iθ)
+# Function names peeled off a glued letter run ('sinx', 'xsin', 'rcos', 'isqrt'), longest first.
+_PEEL_FUNCTIONS = (
+    "conjugate", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "sqrt", "cbrt", "asin", "acos", "atan",
+    "conj", "root", "sin", "cos", "tan", "exp", "abs", "log", "ln",
+)  # fmt: skip
 
 
 def _take_group(s: str, pos: int) -> tuple[str, int]:
@@ -140,8 +176,11 @@ def _take_group(s: str, pos: int) -> tuple[str, int]:
     return s[pos], pos + 1
 
 
-def _rewrite_commands(s: str) -> str:
-    """Rewrite argument-taking LaTeX commands (\\frac, \\sqrt, wrappers, \\bar ...) recursively."""
+def _rewrite_commands(s: str, greek_seen: set[str]) -> str:
+    """Rewrite argument-taking LaTeX commands (\\frac, \\sqrt, wrappers, \\bar ...) recursively.
+
+    Every emitted function name is preceded by a space so it never fuses with a preceding letter
+    ('i\\sqrt{3}' -> 'i sqrt(3)', 'z\\bar{z}' -> 'z conjugate(z)')."""
     out: list[str] = []
     pos = 0
     while pos < len(s):
@@ -155,7 +194,7 @@ def _rewrite_commands(s: str) -> str:
         if name in ("frac", "dfrac", "tfrac", "cfrac"):
             num, pos = _take_group(s, pos)
             den, pos = _take_group(s, pos)
-            out.append(f"(({_rewrite_commands(num)})/({_rewrite_commands(den)}))")
+            out.append(f"(({_rewrite_commands(num, greek_seen)})/({_rewrite_commands(den, greek_seen)}))")
         elif name == "sqrt":
             index = None
             if pos < len(s) and s[pos] == "[":
@@ -164,16 +203,19 @@ def _rewrite_commands(s: str) -> str:
                     raise AnswerParseError("Unbalanced brackets in \\sqrt[...].")
                 index, pos = s[pos + 1 : close], close + 1
             arg, pos = _take_group(s, pos)
-            inner = _rewrite_commands(arg)
-            out.append(f"(({inner})^(1/({_rewrite_commands(index)})))" if index else f"sqrt({inner})")
+            inner = _rewrite_commands(arg, greek_seen)
+            out.append(f"(({inner})^(1/({_rewrite_commands(index, greek_seen)})))" if index else f" sqrt({inner})")
         elif name in ("overline", "bar", "conj"):
             arg, pos = _take_group(s, pos)
-            out.append(f"conjugate({_rewrite_commands(arg)})")
+            out.append(f" conjugate({_rewrite_commands(arg, greek_seen)})")
         elif name in _WRAPPERS:
             arg, pos = _take_group(s, pos)
-            out.append(f"({_rewrite_commands(arg)})" if name not in ("text", "operatorname") else arg.strip())
+            out.append(f"({_rewrite_commands(arg, greek_seen)})" if name not in ("text", "operatorname") else f" {arg.strip()} ")
         elif name in _LATEX_SYMBOLS:
-            out.append(f" {_LATEX_SYMBOLS[name]} ")
+            target = _LATEX_SYMBOLS[name]
+            if target in ALL_GREEK:
+                greek_seen.add(target)
+            out.append(f" {target} ")
         else:
             raise AnswerParseError(f"Unsupported notation: \\{name}")
     return "".join(out)
@@ -197,9 +239,16 @@ def _replace_superscripts(s: str) -> str:
     )
 
 
+def _replace_subscripts(s: str) -> str:
+    """x₁₂ -> x_12 (before NFKC would turn it into x12)."""
+    return re.sub("[" + "".join(_SUBSCRIPT_DIGITS) + "]+", lambda m: "_" + "".join(_SUBSCRIPT_DIGITS[c] for c in m.group(0)), s)
+
+
 def _replace_sqrt_sign(s: str) -> str:
-    s = re.sub(r"√\s*([0-9.]+|[A-Za-z]\w*)", r"sqrt(\1)", s)
-    return s.replace("√", "sqrt")
+    """√3 -> ' sqrt(3)' (the leading space keeps 'i√3' from becoming the identifier 'isqrt'); ∛ likewise."""
+    s = re.sub(r"∛\s*([0-9.]+|[A-Za-z]\w*)", r" cbrt(\1)", s).replace("∛", " cbrt")
+    s = re.sub(r"√\s*([0-9.]+|[A-Za-z]\w*)", r" sqrt(\1)", s)
+    return s.replace("√", " sqrt")
 
 
 def _matching_close(s: str, open_pos: int) -> int:
@@ -237,7 +286,7 @@ def _convert_abs_bars(s: str) -> str:
                 out.append(")")
                 open_bars -= 1
             else:
-                out.append("Abs(")
+                out.append(" Abs(")  # leading space: 'x|y|' must not become the identifier 'xAbs'
                 open_bars += 1
             prev = ")" if closes else "("
             continue
@@ -271,8 +320,66 @@ def _star_unknown_calls(s: str) -> str:
     return re.sub(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", repl, s)
 
 
-def normalize(text: str) -> str:
-    """Learner / answer-key text -> plain SymPy-ish syntax (may still contain [], set placeholders and commas)."""
+_TOKEN = re.compile(r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|[A-Za-z_][A-Za-z0-9_]*")
+_INDEXED_WORD = re.compile(r"(?:[A-Za-z]+(?:_?\d+)?)+")
+
+
+def _peel(word: str, call: bool, keep_greek: frozenset[str], peel: tuple[str, ...]) -> list[str]:
+    """One alphabetic run -> tokens: known names stay whole, glued function/Greek names are peeled off,
+    everything else becomes single letters (implicit multiplication)."""
+    if len(word) > 1 and word not in _KNOWN_NAMES and word.lower() in _KNOWN_NAMES:
+        word = word.lower()  # Sqrt, Pi, SIN
+    if word in _PAREN_ONLY:
+        return [word] if call else list(word)
+    if len(word) == 1 or word in _KNOWN_NAMES or word in keep_greek:
+        return [word]
+    out: list[str] = []
+    i = 0
+    while i < len(word):
+        name = next((n for n in peel if word.startswith(n, i)), None)
+        if name:
+            out.append(name)
+            i += len(name)
+        else:
+            out.append(word[i])
+            i += 1
+    return out
+
+
+def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
+    """Make every identifier explicit before SymPy sees it (see the module docstring)."""
+    peel = tuple(sorted(set(_PEEL_FUNCTIONS) | {"pi"} | keep_greek, key=len, reverse=True))
+
+    def repl(m: re.Match[str]) -> str:
+        tok = m.group(0)
+        if not (tok[0].isalpha() or tok[0] == "_"):
+            return tok  # a number
+        if iskeyword(tok):
+            raise AnswerParseError(f"Unexpected word: {tok}")
+        call = s[m.end() :].lstrip().startswith("(")
+        if "_" not in tok and not any(c.isdigit() for c in tok):
+            return " ".join(_peel(tok, call, keep_greek, peel))
+        if not _INDEXED_WORD.fullmatch(tok):
+            return tok  # v_k, x_ab, __x ... (checked later)
+        parts: list[str] = []
+        segments = re.findall(r"([A-Za-z]+)(?:_?(\d+))?", tok)
+        for n, (letters, index) in enumerate(segments):
+            pieces = _peel(letters, call and n == len(segments) - 1 and not index, keep_greek, peel)
+            if index:
+                if pieces[-1] in _KNOWN_NAMES:
+                    pieces.append(index)  # sqrt2 -> sqrt 2
+                else:
+                    pieces[-1] = f"{pieces[-1]}_{index}"  # x1, x_1, theta1 -> x_1, theta_1
+            parts.extend(pieces)
+        return " ".join(parts)
+
+    return _TOKEN.sub(repl, s)
+
+
+def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
+    """Learner / answer-key text -> plain SymPy-ish syntax (may still contain [], set placeholders and commas).
+
+    keep_greek: ASCII Greek names kept whole (None = all). Greek typed as unicode or LaTeX is always kept."""
     if text is None:
         raise AnswerParseError("Empty answer.")
     s = text.strip()
@@ -280,12 +387,17 @@ def normalize(text: str) -> str:
         raise AnswerParseError("Empty answer.")
     if len(s) > MAX_INPUT_CHARS:
         raise AnswerParseError("That answer is too long to check.")
+    greek_seen: set[str] = set()
     s = _replace_superscripts(s)
+    s = _replace_subscripts(s)
     s = unicodedata.normalize("NFKC", s)
     for src, dst in _UNICODE_OPS.items():
         s = s.replace(src, dst)
     for src, dst in _GREEK_CHARS.items():
-        s = s.replace(src, f" {dst} ")
+        if src in s:
+            if dst in ALL_GREEK:
+                greek_seen.add(dst)
+            s = s.replace(src, f" {dst} ")
     s = _replace_sqrt_sign(s)
     # LaTeX delimiters and spacing
     s = s.replace("$", "").replace("\\(", "").replace("\\)", "")
@@ -298,12 +410,14 @@ def normalize(text: str) -> str:
     s = _mark_set_braces(s)
     s = re.sub(r"\^\s*\{", "^{", s)
     s = re.sub(r"_\{([A-Za-z0-9]+)\}", r"_\1", s)  # x_{12} -> x_12
-    s = _rewrite_commands(s)
+    s = _rewrite_commands(s, greek_seen)
     s = s.replace("{", "(").replace("}", ")")
     s = _convert_abs_bars(s)
     s = _strip_assignment(s)
     s = s.replace("^", "**")
     s = re.sub(r"\blambda\b", "lamda", s)
+    keep = ALL_GREEK if keep_greek is None else frozenset(keep_greek) | greek_seen
+    s = _split_identifiers(s, keep)
     s = _star_unknown_calls(s)
     s = re.sub(r"\s+", " ", s).strip()
     if not s:
@@ -321,9 +435,13 @@ class Node:
     kind: str  # "scalar" | "tuple" | "set" | "matrix"
     expr: sp.Expr | None = None
     items: list[Node] = field(default_factory=list)
+    raw: sp.Expr | None = None  # scalar: the unevaluated parse tree (the form the learner typed)
 
     def size(self) -> int:
         return 1 if self.kind == "scalar" else sum(i.size() for i in self.items)
+
+    def scalars(self) -> list[Node]:
+        return [self] if self.kind == "scalar" else [s for i in self.items for s in i.scalars()]
 
 
 def _split_top(s: str, sep: str = ",") -> list[str]:
@@ -372,24 +490,23 @@ def _parse_structure(s: str, depth: int = 0) -> Node:
     parts = _split_top(s)
     if len(parts) > 1:
         return Node("tuple", items=[_parse_structure(p, depth + 1) for p in parts])
-    return Node("scalar", expr=_parse_scalar(s))
+    expr, raw = _parse_scalar(s)
+    return Node("scalar", expr=expr, raw=raw)
 
 
 _ALLOWED = re.compile(r"^[A-Za-z0-9_+\-*/(). ]*$")
 
 
-def _can_split(name: str) -> bool:
-    """'xy' means x*y, but Greek letter names (theta, lamda ...) stay whole."""
-    return name.isalpha() and len(name) > 1 and name not in _GREEK
-
-
 def _make_symbol(name: str) -> sp.Symbol:
+    m = re.fullmatch(r"([A-Za-z]+?)_?(\d+)", name)
+    if m:
+        name = f"{m.group(1)}_{m.group(2)}"  # x1 == x_1
     return sp.Symbol(name) if name[0] in "zw" else sp.Symbol(name, real=True)
 
 
+# Identifier splitting happens in normalize() (_split_identifiers), so SymPy's split_symbols is not used.
 _TRANSFORMS = standard_transformations + (
     convert_xor,
-    split_symbols_custom(_can_split),
     implicit_multiplication,
     implicit_application,
     function_exponentiation,
@@ -414,9 +531,27 @@ def _check_tokens(s: str) -> None:
         raise AnswerParseError(f"Unexpected character(s): {' '.join(bad)}")
     if "__" in s or re.search(r"\.\s*[A-Za-z_]", s):
         raise AnswerParseError("Unexpected syntax.")
+    if re.search(r"\d\s+\.?\d", s):
+        raise AnswerParseError("Unexpected space inside a number — write 1000, not 1 000.")
     for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", s):
         if iskeyword(name) or name in _RESERVED or name.startswith("_"):
             raise AnswerParseError(f"Unexpected word: {name}")
+
+
+_PROBE = sp.Float(9.7)  # stand-in value for symbols when bounding exponents ("symbols count as ~10")
+
+
+def _exponent_size(exponent: sp.Expr) -> float:
+    """A realistic bound on |exponent| (a Rational p/q counts as p/q, symbols as ~10)."""
+    if exponent.is_Number:
+        value = abs(complex(exponent))
+        return value if math.isfinite(value) else math.inf
+    bound = _log_magnitude(exponent)  # recursive guard: inner towers are rejected before any evaluation
+    if bound > 20:
+        raise AnswerParseError("That number is too large to check.")
+    probe = exponent.xreplace({s: _PROBE for s in exponent.free_symbols})
+    value = _numeric(probe)
+    return abs(value) if value is not None else 10**bound
 
 
 def _log_magnitude(node: sp.Basic) -> float:
@@ -430,12 +565,12 @@ def _log_magnitude(node: sp.Basic) -> float:
         return 1.0
     if isinstance(node, sp.Pow) or isinstance(node, sp.exp):
         base, exponent = (node.args if isinstance(node, sp.Pow) else (sp.E, node.args[0]))
-        m_exp = _log_magnitude(exponent)
-        if m_exp > 4:
+        e_abs = _exponent_size(exponent)
+        if e_abs > MAX_EXPONENT:
             raise AnswerParseError("That number is too large to check.")
-        if base.free_symbols and exponent.is_Number and abs(float(exponent)) > MAX_SYMBOLIC_EXPONENT:
+        if base.free_symbols and exponent.is_Number and e_abs > MAX_SYMBOLIC_EXPONENT:
             raise AnswerParseError("That exponent is too large to check.")
-        return max(_log_magnitude(base), 1.0) * (10**m_exp + 1)
+        return max(_log_magnitude(base), 1.0) * (e_abs + 1)
     child = [_log_magnitude(a) for a in node.args]
     if isinstance(node, sp.Mul):
         return sum(child)
@@ -444,34 +579,66 @@ def _log_magnitude(node: sp.Basic) -> float:
     return max(child, default=1.0) + 1.0
 
 
-def _parse_scalar(s: str) -> sp.Expr:
-    _check_tokens(s)
-    try:
-        raw = parse_expr(s, local_dict={**_FUNCTIONS, **_CONSTANTS}, global_dict=dict(_GLOBALS), transformations=_TRANSFORMS, evaluate=False)
-    except AnswerParseError:
-        raise
-    except Exception as exc:  # SymPy raises a zoo of exception types for malformed input
-        raise AnswerParseError("Couldn't read that expression.") from exc
+def _function_depth(node: sp.Basic) -> int:
+    inner = max((_function_depth(a) for a in node.args), default=0)
+    return inner + 1 if isinstance(node, sp.Function) else inner
+
+
+def _validate_raw(raw: sp.Basic) -> None:
+    """Size checks on the unevaluated tree, before SymPy is allowed to evaluate anything."""
     if not isinstance(raw, sp.Expr):
         raise AnswerParseError("Couldn't read that expression.")
-    if sum(1 for _ in sp.preorder_traversal(raw)) > MAX_NODES:
+    nodes = list(sp.preorder_traversal(raw))
+    if len(nodes) > MAX_NODES:
         raise AnswerParseError("That expression is too long to check.")
+    if any(not isinstance(n, sp.Basic) or isinstance(n, sp.Tuple) for n in nodes):
+        raise AnswerParseError("Couldn't read that expression.")  # e.g. 'cos cos', 'x(1, 2)'
+    if _function_depth(raw) > MAX_FUNC_DEPTH:
+        raise AnswerParseError("That expression is nested too deeply to check.")
     if _log_magnitude(raw) > MAX_LOG10:
         raise AnswerParseError("That number is too large to check.")
-    try:
-        expr = parse_expr(s, local_dict={**_FUNCTIONS, **_CONSTANTS}, global_dict=dict(_GLOBALS), transformations=_TRANSFORMS)
-    except Exception as exc:
-        raise AnswerParseError("Couldn't read that expression.") from exc
-    if not isinstance(expr, sp.Expr) or expr.has(sp.zoo, sp.nan, sp.oo, -sp.oo):
+
+
+def _parse_scalar(s: str) -> tuple[sp.Expr, sp.Expr]:
+    """-> (evaluated expression, unevaluated tree)."""
+    _check_tokens(s)
+    local = {**_FUNCTIONS, **_CONSTANTS}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # SymPy deprecation chatter on malformed input
+        try:
+            raw = parse_expr(s, local_dict=local, global_dict=dict(_GLOBALS), transformations=_TRANSFORMS, evaluate=False)
+            _validate_raw(raw)
+        except AnswerParseError:
+            raise
+        except Exception as exc:  # SymPy raises a zoo of exception types for malformed input
+            raise AnswerParseError("Couldn't read that expression.") from exc
+        try:
+            expr = parse_expr(s, local_dict=local, global_dict=dict(_GLOBALS), transformations=_TRANSFORMS)
+            undefined = not isinstance(expr, sp.Expr) or expr.has(sp.zoo, sp.nan, sp.oo, -sp.oo)
+        except Exception as exc:
+            raise AnswerParseError("Couldn't read that expression.") from exc
+    if undefined:
         raise AnswerParseError("That expression is undefined (division by zero?).")
-    return expr
+    return expr, raw
 
 
-def parse_answer(text: str) -> Node:
-    node = _parse_structure(normalize(text))
+def parse_answer(text: str, keep_greek: frozenset[str] | None = None) -> Node:
+    node = _parse_structure(normalize(text, keep_greek))
     if node.size() > MAX_ITEMS:
         raise AnswerParseError("Too many components to check.")
     return node
+
+
+def _greek_names(node: Node) -> frozenset[str]:
+    """Greek letters used as symbols in a parsed answer key (theta, theta_1 ...)."""
+    names = set()
+    for scalar in node.scalars():
+        assert scalar.expr is not None
+        for sym in scalar.expr.free_symbols:
+            base = re.sub(r"_\d+$", "", sym.name)
+            if base in ALL_GREEK:
+                names.add(base)
+    return frozenset(names)
 
 
 # ---------------------------------------------------------------------------
@@ -529,23 +696,30 @@ def _equal(a: sp.Expr, b: sp.Expr, abs_tol: float | None = None) -> bool:
     diff = a - b
     if diff == 0:
         return True
+    if not a.free_symbols and not b.free_symbols:
+        # Constants: high-precision numeric evaluation decides (simplify can take minutes on function towers).
+        va, vb = _numeric(a), _numeric(b)
+        if va is not None and vb is not None:
+            if abs_tol is not None:
+                return abs(va - vb) <= max(abs_tol, 1e-9 * abs(va))
+            return _close(va, vb, EXACT_REL_TOL)
+        try:
+            return sp.count_ops(diff) <= SIMPLIFY_MAX_OPS and sp.simplify(diff) == 0
+        except Exception:
+            return False
     try:
         if sp.count_ops(diff) <= SIMPLIFY_MAX_OPS and sp.simplify(diff) == 0:
             return True
     except Exception:  # simplify can fail on odd inputs; fall through to numeric checks
         log.debug("simplify failed for %s vs %s", a, b, exc_info=True)
-    if not a.free_symbols and not b.free_symbols:
-        va, vb = _numeric(a), _numeric(b)
-        if va is None or vb is None:
-            return False
-        if abs_tol is not None:
-            return abs(va - vb) <= max(abs_tol, 1e-9 * abs(va))
-        return _close(va, vb, EXACT_REL_TOL)
     return bool(_sampled_relation(a, b, lambda x, y: _close(x, y, 1e-9)))
 
 
 def _has_float(expr: sp.Expr) -> bool:
     return any(isinstance(atom, sp.Float) for atom in expr.atoms(sp.Number))
+
+
+_NEAR_EXACT = "Numerically close, but an exact value is expected (a fraction, root or multiple of π)."
 
 
 def _near_miss(expected: sp.Expr, got: sp.Expr, abs_tol: float | None, explicit_tol: float | None) -> str:
@@ -578,7 +752,7 @@ def _near_miss(expected: sp.Expr, got: sp.Expr, abs_tol: float | None, explicit_
             if explicit_tol is not None and rel < 1e-2:
                 return f"Close, but outside the allowed tolerance (±{explicit_tol:g})."
             if rel < 5e-4 and _has_float(got) and not _has_float(expected):
-                return "Numerically close, but an exact value is expected (a fraction, root or multiple of π)."
+                return _NEAR_EXACT
             if rel < 5e-4:
                 return "Very close — give more precision."
             if rel < 1e-2:
@@ -608,6 +782,173 @@ def _nice_factor(r: float) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Simplified form (D3): is an unevaluated constant tree in reduced literal form?
+# ---------------------------------------------------------------------------
+
+_TRANSCENDENTAL = (sp.log, sp.sin, sp.cos, sp.tan, sp.asin, sp.acos, sp.atan, sp.sinh, sp.cosh, sp.tanh, sp.exp)
+
+
+def _ev(node: sp.Basic) -> sp.Basic:
+    """Evaluate an unevaluated tree bottom-up (cheap: only used on small constant trees)."""
+    if not node.args or node.is_Atom:
+        return node
+    return node.func(*[_ev(a) for a in node.args])
+
+
+def _number_sign(node: sp.Basic) -> tuple[int, sp.Basic]:
+    if node.is_Number and node.is_negative:
+        return -1, -node
+    return 1, node
+
+
+def _collect(node: sp.Basic, num: list[sp.Basic], den: list[sp.Basic]) -> None:
+    """Flatten a product into numerator / denominator factors (Pow(x, -1) moves x to the denominator)."""
+    if isinstance(node, sp.Mul):
+        for a in node.args:
+            _collect(a, num, den)
+    elif isinstance(node, sp.Pow) and _ev(node.exp) == -1:
+        sub_num: list[sp.Basic] = []
+        sub_den: list[sp.Basic] = []
+        _collect(node.base, sub_num, sub_den)
+        num.extend(sub_den)
+        den.extend(sub_num)
+    else:
+        num.append(node)
+
+
+def _terms(node: sp.Basic) -> list[sp.Basic]:
+    if isinstance(node, sp.Add):
+        return [t for a in node.args for t in _terms(a)]
+    return [node]
+
+
+def _literal_factor(f: sp.Basic) -> bool:
+    """An irreducible real non-number factor: pi, e, an irreducible radical sqrt(2) / 2^(1/3), e^2, log(2) ..."""
+    if f in (sp.pi, sp.E):
+        return True
+    if isinstance(f, sp.Pow):
+        base, exp = _ev(f.base), _ev(f.exp)
+        if base.has(sp.I) or exp.has(sp.I) or not exp.is_Rational or exp.is_integer and base not in (sp.pi, sp.E):
+            return False
+        if base in (sp.pi, sp.E):
+            return True
+        if not (base.is_positive and (base.is_Integer or _is_reduced_number(f.base, real_only=True))):
+            return False
+        value = sp.Pow(base, exp)
+        return isinstance(value, sp.Pow) and value.base == base and value.exp == exp
+    if isinstance(f, sp.exp):
+        return _literal_factor(sp.Pow(sp.E, f.args[0], evaluate=False))
+    if isinstance(f, _TRANSCENDENTAL) and len(f.args) == 1:
+        arg = f.args[0]
+        if arg.has(sp.I) or not _is_reduced_number(arg, real_only=True):
+            return False
+        value = f.func(_ev(arg))
+        return value.func == f.func  # atan(1) -> pi/4 and sin(pi/6) -> 1/2 are not reduced
+    return False
+
+
+def _term_info(term: sp.Basic, *, allow_den: bool = True) -> tuple[bool, tuple[str, ...], int | None] | None:
+    """-> (imaginary?, irrational-part key, integer coefficient) for a reduced term, None if not reduced."""
+    num: list[sp.Basic] = []
+    den: list[sp.Basic] = []
+    _collect(term, num, den)
+    i_count = 0
+    nums: list[sp.Basic] = []
+    den_nums: list[sp.Basic] = []
+    keys: list[str] = []
+    root_exps: list[sp.Basic] = []  # |exponent| of each radical factor: two with the same one combine
+    for f, below in [(f, False) for f in num] + [(f, True) for f in den]:
+        if f == sp.I and not below:
+            i_count += 1
+        elif f.is_Number:
+            if f == -1 and not below:
+                continue
+            (den_nums if below else nums).append(_number_sign(f)[1])
+        elif not f.has(sp.I) and _literal_factor(f):
+            keys.append(("1/" if below else "") + sp.srepr(_ev(f)))
+            exp = _ev(f.exp) if isinstance(f, sp.Pow) else None
+            if exp is not None and exp.is_Rational and not exp.is_integer:
+                root_exps.append(abs(exp))
+        else:
+            return None
+    if i_count > 1 or len(nums) > 1 or len(den_nums) > 1 or (den_nums and not allow_den):
+        return None
+    if any(isinstance(n, sp.Float) for n in nums + den_nums) and len(nums) + len(den_nums) > 1:
+        return None
+    if any(not (n.is_Integer or isinstance(n, sp.Float)) for n in nums + den_nums):
+        return None  # a Rational atom only appears in exponents; be strict elsewhere
+    if den_nums and (den_nums[0] <= 1):
+        return None
+    if nums and den_nums and nums[0].is_Integer and math.gcd(int(nums[0]), int(den_nums[0])) != 1:
+        return None
+    # radicals that combine (sqrt(2)*sqrt(3), sqrt(2)/sqrt(3)) or repeated factors (pi*pi) are not reduced
+    if len(set(keys)) != len(keys) or len(set(root_exps)) != len(root_exps):
+        return None
+    coefficient = int(nums[0]) if nums and nums[0].is_Integer else (1 if not nums else None)
+    return i_count == 1, tuple(sorted(keys)), coefficient
+
+
+def _is_reduced_number(raw: sp.Basic, *, real_only: bool = False) -> bool:
+    """A constant typed in reduced form: at most one term of each kind (rational / each irrational part, real or
+    imaginary), integer fractions in lowest terms, no arithmetic left to do. '(p + q i)/n' is also accepted."""
+    if raw.free_symbols:
+        return False
+    # (p + q i)/n with an integer n: the numerator must be reduced, with no common factor left with n
+    num: list[sp.Basic] = []
+    den: list[sp.Basic] = []
+    _collect(raw, num, den)
+    adds = [f for f in num if isinstance(f, sp.Add)]
+    if adds and den:
+        rest_num = [f for f in num if not isinstance(f, sp.Add) and f != -1]
+        if len(adds) != 1 or rest_num or len(den) != 1 or not den[0].is_Integer or abs(int(den[0])) <= 1:
+            return False
+        infos = [_term_info(t, allow_den=False) for t in _terms(adds[0])]
+        if any(i is None for i in infos) or not _distinct_terms(infos, real_only):  # type: ignore[arg-type]
+            return False
+        coefficients = [i[2] for i in infos if i is not None]
+        if any(c is None for c in coefficients):
+            return False
+        return math.gcd(*[int(c) for c in coefficients if c is not None], abs(int(den[0]))) == 1
+    infos = [_term_info(t) for t in _terms(raw)]
+    if any(i is None for i in infos):
+        return False
+    return _distinct_terms(infos, real_only)  # type: ignore[arg-type]
+
+
+def _distinct_terms(infos: list[tuple[bool, tuple[str, ...], int | None]], real_only: bool) -> bool:
+    keys = [(imag, part) for imag, part, _ in infos]
+    if real_only and any(imag for imag, _ in keys):
+        return False
+    return len(set(keys)) == len(keys)
+
+
+def _unsimplified_feedback(expected: Node, got: Node) -> str | None:
+    """D3: same value as a reduced constant key, but not typed in reduced form -> a form-appropriate message."""
+    pairs: list[tuple[Node, Node]] = []
+    e_scalars, g_scalars = expected.scalars(), got.scalars()
+    if expected.kind == "scalar" and got.kind == "scalar":
+        pairs = [(expected, got)]
+    elif len(e_scalars) == len(g_scalars):
+        if expected.kind == "set" or got.kind == "set":
+            pairs = [(e, g) for e in e_scalars for g in g_scalars]  # require every component to be reduced
+        else:
+            pairs = list(zip(e_scalars, g_scalars))
+    else:
+        return None
+    if not all(e.expr is not None and not e.expr.free_symbols and e.raw is not None and _is_reduced_number(e.raw) for e, _ in pairs):
+        return None
+    if all(g.raw is not None and _is_reduced_number(g.raw) for _, g in pairs):
+        return None
+    complex_key = any((v := _numeric(e.expr)) is not None and abs(v.imag) > 1e-12 for e in e_scalars if e.expr is not None)
+    many = len(e_scalars) > 1
+    if complex_key:
+        return "Same values — now simplify each component to the form a + bi." if many else "Same value — now simplify it to the form a + bi."
+    if many:
+        return "Same values — now simplify each component fully (combine terms, reduce fractions)."
+    return "Same value — now simplify it fully (combine terms, reduce fractions, evaluate powers and roots)."
+
+
+# ---------------------------------------------------------------------------
 # Structured comparison
 # ---------------------------------------------------------------------------
 
@@ -626,6 +967,9 @@ def _flatten_vector(node: Node) -> Node:
         if all(len(r.items) == 1 for r in node.items):
             return Node("tuple", items=[r.items[0] for r in node.items])
     return node
+
+
+_GENERIC_MISSES = ("Not quite.", "Not equivalent to the expected answer.")
 
 
 def _compare(expected: Node, got: Node, abs_tol: float | None, explicit_tol: float | None = None) -> _Verdict:
@@ -662,9 +1006,15 @@ def _compare(expected: Node, got: Node, abs_tol: float | None, explicit_tol: flo
     label = "Row" if expected.kind == "matrix" else "Component"
     if len(wrong) == 1:
         detail = results[wrong[0]].feedback
-        suffix = f" {detail}" if detail and detail not in ("Not quite.", "Not equivalent to the expected answer.") else ""
+        suffix = f" {detail}" if detail and detail not in _GENERIC_MISSES else ""
         return _Verdict(False, f"{label} {wrong[0] + 1} is not right.{suffix}")
-    return _Verdict(False, f"{len(wrong)} of {len(results)} {label.lower()}s are not right.")
+    details = {results[k].feedback for k in wrong}
+    count = f"{len(wrong)} of {len(results)} {label.lower()}s"
+    if details == {_NEAR_EXACT}:
+        return _Verdict(False, f"{count} are numerically close, but exact values are expected (fractions, roots or multiples of π).")
+    if len(details) == 1 and (detail := next(iter(details))) and detail not in _GENERIC_MISSES:
+        return _Verdict(False, f"{count} are not right. {detail}")
+    return _Verdict(False, f"{count} are not right.")
 
 
 def _compare_unordered(expected: list[Node], got: list[Node], abs_tol: float | None) -> _Verdict:
@@ -691,6 +1041,8 @@ def _compare_unordered(expected: list[Node], got: list[Node], abs_tol: float | N
 # ---------------------------------------------------------------------------
 
 _HELP = "Use e.g. 3/4, -2.5, sqrt(2)/2, 2+3i, x^2 or (1, -2, 3)."
+_SEPARATED_NUMBER = re.compile(r"[+-]?\d+(?:,\d+)+(?:\.\d+)?")
+_NUMBER_WITH_UNITS = re.compile(r"[+-]?(?:\d+(?:[.,]\d*)?|\.\d+)\s*[A-Za-z°%][A-Za-z°%/^*.\s\d]*")
 
 
 def check_answer(
@@ -701,6 +1053,7 @@ def check_answer(
     tolerance: float | None,
     response: str | None,
     choice: int | None,
+    require_simplified: bool = True,
 ) -> GradeResult:
     if kind in ("multiple_choice", "true_false"):
         if choice is None:
@@ -713,30 +1066,44 @@ def check_answer(
     if kind == "free_response":
         return GradeResult(False, "Compare your answer with the model solution and the checklist.")
     if kind in ("numeric", "expression"):
-        return _check_math(kind, answer, tolerance, response)
+        return _check_math_budgeted(kind, answer, tolerance, response, require_simplified)
     log.warning("unsupported question kind %r", kind)
     return GradeResult(False, f"Unsupported question kind: {kind}")
 
 
-def _check_math(kind: str, answer: str, tolerance: float | None, response: str | None) -> GradeResult:
+def _check_math(kind: str, answer: str, tolerance: float | None, response: str | None, require_simplified: bool = True) -> GradeResult:
     try:
-        got = parse_answer(response or "")
+        expected: Node | None = parse_answer(answer)
+    except AnswerParseError:
+        expected = None
+    keep = _greek_names(expected) if expected is not None else None
+    try:
+        got = parse_answer(response or "", keep)
     except AnswerParseError as exc:
         return GradeResult(False, f"{exc} {_HELP}", invalid=True)
-    try:
-        expected = parse_answer(answer)
-    except AnswerParseError:
+    if expected is None:
         log.warning("answer key does not parse: %r", answer)
         same = _loose_text(answer) == _loose_text(response or "")
         return GradeResult(same, "Correct." if same else "This answer can't be checked automatically — compare with the solution.")
+    text = (response or "").strip()
+    if expected.kind == "scalar" and got.kind == "tuple" and _SEPARATED_NUMBER.fullmatch(text):
+        return GradeResult(
+            False, "Write one number, with a dot for decimals and no thousands separators (e.g. 1500 or 1.5).", invalid=True
+        )
     abs_tol = tolerance if tolerance is not None else (DEFAULT_NUMERIC_TOL if kind == "numeric" else None)
     if kind == "numeric" and got.kind == "scalar" and got.expr is not None and got.expr.free_symbols:
+        if _NUMBER_WITH_UNITS.fullmatch(text):
+            return GradeResult(False, "Enter just the number, without units.", invalid=True)
         return GradeResult(False, "A number is expected here.")
     verdict = _compare(expected, got, abs_tol, tolerance)
     if not verdict.ok:
         return GradeResult(False, verdict.feedback or "Not quite.")
-    if _same_text(answer, response or ""):
+    if _same_text(answer, response or "", keep):
         return GradeResult(True, "Correct.")
+    if require_simplified:
+        form = _unsimplified_feedback(expected, got)
+        if form:
+            return GradeResult(False, form, invalid=True)
     if tolerance is not None and _differs_numerically(expected, got):
         return GradeResult(True, "Correct (within the allowed tolerance).")
     return GradeResult(True, "Correct — equivalent to the expected answer.")
@@ -753,10 +1120,10 @@ def _loose_text(s: str) -> str:
     return re.sub(r"[\s*]+", "", s or "").lower()
 
 
-def _same_text(answer: str, response: str) -> bool:
+def _same_text(answer: str, response: str, keep_greek: frozenset[str] | None = None) -> bool:
     """Same answer up to spacing and explicit `*` (so '-7+22i' reads as identical to '-7+22*i')."""
     try:
-        return _loose_text(normalize(answer)) == _loose_text(normalize(response))
+        return _loose_text(normalize(answer)) == _loose_text(normalize(response, keep_greek))
     except AnswerParseError:
         return False
 
@@ -772,3 +1139,222 @@ def is_checkable(kind: str, answer: str, correct_choice: int | None) -> bool:
             return False
         return True
     return kind == "free_response"
+
+
+# ---------------------------------------------------------------------------
+# Time budget: math grading runs in worker processes that are killed when they overrun
+# ---------------------------------------------------------------------------
+
+_BACKEND_DIR = str(Path(__file__).resolve().parents[2])
+_WORKER_BOOT = "import sys; sys.path.insert(0, sys.argv[1]); from app.learning.grading import _worker_main; _worker_main()"
+_WORKER_START_TIMEOUT = 60.0
+MAX_WORKERS = 3
+_in_worker = False
+
+
+class _WorkerTimeout(Exception):
+    pass
+
+
+class _WorkerUnavailable(Exception):
+    pass
+
+
+class _Worker:
+    """One grading process speaking JSON lines over stdin/stdout."""
+
+    def __init__(self) -> None:
+        self.proc = subprocess.Popen(
+            [sys.executable, "-c", _WORKER_BOOT, _BACKEND_DIR],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            cwd=_BACKEND_DIR,
+            close_fds=True,
+        )
+        self._buf = b""
+        try:
+            ready = self._read_line(_WORKER_START_TIMEOUT)
+        except Exception:
+            self.kill()
+            raise
+        if json.loads(ready).get("ready") is not True:
+            self.kill()
+            raise _WorkerUnavailable("grading worker did not start")
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def _read_line(self, timeout: float) -> bytes:
+        assert self.proc.stdout is not None
+        fd = self.proc.stdout.fileno()
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self._buf:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _WorkerTimeout()
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                raise _WorkerTimeout()
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                raise _WorkerUnavailable("grading worker exited")
+            self._buf += chunk
+        line, self._buf = self._buf.split(b"\n", 1)
+        return line
+
+    def call(self, job: dict, timeout: float) -> dict:
+        assert self.proc.stdin is not None
+        try:
+            self.proc.stdin.write(json.dumps(job).encode() + b"\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            raise _WorkerUnavailable("grading worker is gone") from exc
+        return json.loads(self._read_line(timeout))
+
+    def kill(self) -> None:
+        try:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+        except Exception:  # already gone
+            pass
+
+
+class _WorkerPool:
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self._idle: list[_Worker] = []
+        self._all: set[_Worker] = set()
+        self._count = 0
+        self._cond = threading.Condition()
+
+    def run(self, job: dict, timeout: float) -> dict:
+        worker = self._acquire()
+        try:
+            result = worker.call(job, timeout)
+        except BaseException:
+            self._release(worker, broken=True)
+            raise
+        self._release(worker, broken=False)
+        return result
+
+    def _acquire(self) -> _Worker:
+        with self._cond:
+            while True:
+                while self._idle:
+                    worker = self._idle.pop()
+                    if worker.alive():
+                        return worker
+                    self._forget(worker)
+                if self._count < self.size:
+                    self._count += 1
+                    break
+                self._cond.wait()
+        try:
+            worker = _Worker()
+        except BaseException as exc:
+            with self._cond:
+                self._count -= 1
+                self._cond.notify()
+            raise _WorkerUnavailable(str(exc)) from exc
+        with self._cond:
+            self._all.add(worker)
+        return worker
+
+    def _forget(self, worker: _Worker) -> None:
+        self._all.discard(worker)
+        self._count -= 1
+
+    def _release(self, worker: _Worker, *, broken: bool) -> None:
+        if broken or not worker.alive():
+            worker.kill()
+            with self._cond:
+                self._forget(worker)
+                self._cond.notify()
+            return
+        with self._cond:
+            self._idle.append(worker)
+            self._cond.notify()
+
+    def shutdown(self) -> None:
+        with self._cond:
+            workers = list(self._all)
+            self._all.clear()
+            self._idle.clear()
+            self._count = 0
+        for w in workers:
+            w.kill()
+
+
+_pool = _WorkerPool(MAX_WORKERS)
+atexit.register(_pool.shutdown)
+_fallback_warned = False
+
+
+def _use_worker() -> bool:
+    return not _in_worker and os.name == "posix" and os.environ.get("UA_GRADING_WORKER", "1") != "0"
+
+
+_CANT_CHECK = "Couldn't check that answer — try writing it differently."
+
+
+def _check_math_safe(kind: str, answer: str, tolerance: float | None, response: str | None, require_simplified: bool) -> GradeResult:
+    try:
+        return _check_math(kind, answer, tolerance, response, require_simplified)
+    except Exception:  # a grading bug must not become a server error or a counted miss
+        log.exception("grading failed (answer key %r, response %r)", answer, (response or "")[:200])
+        return GradeResult(False, _CANT_CHECK, invalid=True)
+
+
+def _check_math_budgeted(kind: str, answer: str, tolerance: float | None, response: str | None, require_simplified: bool) -> GradeResult:
+    global _fallback_warned
+    if not _use_worker():
+        return _check_math_safe(kind, answer, tolerance, response, require_simplified)
+    job = {"kind": kind, "answer": answer, "tolerance": tolerance, "response": response, "require_simplified": require_simplified}
+    try:
+        out = _pool.run(job, GRADE_TIMEOUT_SECONDS)
+    except _WorkerTimeout:
+        log.warning("grading timed out after %.1fs (answer key %r, response %r)", GRADE_TIMEOUT_SECONDS, answer, (response or "")[:200])
+        return GradeResult(False, TOO_COMPLEX, invalid=True)
+    except _WorkerUnavailable as exc:
+        if not _fallback_warned:
+            log.warning("grading worker unavailable (%s); grading in-process without a time budget", exc)
+            _fallback_warned = True
+        return _check_math_safe(kind, answer, tolerance, response, require_simplified)
+    if "error" in out:
+        log.error("grading failed in the worker: %s (answer key %r, response %r)", out["error"], answer, (response or "")[:200])
+        return GradeResult(False, _CANT_CHECK, invalid=True)
+    return GradeResult(bool(out["correct"]), str(out["feedback"]), bool(out["invalid"]))
+
+
+def warm_up() -> None:
+    """Start one grading worker in the background (optional; the first grade otherwise pays ~1 s of start-up)."""
+    if not _use_worker():
+        return
+
+    def start() -> None:
+        try:
+            _pool._release(_pool._acquire(), broken=False)
+        except Exception:
+            log.debug("grading worker warm-up failed", exc_info=True)
+
+    threading.Thread(target=start, name="grading-warmup", daemon=True).start()
+
+
+def _worker_main() -> None:
+    """Entry point of a grading worker process: one JSON job per line in, one JSON result per line out."""
+    global _in_worker
+    _in_worker = True
+    out = sys.stdout.buffer
+    sys.stdout = sys.stderr  # stray prints must not corrupt the protocol
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s (grading worker): %(message)s")
+    out.write(b'{"ready": true}\n')
+    out.flush()
+    for line in sys.stdin.buffer:
+        try:
+            job = json.loads(line)
+            r = _check_math(job["kind"], job["answer"], job["tolerance"], job["response"], job["require_simplified"])
+            msg: dict = {"correct": r.correct, "feedback": r.feedback, "invalid": r.invalid}
+        except Exception as exc:  # report, keep serving
+            msg = {"error": f"{type(exc).__name__}: {exc}"}
+        out.write(json.dumps(msg).encode() + b"\n")
+        out.flush()

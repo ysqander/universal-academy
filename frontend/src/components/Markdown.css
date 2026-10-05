@@ -238,3 +238,9 @@
     color: #2c4a9e;
   }
 }
+
+/* Small-caps style labels (text-transform: uppercase) must never change math: n ≠ N. */
+.katex,
+.katex * {
+  text-transform: none;
+}

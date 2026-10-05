@@ -19,8 +19,26 @@
 }
 
 .source-refs__items {
-  font-family: var(--font-mono);
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-refs__ref {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--paper-sunken);
+  color: var(--ink-2);
   font-size: var(--text-xs);
+  line-height: 1.45;
 }
 
 .source-refs__page {

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Controls,
   Handle,
@@ -16,6 +16,7 @@ import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
 import { kindLabel, STATUS_LABEL } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import { FOUNDATION_H, FOUNDATION_W, foundationNodeId, layoutGraph, NODE_H, NODE_W, type Bounds } from "../../lib/graphLayout";
 import type { CourseGraph, FoundationNode, SkillNode } from "../../types";
 import type { GraphSelection } from "./selection";
@@ -58,7 +59,7 @@ const SkillNodeView = memo(function SkillNodeView({ data }: NodeProps<SkillFlowN
           {skill.status === "locked" && <Icon name="lock" size={12} className="skill-node__lock" />}
         </span>
         <span className="skill-node__title">
-          <Markdown inline>{skill.title}</Markdown>
+          <Markdown inline>{prettyTitle(skill.title)}</Markdown>
         </span>
         <span className="visually-hidden">{statusText}</span>
       </button>
@@ -81,7 +82,7 @@ const FoundationNodeView = memo(function FoundationNodeView({ data }: NodeProps<
           {state === "refresh" && <Icon name="review" size={12} />}
         </span>
         <span className="foundation-node__title">
-          <Markdown inline>{foundation.title}</Markdown>
+          <Markdown inline>{prettyTitle(foundation.title)}</Markdown>
         </span>
       </button>
     </div>
@@ -103,27 +104,42 @@ const PADDING = 24;
 const READABLE_ZOOM = 0.72;
 
 /**
- * Initial viewport, set once per set of nodes (so polling or resizing never undoes the learner's panning):
- * fit the whole graph when that keeps it readable, otherwise fit the width (up to READABLE_ZOOM) and
- * anchor the top, where the learner starts. The Controls' fit button still shows everything.
+ * Initial viewport: fit the whole graph when that keeps it readable, otherwise fit the width (up to READABLE_ZOOM)
+ * and anchor the top, where the learner starts. Re-applied when the set of nodes changes, and when the pane is
+ * resized (window resize, iPad rotation) as long as the learner hasn't panned or zoomed — polling never undoes
+ * their view. The Controls' fit button still shows everything.
  */
-function InitialViewport({ signature, bounds }: { signature: string; bounds: Bounds }) {
+interface InitialViewportProps {
+  signature: string;
+  bounds: Bounds;
+  /** Whether the learner has panned/zoomed since the last fit; `reset` marks a fresh fit. */
+  userMoved: (reset?: boolean) => boolean;
+}
+
+function InitialViewport({ signature, bounds, userMoved }: InitialViewportProps) {
   const { setViewport } = useReactFlow();
+  // React Flow measures its pane with a ResizeObserver; these update on every container resize.
   const width = useStore((s) => s.width);
   const height = useStore((s) => s.height);
-  const appliedFor = useRef<string | null>(null);
+  const applied = useRef<{ signature: string; width: number; height: number } | null>(null);
   const { x: bx, y: by, width: bw, height: bh } = bounds;
 
   useEffect(() => {
-    if (!width || !height || appliedFor.current === signature) return;
-    appliedFor.current = signature;
+    if (!width || !height) return;
+    const prev = applied.current;
+    if (prev && prev.signature === signature) {
+      if (prev.width === width && prev.height === height) return;
+      if (userMoved()) return;
+    }
+    applied.current = { signature, width, height };
+    userMoved(true);
     const fitAll = Math.min((width - 2 * PADDING) / bw, (height - 2 * PADDING) / bh);
     const fitWidth = (width - 2 * PADDING) / bw;
     const zoom = Math.min(1, fitAll >= READABLE_ZOOM ? fitAll : Math.max(fitAll, Math.min(READABLE_ZOOM, fitWidth)));
     const x = (width - bw * zoom) / 2 - bx * zoom;
     const y = bh * zoom <= height - 2 * PADDING ? (height - bh * zoom) / 2 - by * zoom : PADDING - by * zoom;
     void setViewport({ x, y, zoom }, { duration: 200 });
-  }, [signature, width, height, bx, by, bw, bh, setViewport]);
+  }, [signature, width, height, bx, by, bw, bh, setViewport, userMoved]);
   return null;
 }
 
@@ -166,12 +182,23 @@ export function SkillMap({ graph, selection, onSelect }: SkillMapProps) {
   const nodes: FlowNode[] = [
     ...layout.skills.flatMap((p): SkillFlowNode[] => {
       const skill = skillById.get(p.id);
-      return skill ? [{ id: p.id, type: "skill", position: { x: p.x, y: p.y }, data: { skill, emphasis: emphasisOf(p.id) } }] : [];
+      // Known sizes: fresh node objects (every poll / selection) otherwise lose their measurement and React Flow
+      // hides them (visibility: hidden) until a ResizeObserver callback that may never come.
+      return skill
+        ? [{ id: p.id, type: "skill", position: { x: p.x, y: p.y }, width: NODE_W, height: NODE_H, data: { skill, emphasis: emphasisOf(p.id) } }]
+        : [];
     }),
     ...graph.foundations.map((foundation, i): FoundationFlowNode => {
       const id = foundationNodeId(foundation.key);
       const p = layout.foundations[i];
-      return { id, type: "foundation", position: { x: p.x, y: p.y }, data: { foundation, emphasis: emphasisOf(id) } };
+      return {
+        id,
+        type: "foundation",
+        position: { x: p.x, y: p.y },
+        width: FOUNDATION_W,
+        height: FOUNDATION_H,
+        data: { foundation, emphasis: emphasisOf(id) },
+      };
     }),
     ...(layout.laneLabel
       ? [
@@ -179,6 +206,8 @@ export function SkillMap({ graph, selection, onSelect }: SkillMapProps) {
             id: "lane:foundations",
             type: "lane" as const,
             position: layout.laneLabel,
+            initialWidth: 200,
+            initialHeight: 24,
             data: { label: "Assumed knowledge" },
             selectable: false,
             focusable: false,
@@ -204,6 +233,12 @@ export function SkillMap({ graph, selection, onSelect }: SkillMapProps) {
   });
 
   const signature = `${graph.skills.length}:${graph.foundations.length}`;
+  const interacted = useRef(false);
+  const userMoved = useCallback((reset = false) => {
+    const moved = interacted.current;
+    if (reset) interacted.current = false;
+    return moved;
+  }, []);
 
   return (
     <div className="skill-map">
@@ -227,11 +262,15 @@ export function SkillMap({ graph, selection, onSelect }: SkillMapProps) {
         zoomOnDoubleClick={false}
         panOnDrag
         zoomOnPinch
+        onMove={(event) => {
+          // Only user gestures carry an event; programmatic fits (ours, the fit button) don't.
+          if (event) interacted.current = true;
+        }}
         colorMode="system"
         aria-label="Knowledge graph"
       >
         <Controls showInteractive={false} position="top-right" />
-        <InitialViewport signature={signature} bounds={layout.bounds} />
+        <InitialViewport signature={signature} bounds={layout.bounds} userMoved={userMoved} />
       </ReactFlow>
     </div>
   );

@@ -28,7 +28,7 @@ from ..schemas import (
     SkillNode,
     SourcePage,
 )
-from ..views import label_of, lesson_view, page_labels_for
+from ..views import label_of, lesson_view, local_figure_id, page_labels_for
 
 log = logging.getLogger("ua.api.courses")
 
@@ -174,7 +174,7 @@ def get_graph(cid: str) -> CourseGraph:
                 source_pages=pages,
                 page_labels=[label_of(labels, p) for p in pages],
                 source_refs=db.loads(s["source_refs_json"], []),
-                figure_ids=db.loads(s["figure_ids_json"], []),
+                figure_ids=[local_figure_id(cid, f) for f in db.loads(s["figure_ids_json"], [])],
                 foundations=db.loads(s["foundations_json"], []),
                 misconceptions=db.loads(s["misconceptions_json"], []),
                 lesson_status=s["lesson_status"],

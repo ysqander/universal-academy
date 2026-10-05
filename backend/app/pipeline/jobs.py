@@ -4,11 +4,17 @@ Public interface:
     create_course(req) -> course_id          ValueError (→ 400) for a bad book/page range
     start_build(course_id)                    background task (needs a running event loop); no-op while one runs
     await run_build(course_id) -> JobStatus   the whole pipeline; idempotent and resumable
-    resume_build(course_id) -> JobStatus      LookupError for an unknown course
+    resume_build(course_id) -> JobStatus      LookupError for an unknown course; also re-runs only the failed lessons
+                                              (+ their visuals/verification) of a ready course
     get_job(course_id) -> JobStatus | None
     is_building(course_id) -> bool
     mark_interrupted_jobs() -> int            on startup: running/queued → interrupted
+    await shutdown()                          on server shutdown: cancel builds/top-ups, mark them interrupted
     delete_course(course_id)                  rows + files; RuntimeError while building
+
+An interrupted build (server stopped, task cancelled) never stays 'running': its job becomes 'interrupted', stages
+that were running become 'failed', and a course that was still 'building' becomes 'failed' (resumable; the course
+returns to 'building' when the resumed run starts).
 """
 
 from __future__ import annotations
@@ -121,27 +127,65 @@ def resume_build(course_id: str) -> JobStatus:
     return job
 
 
-def mark_interrupted_jobs() -> int:
-    """On startup: builds left running/queued by a previous process become 'interrupted' (resumable)."""
+INTERRUPTED_LINE = "Interrupted — the server stopped during the build. Resume to continue."
+
+
+def _mark_interrupted(tracker: JobTracker, line: str | None) -> None:
+    """Stop showing work in progress: running stages → failed, job → interrupted, a building course → failed."""
+    for stage in tracker.stages.values():
+        if stage.status == "running":
+            stage.status = "failed"
+    if line:
+        tracker.log(line, level=logging.WARNING)
+    tracker.finish("interrupted")
+    db.execute("UPDATE courses SET status = 'failed' WHERE id = ? AND status = 'building'", (tracker.course_id,))
+
+
+def mark_interrupted_jobs(
+    *, force: bool = False, only: set[str] | None = None, line: str = INTERRUPTED_LINE
+) -> int:
+    """On startup (and shutdown): builds left running/queued become 'interrupted' (resumable). Jobs already marked
+    interrupted but still showing a running stage or a 'building' course are repaired too. Builds executing in this
+    process are skipped unless force=True; `only` limits the pass to these courses. Returns the number of jobs newly
+    marked."""
     try:
         topup.remember_loop(asyncio.get_running_loop())
     except RuntimeError:
         pass
-    rows = db.query("SELECT course_id FROM jobs WHERE state IN ('running', 'queued')")
+    rows = db.query(
+        "SELECT j.course_id, j.state, j.stages_json, c.status AS course_status FROM jobs j "
+        "JOIN courses c ON c.id = j.course_id WHERE j.state IN ('running', 'queued', 'interrupted')"
+    )
     count = 0
     for row in rows:
-        if row["course_id"] in _active:
+        if (row["course_id"] in _active and not force) or (only is not None and row["course_id"] not in only):
             continue
-        tracker = JobTracker.load(row["course_id"])
-        for stage in tracker.stages.values():
-            if stage.status == "running":
-                stage.status = "pending"
-        tracker.lines.append("Interrupted — the server stopped during the build. Resume to continue.")
-        tracker.finish("interrupted")
+        if row["state"] == "interrupted":
+            stale = any(s.get("status") == "running" for s in db.loads(row["stages_json"], []))
+            if stale or row["course_status"] == "building":
+                _mark_interrupted(JobTracker.load(row["course_id"]), None)
+            continue
+        _mark_interrupted(JobTracker.load(row["course_id"]), line)
         count += 1
     if count:
         log.info("marked %d unfinished build(s) as interrupted", count)
     return count
+
+
+async def shutdown(timeout: float = 5.0) -> None:
+    """Server shutdown (lifespan exit): cancel running builds and top-ups, give them a moment to record the
+    interruption, then mark whatever is still running as interrupted."""
+    ours = set(_active) | set(_tasks)
+    tasks = [t for t in _tasks.values() if not t.done()]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.wait(tasks, timeout=timeout)
+    await topup.shutdown(timeout)
+    if ours:  # only builds of this process: another process (e.g. scripts/regenerate.py) may be running its own
+        mark_interrupted_jobs(
+            force=True, only=ours, line="Interrupted — the server shut down during the build. Resume to continue."
+        )
 
 
 def delete_course(course_id: str) -> None:
@@ -199,8 +243,7 @@ async def run_build(course_id: str) -> JobStatus:
         tracker.log(f"Build finished in {_duration(time.monotonic() - started)} · {_cost_summary(usage)}")
         tracker.finish("done")
     except asyncio.CancelledError:
-        tracker.lines.append("Interrupted — resume to continue.")
-        tracker.finish("interrupted")
+        _mark_interrupted(tracker, "Interrupted — resume to continue.")
         raise
     except Exception as e:  # noqa: BLE001 — every failure is reported through the job row
         if not isinstance(e, BuildError):
@@ -294,7 +337,9 @@ def _pipeline_counts(course_id: str) -> dict[str, int]:
         "COALESCE(SUM(json_extract(q.verify_json, '$.status') = 'agree'), 0) AS agree, "
         "COALESCE(SUM(json_extract(q.verify_json, '$.status') = 'disagree_kept'), 0) AS kept "
         "FROM questions q JOIN skills s ON s.id = q.skill_id "
-        "WHERE s.course_id = ? AND q.kind != 'free_response'",
+        "WHERE s.course_id = ? AND q.kind != 'free_response' "
+        # questions flagged by the learner (or retired) are out of verification's hands
+        "AND NOT (q.flagged = 1 AND q.flag_reason NOT LIKE 'verification:%')",
         (course_id,),
     )
     return {

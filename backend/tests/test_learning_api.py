@@ -119,3 +119,58 @@ def test_errors_and_settings(client: TestClient) -> None:
     assert client.get("/api/settings").json() == {"daily_goal": 45}
     assert client.put("/api/settings", json={"daily_goal": 0}).status_code == 422
     assert client.put("/api/settings", json={}).status_code == 422
+
+
+def test_hint_reveal_and_task_switching_over_http(client: TestClient) -> None:
+    fx = build_course()
+    cid = fx.course_id
+    task = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S1")}).json()
+    task = client.post(f"/api/tasks/{task['id']}/practice").json()
+    qid = task["question"]["id"]
+
+    # D2: hints come from the server, which records them for the current attempt
+    hint = client.post(f"/api/questions/{qid}/hint")
+    assert hint.status_code == 200 and hint.json() == {"hint": "h1", "hints_used": 1}
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(qid, hints_used=0)).json()
+    assert result["correct"] and not result["independent"]
+    assert client.post(f"/api/questions/{qid}/hint").status_code == 409  # no longer the current question
+    assert client.post("/api/questions/nope/hint").status_code == 404
+
+    # D1: a reveal with a body; a non-free-response question is always marked revealed
+    task = result["task"]
+    q2 = task["question"]["id"]
+    revealed = client.post(f"/api/questions/{q2}/reveal", json={"response": "a long enough committed answer"})
+    assert revealed.status_code == 200 and revealed.json()["solution"]
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(q2)).json()
+    assert result["correct"] and not result["independent"]
+
+    # choice questions report the right option
+    task = result["task"]
+    mc = task["question"]
+    assert mc["kind"] == "multiple_choice"
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(mc["id"])).json()
+    assert result["independent"] and result["correct_choice"] == question(mc["id"])["correct_choice"]
+    task = result["task"]
+
+    # D6: another task is open -> 409 unless replace_active; locked skills need force
+    conflict = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S2")})
+    assert conflict.status_code == 409 and conflict.json()["detail"] == "Finish or leave 'Skill S1' first."
+    locked = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S3"), "replace_active": True})
+    assert locked.status_code == 409 and "locked" in locked.json()["detail"]
+    assert client.get(f"/api/tasks/{task['id']}").json()["outcome"] is None  # the open task survived both
+    forced = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S3"), "replace_active": True, "force": True})
+    assert forced.status_code == 200 and forced.json()["skill"]["key"] == "S3"
+    assert client.get(f"/api/tasks/{task['id']}").json()["outcome"] == "abandoned"
+
+
+def test_unsimplified_answer_is_asked_again_over_http(client: TestClient) -> None:
+    fx = build_course()
+    cid = fx.course_id
+    task = client.post(f"/api/courses/{cid}/continue").json()
+    task = client.post(f"/api/tasks/{task['id']}/practice").json()
+    qid = task["question"]["id"]  # numeric, answer 101
+    again = client.post(f"/api/tasks/{task['id']}/answer", json={"question_id": qid, "response": "100+1"})
+    assert again.status_code == 422 and again.json()["detail"].startswith("Same value")
+    assert not db.query("SELECT 1 FROM attempts WHERE task_id = ?", (task["id"],))
+    ok = client.post(f"/api/tasks/{task['id']}/answer", json={"question_id": qid, "response": "101"}).json()
+    assert ok["correct"] and ok["independent"]

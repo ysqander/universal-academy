@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from test_learning_fixtures import T0, build_course, card, days, isolated_engine, learn, right, set_due, wrong  # noqa: F401
+from test_learning_fixtures import T0, build_course, card, days, isolated_engine, learn, right, set_due, status, wrong  # noqa: F401
 
 from app import db
 from app.learning import engine, scheduler, selector, stats
@@ -180,12 +180,43 @@ def test_start_task_manual_override() -> None:
     first = selector.start_task(fx.course_id, fx.sid("S2"), None, T0)
     assert first.type == "lesson" and first.reason.startswith("Next new skill")
     assert selector.start_task(fx.course_id, fx.sid("S2"), "lesson", T0).id == first.id  # idempotent
-    second = selector.start_task(fx.course_id, fx.sid("S1"), None, T0)
+    with pytest.raises(engine.Conflict, match=r"^Finish or leave 'Skill S2' first\.$"):
+        selector.start_task(fx.course_id, fx.sid("S1"), None, T0)
+    assert engine.get_task(first.id).outcome is None  # still open
+    second = selector.start_task(fx.course_id, fx.sid("S1"), None, T0, replace_active=True)
     assert engine.get_task(first.id).outcome == "abandoned"
     assert second.skill.key == "S1"
     learn(fx, "S2", T0)
-    review = selector.start_task(fx.course_id, fx.sid("S2"), None, T0 + days(1))
+    review = selector.start_task(fx.course_id, fx.sid("S2"), None, T0 + days(1), replace_active=True)
     assert review.type == "review" and review.reason == "Extra review — chosen by you"
+
+
+def test_manual_start_validates_before_abandoning_the_open_task() -> None:
+    fx = build_course()
+    learn(fx, "S2", T0)
+    task_id = engine.start_lesson(fx.sid("S1"), "test", T0)
+    engine.begin_practice(task_id, T0)
+    engine.submit_answer(task_id, right(fx.questions["S1"][0][0]), T0)
+    db.execute("UPDATE questions SET flagged = 1 WHERE skill_id = ?", (fx.sid("S2"),))  # nothing to review
+    with pytest.raises(engine.Conflict, match="no review questions"):
+        selector.start_task(fx.course_id, fx.sid("S2"), "review", T0, replace_active=True)
+    db.execute("UPDATE skills SET lesson_status = 'pending' WHERE id = ?", (fx.sid("S4"),))
+    with pytest.raises(engine.Conflict, match="still being generated"):
+        selector.start_task(fx.course_id, fx.sid("S4"), "lesson", T0, replace_active=True, force=True)
+    task = engine.get_task(task_id)
+    assert task.outcome is None and task.phase == "practice" and task.progress.streak == 1  # untouched
+
+
+def test_force_starts_a_locked_lesson() -> None:
+    fx = build_course()
+    with pytest.raises(engine.Conflict, match="locked"):
+        selector.start_task(fx.course_id, fx.sid("S3"), "lesson", T0)
+    task = selector.start_task(fx.course_id, fx.sid("S3"), "lesson", T0, force=True)
+    assert task.type == "lesson" and task.skill.key == "S3" and task.reason == "Chosen by you"
+    task = engine.begin_practice(task.id, T0)
+    while task.phase != "done":
+        task = engine.submit_answer(task.id, right(task.question.id), T0).task
+    assert task.outcome == "passed" and status(fx.sid("S3")) == "learned"
 
 
 def test_stale_locked_status_does_not_block_manual_start() -> None:

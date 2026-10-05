@@ -290,3 +290,12 @@
 .kp-preview {
   padding-top: var(--space-2);
 }
+
+/* Knowledge-point titles carry math: a normal-case heading (uppercase would turn F^n into F^N). */
+.lesson__kp-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}

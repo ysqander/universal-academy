@@ -80,6 +80,28 @@ def test_credit_flows_down_once_per_day() -> None:
     assert fx.sid("S1") not in {e.skill_id for e in again}
 
 
+def test_implicit_events_can_be_undone_unless_touched_since() -> None:
+    from dataclasses import asdict
+
+    fx = build_course()
+    for key in ("S1", "S2", "S3"):
+        learn(fx, key, T0)
+    now = T0 + days(1.5)
+    set_due(fx.sid("S1"), now + days(2))
+    s1_json = db.query_one("SELECT card_json FROM progress WHERE skill_id = ?", (fx.sid("S1"),))["card_json"]
+    s2_json = db.query_one("SELECT card_json FROM progress WHERE skill_id = ?", (fx.sid("S2"),))["card_json"]
+    events = [asdict(e) for e in scheduler.apply_success_credit(fx.course_id, fx.sid("S3"), now)]
+    assert {e["kind"] for e in events} == {"credit", "push"}
+    set_due(fx.sid("S2"), now + days(9))  # S2 changed after the event: its push must stay
+    assert scheduler.revert_implicit(events) == 1
+    row = db.query_one("SELECT card_json, implicit_credits FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
+    assert row["card_json"] == s1_json and row["implicit_credits"] == 0
+    assert not db.query("SELECT 1 FROM review_log WHERE skill_id = ? AND implicit = 1", (fx.sid("S1"),))
+    assert db.query_one("SELECT card_json FROM progress WHERE skill_id = ?", (fx.sid("S2"),))["card_json"] != s2_json
+    assert db.query("SELECT 1 FROM review_log WHERE skill_id = ? AND implicit = 1", (fx.sid("S2"),))
+    assert scheduler.revert_implicit([]) == 0
+
+
 def test_full_credit_skips_cards_not_due_soon() -> None:
     fx = build_course()
     for key in ("S1", "S2", "S3"):

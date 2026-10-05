@@ -13,18 +13,32 @@ interface PracticeViewProps {
   task: Task;
   onAnswered: (result: AnswerResult) => void;
   onAdvance: (task: Task) => void;
+  /** A question was flagged; the server's re-graded task replaces the current one. */
+  onFlagged: (task: Task) => void;
   onEasier: () => Promise<boolean>;
   onGoToMap: () => void;
 }
 
+/** A knowledge point is failed after this many questions (SPEC §6.3), however large its pool. */
+const MAX_KP_QUESTIONS = 5;
+
 /** Practice phase (lessons) and review sets: current knowledge point's explanation + one question at a time. */
-export function PracticeView({ task, onAnswered, onAdvance, onEasier, onGoToMap }: PracticeViewProps) {
+export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier, onGoToMap }: PracticeViewProps) {
   const lesson = task.lesson;
   const { progress, question } = task;
   const kp = lesson?.knowledge_points[progress.kp_index];
   const explainerRef = useRef<HTMLDetailsElement>(null);
   const [explainer, setExplainer] = useState<{ kp: number; open: boolean } | null>(null);
   const explainerOpen = explainer && explainer.kp === progress.kp_index ? explainer.open : progress.kp_questions_used <= 1;
+  // An easier step is offered only after a miss in the current knowledge point (the server enforces it too).
+  const [missedIn, setMissedIn] = useState<string | null>(null);
+  const kpKey = `${task.id}:${progress.kp_index}`;
+  const easierAllowed = task.type === "lesson" && missedIn === kpKey;
+
+  const answered = (result: AnswerResult) => {
+    if (task.type === "lesson" && !result.correct && result.status !== "voided") setMissedIn(kpKey);
+    onAnswered(result);
+  };
 
   const openExplainer = () => {
     setExplainer({ kp: progress.kp_index, open: true });
@@ -45,10 +59,12 @@ export function PracticeView({ task, onAnswered, onAdvance, onEasier, onGoToMap 
     else openExplainer();
   };
 
+  const questionNo = progress.kp_questions_used || 1;
+  const upTo = progress.kp_questions_available ? Math.max(Math.min(progress.kp_questions_available, MAX_KP_QUESTIONS), questionNo) : 0;
   const position =
     task.type === "review"
       ? `Question ${Math.min(progress.answered + 1, Math.max(progress.total_questions, 1))} of ${Math.max(progress.total_questions, 1)}`
-      : `Question ${progress.kp_questions_used || 1}${progress.kp_questions_available ? ` of up to ${progress.kp_questions_available}` : ""}`;
+      : `Question ${questionNo}${upTo ? ` of up to ${upTo}` : ""}`;
 
   return (
     <div className="practice-view">
@@ -90,11 +106,11 @@ export function PracticeView({ task, onAnswered, onAdvance, onEasier, onGoToMap 
           task={task}
           question={question}
           position={position}
-          onAnswered={onAnswered}
+          onAnswered={answered}
           onContinue={(result) => onAdvance(result.task)}
           onSuggestion={onSuggestion}
-          onEasier={task.type === "lesson" ? easier : null}
-          onTaskReplaced={onAdvance}
+          onEasier={easierAllowed ? easier : null}
+          onTaskReplaced={onFlagged}
         />
       ) : (
         <StateMessage

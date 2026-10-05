@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { revealSolution, submitAnswer } from "../../api";
+import { getHint, isApiError, revealSolution, submitAnswer } from "../../api";
 import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
@@ -25,6 +25,11 @@ interface QuestionCardProps {
   onTaskReplaced: (task: Task) => void;
 }
 
+/** A free-response answer shorter than this (non-space characters) is not a real attempt: comparing it counts as
+ * viewing the solution (backend D1 rule, same threshold). */
+const MIN_COMMITTED_CHARS = 15;
+const committedLength = (text: string): number => text.replace(/\s+/g, "").length;
+
 const GRADES: { grade: SelfGrade; label: string; hint: string }[] = [
   { grade: "correct", label: "I got it", hint: "Meets every point on the checklist" },
   { grade: "partial", label: "Partly", hint: "Right idea, something missing" },
@@ -45,7 +50,9 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const finePointer = useMediaQuery("(pointer: fine)");
   const [choice, setChoice] = useState<number | null>(null);
   const [response, setResponse] = useState("");
-  const [hintsShown, setHintsShown] = useState(0);
+  // Hints come from POST /hint (recorded server-side, so a reload can't erase them); texts by hint index.
+  const [hintTexts, setHintTexts] = useState<string[]>([]);
+  const [hinting, setHinting] = useState(false);
   const [revealed, setRevealed] = useState<RevealResponse | null>(null);
   const [revealing, setRevealing] = useState(false);
   const [modelSolution, setModelSolution] = useState<RevealResponse | null>(null);
@@ -70,6 +77,9 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const answered = result !== null;
   const grading = isFree && modelSolution !== null && !answered;
   const canSubmit = !answered && !submitting && (isChoice ? choice !== null : response.trim().length > 0);
+  const hintsShown = hintTexts.length;
+  const hintTotal = Math.max(question.hints.length, hintsShown);
+  const shortFreeAnswer = isFree && committedLength(response) < MIN_COMMITTED_CHARS;
 
   const send = async (selfGrade: SelfGrade | null) => {
     setSubmitting(true);
@@ -80,7 +90,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
         response: isChoice ? null : response,
         self_grade: selfGrade,
         hints_used: hintsShown,
-        revealed_solution: revealed !== null,
+        // Comparing a (near-)empty free response is the same as looking at the solution first (D1).
+        revealed_solution: revealed !== null || (isFree && shortFreeAnswer),
         seconds: Math.round(elapsed() * 10) / 10,
       });
       setResult(outcome);
@@ -97,7 +108,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     if (!response.trim() || modelSolution || submitting) return;
     setSubmitting(true);
     try {
-      setModelSolution(revealed ?? (await revealSolution(question.id)));
+      // The committed answer makes this a comparison for self-grading, not assistance (D1).
+      setModelSolution(revealed ?? (await revealSolution(question.id, response)));
     } catch (err) {
       toast.error(err);
     } finally {
@@ -124,8 +136,28 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     }
   };
 
-  const nextHint = () => {
-    if (!answered && hintsShown < question.hints.length) setHintsShown(hintsShown + 1);
+  const canHint = !answered && !grading && !hinting && hintsShown < question.hints.length;
+
+  const nextHint = async () => {
+    if (!canHint) return;
+    setHinting(true);
+    try {
+      const { hint, hints_used: used } = await getHint(question.id);
+      setHintTexts((prev) => {
+        // The server's count wins: hints taken before a reload come back too (texts from the question).
+        const count = Math.max(used, prev.length);
+        return Array.from({ length: count }, (_, i) => (i === used - 1 ? hint : (prev[i] ?? question.hints[i] ?? "")));
+      });
+    } catch (err) {
+      if (isApiError(err, 404) || isApiError(err, 405)) {
+        // Older server without POST /hint: show it locally; the count is still reported with the answer.
+        setHintTexts((prev) => [...prev, question.hints[prev.length] ?? ""]);
+      } else {
+        toast.error(err);
+      }
+    } finally {
+      setHinting(false);
+    }
   };
 
   const askEasier = async () => {
@@ -151,15 +183,16 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
       "4": pickByNumber(4),
       "5": pickByNumber(5),
       h: () => {
-        if (answered || hintsShown >= question.hints.length) return false;
-        nextHint();
+        // Not while self-grading: a hint then would silently turn the answer into "with help".
+        if (!canHint) return false;
+        void nextHint();
       },
       Enter: (event) => {
         if (event.target !== document.body || !canSubmit) return false;
         submit();
       },
     },
-    !answered,
+    !answered && !grading,
   );
 
   const marks = choiceMarks(choices, choice, result);
@@ -200,6 +233,11 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
             readOnly={modelSolution !== null || answered}
             onCommit={() => submit()}
             autoFocus={finePointer}
+            note={
+              !modelSolution && !revealed && response.trim() && shortFreeAnswer
+                ? "Write out your whole answer before comparing — comparing a very short answer counts as viewing the solution."
+                : null
+            }
           />
         ) : (
           <MathInput value={response} onChange={setResponse} disabled={answered || busy} kind={kind} autoFocus={finePointer} />
@@ -207,10 +245,10 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
 
         {hintsShown > 0 && (
           <ol className="hints" aria-label="Hints">
-            {question.hints.slice(0, hintsShown).map((hint, i) => (
+            {hintTexts.map((hint, i) => (
               <li key={i} className="hint reveal">
                 <span className="hint__label">
-                  Hint {i + 1} of {question.hints.length}
+                  Hint {i + 1} of {hintTotal}
                 </span>
                 <Markdown>{hint}</Markdown>
               </li>
@@ -278,8 +316,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
             </button>
             <div className="question-card__tools">
               {question.hints.length > 0 && (
-                <button type="button" className="btn btn--ghost btn--sm" onClick={nextHint} disabled={hintsShown >= question.hints.length}>
-                  <Icon name="bulb" size={15} />
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => void nextHint()} disabled={!canHint}>
+                  {hinting ? <Spinner size={14} label="Loading hint" /> : <Icon name="bulb" size={15} />}
                   {hintsShown === 0 ? "Hint" : hintsShown < question.hints.length ? `Next hint (${hintsShown + 1} of ${question.hints.length})` : "No more hints"}
                   {hintsShown < question.hints.length && <kbd>H</kbd>}
                 </button>
@@ -306,10 +344,11 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
         />
       )}
 
-      {!answered && (
+      {/* Stays after answering: a wrong answer key is usually only noticed once the solution is shown. */}
+      {result?.status !== "voided" && (
         <footer className="question-card__footer">
           <span className="question-card__keys">
-            {grading ? null : isChoice ? (
+            {grading || answered ? null : isChoice ? (
               <>
                 <kbd>1</kbd>–<kbd>{choices.length}</kbd> choose · <kbd>Enter</kbd> check
               </>
@@ -324,7 +363,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
             )}
           </span>
           <button type="button" className="btn btn--quiet btn--sm question-card__flag" onClick={() => setFlagOpen(true)}>
-            <Icon name="flag" size={14} /> This question seems wrong
+            <Icon name="flag" size={14} /> {answered ? "Answer key or question seems wrong?" : "This question seems wrong"}
           </button>
         </footer>
       )}

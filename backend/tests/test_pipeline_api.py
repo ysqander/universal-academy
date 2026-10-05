@@ -8,11 +8,11 @@ import time
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from test_pipeline_build import insert_book, make_tiny_pdf
 
 from app import db
 from app.api import courses
 from app.schemas import Course, CourseGraph, CourseSummary, FoundationNode, JobStatus, Lesson, SourcePage
-from test_pipeline_build import insert_book, make_tiny_pdf
 
 
 def make_app() -> FastAPI:
@@ -73,11 +73,14 @@ def test_course_lifecycle(client, tmp_path):
 
     figure_skill = next(s for s in graph.skills if s.figure_ids)
     fid = figure_skill.figure_ids[0]
+    assert not fid.startswith(cid)  # D8: local figure ids ("p1-f1") everywhere in the API
     r = client.get(f"/api/courses/{cid}/figures/{fid}.png")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
-    local = fid.removeprefix(f"{cid}-")
-    assert client.get(f"/api/courses/{cid}/figures/{local}.png").status_code == 200
+    assert client.get(f"/api/courses/{cid}/figures/{cid}-{fid}.png").status_code == 200  # the DB form still works
     assert client.get(f"/api/courses/{cid}/figures/nope.png").status_code == 404
+    lesson = Lesson.model_validate(client.get(f"/api/skills/{figure_skill.id}/lesson").json())
+    assert fid in {f.id for f in lesson.figures}
+    assert all(client.get(f.url).status_code == 200 for f in lesson.figures)
 
     page = SourcePage.model_validate(client.get(f"/api/courses/{cid}/source/1").json())
     assert page.label == "2" and page.markdown and page.image_url == f"/api/books/{book_id}/pages/1.png?dpi=150"
@@ -126,3 +129,44 @@ def test_lesson_is_404_until_ready(client, tmp_path):
     r = client.get(f"/api/skills/{skill}/lesson")
     assert r.status_code == 404 and "still being written" in r.json()["detail"]
     assert client.post(f"/api/skills/{skill}/more-questions").status_code == 409
+
+
+def test_resume_retries_only_the_failed_lessons_of_a_ready_course(client, tmp_path, monkeypatch):
+    from test_pipeline_build import fail_for
+
+    from app import fake_llm
+
+    book_id = insert_book(make_tiny_pdf(tmp_path / "tiny.pdf"))
+    fail_for(monkeypatch, "LessonDraft", lambda text: "skill S3:" in text)
+    cid = client.post("/api/courses", json={"book_id": book_id, "title": "", "start_page": 0, "end_page": 2}).json()["id"]
+    assert wait_for_job(client, cid).state == "done"
+    graph = CourseGraph.model_validate(client.get(f"/api/courses/{cid}/graph").json())
+    assert [s.key for s in graph.skills if s.lesson_status == "failed"] == ["S3"]
+    assert client.get(f"/api/courses/{cid}").json()["status"] == "ready"
+
+    monkeypatch.undo()
+    calls: list[str] = []
+    original = fake_llm.respond
+    monkeypatch.setattr(fake_llm, "respond", lambda **kw: calls.append(kw["schema"].__name__) or original(**kw))
+    assert client.post(f"/api/courses/{cid}/resume").status_code == 200
+    assert wait_for_job(client, cid).state == "done"
+    graph = CourseGraph.model_validate(client.get(f"/api/courses/{cid}/graph").json())
+    assert all(s.lesson_status == "ready" for s in graph.skills)
+    assert calls.count("LessonDraft") == 1 and calls.count("VisualizationPlan") == 1 and "KnowledgeGraphDraft" not in calls
+    assert client.get(f"/api/courses/{cid}").json()["status"] == "ready"
+
+
+def test_more_questions_reports_llm_failures_as_502(client, tmp_path, monkeypatch):
+    from app import llm
+
+    book_id = insert_book(make_tiny_pdf(tmp_path / "tiny.pdf"))
+    cid = client.post("/api/courses", json={"book_id": book_id, "title": "", "start_page": 0, "end_page": 2}).json()["id"]
+    wait_for_job(client, cid)
+    skill = db.query_one("SELECT id FROM skills WHERE course_id = ? ORDER BY order_index", (cid,))["id"]
+
+    async def broken(*_args, **_kwargs):
+        raise llm.LLMError("lesson call failed after retries")
+
+    monkeypatch.setattr(courses, "top_up_questions", broken)
+    r = client.post(f"/api/skills/{skill}/more-questions")
+    assert r.status_code == 502 and "Could not generate questions" in r.json()["detail"]

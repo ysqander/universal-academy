@@ -168,3 +168,15 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Built, but some lessons failed: usable course, retry offered. */
+.build[data-state="partial"] {
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--line));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--warning-bg) 60%, transparent), transparent 140px),
+    var(--surface);
+}
+
+.build[data-state="partial"] .build__head {
+  color: var(--warning);
+}

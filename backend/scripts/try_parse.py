@@ -50,6 +50,11 @@ async def run(pdf_path: Path, pages: list[int], out: Path, candidates_only: bool
             print(f"  {f.id} bbox={f.bbox} caption={f.caption!r}\n      {f.description}\n      {f.image_path}")
         print("--- items:", [f"{i['ref']} {i['kind']} {i['title']}" for i in result.items])
         print("--- exercise page:", result.is_exercise_page, "| uncertain:", result.uncertain)
+        print(
+            "--- attempts:", result.raw.get("attempts"), "| coverage:", result.raw.get("coverage"),
+            "| lost formulas:", result.raw.get("lost_formulas") or [],
+            "| nemotron error:", result.raw.get("nemotron_error") or "-",
+        )
     if not candidates_only:
         print(f"\nLLM calls: {usage.calls}, cost ≈ ${usage.cost_usd:.4f}; work dir: {out}")
 

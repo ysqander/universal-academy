@@ -3,6 +3,7 @@ validated, with function plots pre-sampled. A visual failure never fails the cou
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -10,15 +11,25 @@ from typing import Any
 
 from .. import db, llm
 from ..llm_schemas import VisualizationPlan
-from .context import BuildContext, CourseInfo, FigureInfo, course_figures, figure_line
+from .context import BuildContext, CourseInfo, FigureInfo, figure_line
+from .lessons import offered_figures
 from .plot import PlotError, sample_plot, valid_range
 from .prompts import VIZ_INSTRUCTIONS
+from .textutil import bare_latex
+
+__all__ = ["bare_latex", "ensure_visual", "finalize_plan", "none_visual", "skill_figures", "viz_request"]
 
 log = logging.getLogger("ua.pipeline.visuals")
 
 COLORS = {"primary", "accent", "muted", "danger"}
 CAPS = {"vectors": 12, "points": 20, "segments": 20, "rows": 12, "columns": 6, "steps": 10, "frames": 8}
 FORMAT_FIELDS = {"table": None, "steps": [], "diagram": None, "plot": None, "frames": []}
+FINALIZE_TIMEOUT = 30.0  # seconds for validating + sampling one plan (CPU-bound, runs in a worker thread)
+DUPLICATE_STEP_SHARE = 0.6  # equation steps that mostly repeat a worked example add nothing
+_GEOMETRIC = re.compile(
+    r"\b(plane|arrows?|geometr\w*|parallelogram|diagram|picture|points? in|length of|direction)\b|R\}?\^2|R²",
+    re.IGNORECASE,
+)
 FIELDS_BY_FORMAT = {
     "comparison_table": "table",
     "equation_steps": "steps",
@@ -55,7 +66,8 @@ async def ensure_visual(ctx: BuildContext, skill_id: str) -> bool:
     if skill is None or skill["lesson_status"] != "ready" or not needs_visual(skill):
         return True
     figures = skill_figures(ctx.course, skill)
-    text = viz_request(skill, db.loads(skill["lesson_json"], {}), figures)
+    lesson = db.loads(skill["lesson_json"], {})
+    text = viz_request(skill, lesson, figures)
     error: Exception | None = None
     for attempt in range(2):
         try:
@@ -68,7 +80,10 @@ async def ensure_visual(ctx: BuildContext, skill_id: str) -> bool:
                 label=f"viz {skill['key']}",
                 stream=True,
             )
-            viz, warnings = finalize_plan(plan, figures)
+            # Sampling evaluates LLM-written expressions: off the event loop, with a deadline.
+            viz, warnings = await asyncio.wait_for(
+                asyncio.to_thread(finalize_plan, plan, figures, lesson), timeout=FINALIZE_TIMEOUT
+            )
             for warning in warnings:
                 ctx.tracker.log(f"Visual {skill['key']}: {warning}", level=logging.WARNING)
             db.execute("UPDATE skills SET viz_json = ? WHERE id = ?", (db.dumps(viz), skill_id))
@@ -85,10 +100,8 @@ async def ensure_visual(ctx: BuildContext, skill_id: str) -> bool:
 
 
 def skill_figures(course: CourseInfo, skill: dict[str, Any]) -> list[FigureInfo]:
-    """Figures the graph attached to the skill plus every figure on its source pages."""
-    attached = set(db.loads(skill["figure_ids_json"], []))
-    pages = set(db.loads(skill["source_pages_json"], []))
-    return [f for f in course_figures(course) if f.db_id in attached or f.page in pages]
+    """Figures the graph attached to the skill plus every figure on its source pages (the lesson's figure list)."""
+    return offered_figures(course, skill)
 
 
 def viz_request(skill: dict[str, Any], lesson: dict[str, Any], figures: list[FigureInfo]) -> str:
@@ -113,7 +126,20 @@ def viz_request(skill: dict[str, Any], lesson: dict[str, Any], figures: list[Fig
         lines += ["", "Common mistakes:"] + [f"- {m}" for m in mistakes]
     lines += ["", "Book figures on this skill's pages (book_figure_id must come from this list):"]
     lines += [figure_line(f) for f in figures] if figures else ["(none)"]
+    lines += [
+        "",
+        (
+            "The worked examples above are already shown step by step — the visual must add a different "
+            "representation (or be none)."
+        ),
+    ]
+    if is_geometric(skill):
+        lines.append("This skill has geometric content: use diagram_2d or the book's own figure.")
     return "\n".join(lines)
+
+
+def is_geometric(skill: dict[str, Any]) -> bool:
+    return bool(_GEOMETRIC.search(" ".join(str(skill.get(k) or "") for k in ("title", "objective", "summary"))))
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +147,12 @@ def viz_request(skill: dict[str, Any], lesson: dict[str, Any], figures: list[Fig
 # ---------------------------------------------------------------------------
 
 
-def finalize_plan(plan: VisualizationPlan, figures: list[FigureInfo]) -> tuple[dict[str, Any], list[str]]:
+def finalize_plan(
+    plan: VisualizationPlan, figures: list[FigureInfo], lesson: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], list[str]]:
     """Validate a plan: known figure ids, required content per format, sane ranges, capped element counts, sampled
-    plots. Anything unusable downgrades to format 'none'."""
+    plots, and (given the lesson) equation steps that merely repeat a worked example. Anything unusable downgrades
+    to the book figure the planner picked, else to format 'none'."""
     warnings: list[str] = []
     viz = plan.model_dump()
     viz["book_figure_id"] = _resolve_figure(viz.get("book_figure_id"), figures, warnings)
@@ -139,6 +168,8 @@ def finalize_plan(plan: VisualizationPlan, figures: list[FigureInfo]) -> tuple[d
         viz["steps"] = [s for s in steps if s["latex"]][: CAPS["steps"]]
         if len(viz["steps"]) < 2:
             fmt = _downgrade("equation_steps needs at least 2 steps", warnings)
+        elif lesson and repeats_worked_example(viz["steps"], lesson):
+            fmt = _downgrade("equation_steps only repeat a worked example of the lesson", warnings)
     elif fmt == "diagram_2d":
         viz["diagram"] = _clean_diagram(viz.get("diagram"))
         if viz["diagram"] is None:
@@ -153,6 +184,9 @@ def finalize_plan(plan: VisualizationPlan, figures: list[FigureInfo]) -> tuple[d
             warnings.extend(plot_warnings)
         except PlotError as e:
             fmt = _downgrade(f"function_plot unusable: {e}", warnings)
+    if fmt == "none" and viz["book_figure_id"]:
+        fmt = "book_figure"  # the figure the planner picked to accompany the visual still helps
+        warnings.append("showing the book figure instead")
     viz["format"] = fmt
     keep = FIELDS_BY_FORMAT.get(fmt)
     for field, empty in FORMAT_FIELDS.items():
@@ -163,14 +197,29 @@ def finalize_plan(plan: VisualizationPlan, figures: list[FigureInfo]) -> tuple[d
     return viz, warnings
 
 
-def bare_latex(text: str) -> str:
-    """LaTeX for one display equation without delimiters: '$$x$$', '\\[x\\]' or '$a$ = $b$' → 'x', 'a = b'.
-    An unescaped $ is never valid inside display math, so every one is removed."""
-    text = re.sub(r"(?<!\\)\$", "", text).strip()
-    for left, right in (("\\[", "\\]"), ("\\(", "\\)")):
-        if text.startswith(left) and text.endswith(right):
-            return text[len(left) : -len(right)].strip()
-    return text
+def _math_key(text: str) -> str:
+    """Comparable form of one equation: no delimiters, colour highlights, sizing, spacing or leading '='."""
+    text = bare_latex(text)
+    text = re.sub(r"\\color\{[^}]*\}", "", text)
+    text = re.sub(r"\\(left|right|big|Big|bigl|bigr|Bigl|Bigr|quad|qquad|,|;|!)(?![a-zA-Z])", "", text)
+    text = re.sub(r"\\cdot|\\times", "*", text)
+    text = re.sub(r"[\s{}]", "", text)
+    return text.lstrip("=")
+
+
+def repeats_worked_example(steps: list[dict[str, Any]], lesson: dict[str, Any]) -> bool:
+    """True when most equation steps already appear (as a whole or inside one step) in the lesson's worked examples."""
+    worked = [
+        _math_key(step.get("math", ""))
+        for kp in lesson.get("knowledge_points") or []
+        for step in (kp.get("worked_example") or {}).get("steps") or []
+    ]
+    worked = [w for w in worked if w]
+    if not worked:
+        return False
+    keys = [_math_key(s.get("latex", "")) for s in steps]
+    repeated = sum(1 for k in keys if len(k) >= 4 and any(k in w or (len(w) >= 4 and w in k) for w in worked))
+    return repeated >= 2 and repeated / len(keys) >= DUPLICATE_STEP_SHARE
 
 
 def _downgrade(reason: str, warnings: list[str]) -> str:

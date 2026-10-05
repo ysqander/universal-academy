@@ -75,8 +75,8 @@ def test_axler_outline_tree(axler_pdf: Path) -> None:
     assert (chapter.level, chapter.start_page, chapter.end_page) == (1, 14, 39)
     assert (chapter.label_start, chapter.label_end) == ("1", "26")
     sections = {c.title: c for c in chapter.children}
-    assert list(sections) == ["R^n and C^n", "Definition of Vector Space", "Subspaces"]
-    s1a = sections["R^n and C^n"]
+    assert list(sections) == ["Rⁿ and Cⁿ", "Definition of Vector Space", "Subspaces"]  # bookmark 'R^n and C^n'
+    s1a = sections["Rⁿ and Cⁿ"]
     assert (s1a.level, s1a.start_page, s1a.end_page, s1a.label_start, s1a.label_end) == (2, 15, 24, "2", "11")
     assert (sections["Definition of Vector Space"].start_page, sections["Definition of Vector Space"].end_page) == (25, 30)
     assert (sections["Subspaces"].start_page, sections["Subspaces"].end_page) == (31, 39)
@@ -84,6 +84,13 @@ def test_axler_outline_tree(axler_pdf: Path) -> None:
     digression, exercises = find(s1a.children, "Digression on Fields"), find(s1a.children, "Exercises 1A")
     assert (digression.start_page, digression.end_page) == (23, 23)
     assert (exercises.start_page, exercises.end_page) == (23, 24)
+    assert find(s1a.children, "Fⁿ").start_page == 19
+    # subsections that start mid-page share that page with the previous one (TOC destination y)
+    span = find(meta.outline, "Linear Combinations and Span")
+    assert (span.start_page, span.end_page) == (41, 44)  # index 44 holds 2.11; 'Linear Independence' starts below it
+    assert (find(meta.outline, "Linear Independence").start_page, find(meta.outline, "Linear Independence").end_page) == (44, 49)
+    sums = find(sections["Subspaces"].children, "Sums of Subspaces")
+    assert (sums.start_page, sums.end_page) == (32, 34)
     # ids n0..nN in TOC order, unique; the last top-level node runs to the last page
     ids: list[str] = []
 
@@ -205,10 +212,175 @@ def test_build_outline_level_jumps_and_clamping() -> None:
     labels = ["i", "ii", "1", "2", "3", "4"]
     nodes = pdf.build_outline([(1, "Ch", 2), (3, "Sub", 3), (1, "Ch2", 1)], 6, labels)
     ch, ch2 = nodes
-    assert ch.end_page == 2  # next top-level start (1) is before own start → clamped to start
+    assert (ch.start_page, ch.end_page) == (2, 5)  # out-of-order TOC: ends by page order, not TOC order
     sub = ch.children[0]
-    assert sub.level == 3 and sub.end_page == sub.start_page == 3  # out-of-order TOC: never ends before it starts
-    assert (ch2.start_page, ch2.end_page, ch2.label_start, ch2.label_end) == (1, 5, "ii", "4")
+    assert sub.level == 3 and (sub.start_page, sub.end_page) == (3, 5)
+    assert (ch2.start_page, ch2.end_page, ch2.label_start, ch2.label_end) == (1, 1, "ii", "ii")
+
+
+def ranges(nodes: list[OutlineNode]) -> dict[str, tuple[int, int]]:
+    out: dict[str, tuple[int, int]] = {}
+    for n in nodes:
+        out[n.title] = (n.start_page, n.end_page)
+        out.update(ranges(n.children))
+    return out
+
+
+def test_build_outline_out_of_order_entries() -> None:
+    labels = [str(i + 1) for i in range(20)]
+    assert ranges(pdf.build_outline([(1, "Ch1", 0), (1, "Index", 18), (1, "Ch2", 9)], 20, labels)) == {
+        "Ch1": (0, 8), "Index": (18, 19), "Ch2": (9, 17),
+    }
+    assert ranges(pdf.build_outline([(1, "Ch1", 1), (1, "Ch2", 9), (1, "Cover", 0)], 20, labels)) == {
+        "Ch1": (1, 8), "Ch2": (9, 19), "Cover": (0, 0),
+    }
+    # a child whose bookmark points before its parent stays inside the parent's range
+    tree = ranges(pdf.build_outline([(1, "Ch1", 0), (1, "Ch2", 10), (2, "Typo", 3), (2, "Sec", 12)], 20, labels))
+    assert tree["Ch2"] == (10, 19) and tree["Typo"] == (10, 11) and tree["Sec"] == (12, 19)
+
+
+def test_build_outline_mid_page_starts_share_the_page() -> None:
+    labels = [str(i + 1) for i in range(10)]
+    entries = [(1, "Ch", 0, False), (2, "A", 0, False), (2, "B", 3, True), (2, "C", 6, False), (1, "Ch2", 8, False)]
+    assert ranges(pdf.build_outline(entries, 10, labels)) == {
+        "Ch": (0, 7), "A": (0, 3), "B": (3, 5), "C": (6, 7), "Ch2": (8, 9),
+    }
+    # 3-tuples (detected outlines without positions) keep the plain rule
+    assert ranges(pdf.build_outline([(1, "A", 0), (1, "B", 3)], 10, labels)) == {"A": (0, 2), "B": (3, 9)}
+
+
+def test_synthetic_mid_page_destination(tmp_path: Path) -> None:
+    doc = pymupdf.open()
+    for i in range(4):
+        page = doc.new_page(width=375, height=636)
+        page.insert_text((30, 60), f"Body text at the top of page {i}.", fontsize=9)
+        if i == 1:
+            page.insert_text((30, 330), "Second Section", fontsize=12)
+    doc.set_toc([
+        [1, "First Section", 1],
+        [1, "Second Section", 2, {"kind": pymupdf.LINK_GOTO, "page": 1, "to": pymupdf.Point(30, 318)}],
+        [1, "Third", 4],
+    ])
+    doc.save(tmp_path / "mid.pdf")
+    doc.close()
+    meta = pdf.read_book_meta(tmp_path / "mid.pdf")
+    assert ranges(meta.outline) == {"First Section": (0, 1), "Second Section": (1, 2), "Third": (3, 3)}
+    with pdf.open_pdf(tmp_path / "mid.pdf") as doc:  # without a destination the title is searched for
+        assert pdf.starts_mid_page(doc[1], None, "Second Section")
+        assert not pdf.starts_mid_page(doc[0], None, "Body text at the top")
+        assert pdf.starts_mid_page(doc[0], None, "Nowhere to be found")  # unknown: include the shared page
+
+
+def test_prettify_title() -> None:
+    assert pdf.prettify_title("R^n and C^n") == "Rⁿ and Cⁿ"
+    assert pdf.prettify_title("F^\\infty") == pdf.prettify_title("F^{\\infty}") == "F^∞"
+    assert pdf.prettify_title("x^2 and y^{3}") == "x² and y³"
+    assert pdf.prettify_title("R^{m,n} and F^S") == "R^{m,n} and F^S"  # multi-character / no superscript form
+    assert pdf.prettify_title("Cost $x^2$") == "Cost $x^2$"
+    nodes = pdf.build_outline([(1, "F^n", 0)], 1, ["1"])
+    assert nodes[0].title == "Fⁿ"
+
+
+@pytest.mark.parametrize(
+    ("line", "number"),
+    [("- 5 -", 5), ("5 | Chapter 1", 5), ("Title · 5", 5), ("Page 5 of 300", 5), ("[12]", 12), ("Chapter", None)],
+)
+def test_page_number_formats(line: str, number: int | None) -> None:
+    assert pdf._page_number(line) == number
+
+
+def test_resolve_printed_page_never_guesses_without_offset() -> None:
+    plain = [str(i + 1) for i in range(30)]
+    assert pdf.resolve_printed_page("1", plain, None, 30) is None
+
+
+def test_anchored_offset_from_headings(tmp_path: Path) -> None:
+    doc = pymupdf.open()
+    titles = ["Getting Started", "Vectors and Matrices", "Linear Maps"]
+    page = doc.new_page(width=375, height=636)
+    for k, t in enumerate(titles):  # a table of contents page
+        page.insert_text((30, 60 + 20 * k), f"{t} .......... {1 + 4 * k}", fontsize=9)
+    for i in range(1, 16):  # printed page n at PDF index n + 2 (2 pages of front matter after the TOC)
+        page = doc.new_page(width=375, height=636)
+        printed = i - 2
+        if printed >= 1 and (printed - 1) % 4 == 0 and (printed - 1) // 4 < len(titles):
+            page.insert_text((30, 60), titles[(printed - 1) // 4], fontsize=14)
+        page.insert_text((30, 200), "Some running text on the page.", fontsize=9)
+        page.insert_text((180, 620), f"Page {printed} of 13", fontsize=9) if printed >= 1 else None
+    doc.save(tmp_path / "anchor.pdf")
+    doc.close()
+    titled = [(t, str(1 + 4 * k)) for k, t in enumerate(titles)]
+    assert pdf._anchored_offset(tmp_path / "anchor.pdf", titled) == 2
+    with pdf.open_pdf(tmp_path / "anchor.pdf") as d:
+        assert pdf.detect_page_offset(d) == 2  # "Page N of M" footers vote on N
+
+
+# ---------------------------------------------------------------------------
+# Figure candidates: charts, glyph labels, equations beside figures
+# ---------------------------------------------------------------------------
+
+
+def make_bar_chart(path: Path, square: bool = False) -> Path:
+    doc = pymupdf.open()
+    page = doc.new_page(width=375, height=636)
+    page.insert_text((30, 60), "A paragraph of body text above the chart that explains the data.", fontsize=9)
+    if square:  # a commutative square drawn with axis-aligned lines, corner labels outside
+        shape = page.new_shape()
+        for a, b in [((100, 250), (250, 250)), ((250, 250), (250, 380)), ((100, 380), (250, 380)), ((100, 250), (100, 380))]:
+            shape.draw_line(a, b)
+        shape.finish(color=(0, 0, 0), width=0.8)
+        shape.commit()
+        for x, y, t in [(88, 248, "V"), (254, 248, "W"), (88, 392, "X"), (254, 392, "Y")]:
+            page.insert_text((x, y), t, fontsize=10)
+    else:
+        shape = page.new_shape()
+        shape.draw_line((60, 400), (320, 400))
+        shape.draw_line((60, 400), (60, 200))
+        shape.finish(color=(0, 0, 0), width=0.8)
+        for k, h in enumerate([60, 120, 90, 170, 40]):
+            shape.draw_rect(pymupdf.Rect(80 + 45 * k, 400 - h, 110 + 45 * k, 400))
+        shape.finish(color=None, fill=(0.3, 0.5, 0.8))
+        shape.commit()
+        for k in range(5):
+            page.insert_text((90 + 45 * k, 412), str(k + 1), fontsize=8)
+    page.insert_text((30, 470), "Text after the figure.", fontsize=9)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def test_bar_chart_is_a_candidate(tmp_path: Path) -> None:
+    path = make_bar_chart(tmp_path / "bars.pdf")
+    scan = pdf.figure_candidates(path, 0)
+    assert len(scan.candidates) == 1 and scan.candidates[0].sources == ["vector"]
+    x0, y0, x1, y1 = scan.candidates[0].bbox
+    assert x0 <= 61 and y0 <= 201 and x1 >= 319 and y1 >= 399  # axes and bars
+    w, h = pdf.page_size(path, 0)
+    picture = Block("Picture", [50 / w, 190 / h, 330 / w, 420 / h], "")
+    scan = pdf.figure_candidates(path, 0, [picture])
+    assert len(scan.candidates) == 1 and scan.candidates[0].sources == ["vector", "nemotron"]
+    assert not any(reason == "nemotron-in-box" for _, reason in scan.rejected)
+
+
+def test_rectilinear_diagram_is_a_candidate(tmp_path: Path) -> None:
+    scan = pdf.figure_candidates(make_bar_chart(tmp_path / "square.pdf", square=True), 0)
+    assert len(scan.candidates) == 1
+
+
+def test_glyph_tick_labels_join_the_figure(axler_pdf: Path) -> None:
+    """Page 302 (printed 289): tick labels 0.3/1.3/2.3 and 0.5/1.5 are drawn as glyph outlines."""
+    m1 = pdf.figure_candidates(axler_pdf, 302).candidates[0]
+    assert m1.bbox[0] < 41 and m1.bbox[3] > 568
+
+
+def test_equation_beside_figure_is_not_a_label(axler_pdf: Path, tmp_path: Path) -> None:
+    """Page 208 (printed 195): the identity a² + b² = ½c² + 2d² above the triangle stays text."""
+    m1 = pdf.figure_candidates(axler_pdf, 208).candidates[0]
+    assert m1.bbox[1] >= 375
+    from app.ingest import parse
+
+    page = asyncio.run(parse.parse_page(axler_pdf, 208, "195", tmp_path))  # fake mode: text layer
+    assert "+ b" in page.markdown and "2d" in page.markdown
 
 
 def test_page_offset_detection_and_printed_page_resolution(tmp_path: Path) -> None:

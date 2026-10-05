@@ -8,6 +8,7 @@ import { Spinner } from "../../components/Spinner";
 import { StatusChip } from "../../components/StatusChip";
 import { useToast } from "../../context/toast";
 import { formatDateTime, kindLabel, percent, relativeTime } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import type { CourseGraph, FoundationNode, SkillNode } from "../../types";
 import type { GraphSelection } from "./selection";
 import "./SkillDrawer.css";
@@ -49,7 +50,7 @@ export function SkillDrawer(props: SkillDrawerProps) {
           </>
         ) : null
       }
-      title={skill ? <Markdown inline>{skill.title}</Markdown> : foundation ? <Markdown inline>{foundation.title}</Markdown> : ""}
+      title={skill ? <Markdown inline>{prettyTitle(skill.title)}</Markdown> : foundation ? <Markdown inline>{prettyTitle(foundation.title)}</Markdown> : ""}
     >
       {skill && <SkillDetails key={skill.id} skill={skill} {...props} />}
       {foundation && <FoundationDetails key={foundation.key} foundation={foundation} {...props} />}
@@ -69,7 +70,7 @@ function SkillRefList({ title, skills, onSelect }: { title: string; skills: Skil
               <span className="ref-chip__dot" aria-hidden="true" />
               <span className="key">{s.key}</span>
               <span className="ref-chip__title">
-                <Markdown inline>{s.title}</Markdown>
+                <Markdown inline>{prettyTitle(s.title)}</Markdown>
               </span>
             </button>
           </li>
@@ -153,12 +154,14 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
       )}
       {skill.lesson_status === "failed" && (
         <p className="skill-details__note skill-details__note--danger">
-          <Icon name="warning" size={14} /> This lesson couldn't be generated. Resuming the build retries it.
+          <Icon name="warning" size={14} /> This lesson couldn't be generated. Use “Retry failed lessons” on the course page to try
+          again.
         </p>
       )}
       {skill.status === "locked" && missing.length > 0 && ready && (
         <p className="skill-details__note">
-          <Icon name="lock" size={14} /> Usually unlocked after {missing.map((m) => m.key).join(", ")}. You can still start it.
+          <Icon name="lock" size={14} /> Usually unlocked after {sort(missing).map((m) => m.key).join(", ")}. You can still start
+          it — it will be harder without {missing.length === 1 ? "that skill" : "those skills"}.
         </p>
       )}
 
@@ -200,7 +203,7 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
                 <button type="button" className="ref-chip ref-chip--foundation" onClick={() => onSelect({ kind: "foundation", key: f.key })}>
                   <span className="key">{f.key}</span>
                   <span className="ref-chip__title">
-                    <Markdown inline>{f.title}</Markdown>
+                    <Markdown inline>{prettyTitle(f.title)}</Markdown>
                   </span>
                 </button>
               </li>
@@ -234,12 +237,14 @@ function FoundationDetails({ courseId, foundation, graph, onSelect, onFoundation
   const [showAnswer, setShowAnswer] = useState(false);
   const [saving, setSaving] = useState<boolean | null>(null);
   const users = graph.skills.filter((s) => s.foundations.includes(foundation.key)).sort((a, b) => a.order_index - b.order_index);
+  const refresher = foundation.known === false;
 
   const answer = async (known: boolean) => {
     setSaving(known);
     try {
       onFoundationChange(await setFoundationKnown(courseId, foundation.key, known));
-      toast.show(known ? "Noted — you know this." : "Noted. Review it before the skills that rely on it.", "success");
+      if (known) toast.show("Noted — you know this.", "success");
+      else setShowAnswer(true);
     } catch (err) {
       toast.error(err);
     } finally {
@@ -252,27 +257,56 @@ function FoundationDetails({ courseId, foundation, graph, onSelect, onFoundation
       <p className="skill-details__lead">
         Knowledge from outside this chapter that the skills below rely on. It isn't taught here — check yourself quickly.
       </p>
-      {foundation.description && <Markdown>{foundation.description}</Markdown>}
 
-      <section className="foundation-check">
-        <h3 className="drawer-section__title">Quick check</h3>
-        <Markdown>{foundation.check_question}</Markdown>
-        {showAnswer ? (
-          <div className="foundation-check__answer reveal">
-            <span className="foundation-check__label">Answer</span>
-            <Markdown>{foundation.check_answer}</Markdown>
+      {refresher ? (
+        <section className="foundation-refresher callout callout--info reveal" aria-labelledby={`refresher-${foundation.key}`}>
+          <Icon name="review" size={18} />
+          <div className="foundation-refresher__body">
+            <h3 id={`refresher-${foundation.key}`} className="drawer-section__title">
+              Refresher
+            </h3>
+            {foundation.description && <Markdown>{foundation.description}</Markdown>}
+            {foundation.check_question && (
+              <div className="foundation-refresher__example">
+                <span className="foundation-check__label">Worked check</span>
+                <Markdown>{foundation.check_question}</Markdown>
+                {foundation.check_answer && (
+                  <div className="foundation-check__answer">
+                    <span className="foundation-check__label">Answer</span>
+                    <Markdown>{foundation.check_answer}</Markdown>
+                  </div>
+                )}
+              </div>
+            )}
+            <p className="muted foundation-refresher__note">
+              Marked for a refresher. Read this before {users.length === 1 ? "the skill" : "the skills"} below; if it still feels
+              shaky, your textbook's earlier chapters or appendix cover it in full.
+            </p>
           </div>
-        ) : (
-          <button type="button" className="btn btn--sm" onClick={() => setShowAnswer(true)}>
-            <Icon name="eye" size={14} /> Show answer
-          </button>
-        )}
-      </section>
+        </section>
+      ) : (
+        <>
+          {foundation.description && <Markdown>{foundation.description}</Markdown>}
+          <section className="foundation-check">
+            <h3 className="drawer-section__title">Quick check</h3>
+            <Markdown>{foundation.check_question}</Markdown>
+            {showAnswer ? (
+              <div className="foundation-check__answer reveal">
+                <span className="foundation-check__label">Answer</span>
+                <Markdown>{foundation.check_answer}</Markdown>
+              </div>
+            ) : (
+              <button type="button" className="btn btn--sm" onClick={() => setShowAnswer(true)}>
+                <Icon name="eye" size={14} /> Show answer
+              </button>
+            )}
+          </section>
+        </>
+      )}
 
-      {foundation.known !== null && (
+      {foundation.known === true && (
         <p className="skill-details__note">
-          <Icon name={foundation.known ? "check" : "review"} size={14} />
-          {foundation.known ? "You marked this as known." : "You asked for a refresher on this."}
+          <Icon name="check" size={14} /> You marked this as known.
         </p>
       )}
 

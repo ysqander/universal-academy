@@ -24,6 +24,7 @@ SAMPLES = 200
 MAX_PARAM_VALUES = 21
 MAX_EXPR_LENGTH = 200
 MAX_ABS_Y = 1e6
+MAX_CONST_EXPONENT = 100  # a constant power with a larger exponent (9**9**9) would be evaluated exactly by SymPy
 
 FUNCTIONS: dict[str, Any] = {
     "sin": sp.sin,
@@ -59,6 +60,7 @@ def compile_expression(expr: str, param: str | None = None) -> Callable[[float, 
     local = dict(FUNCTIONS, x=x)
     if param:
         local[param] = p
+    _guard_constant_powers(expr, local)
     try:
         parsed = parse_expr(expr, local_dict=local, global_dict=dict(_GLOBALS), transformations=_TRANSFORMS)
     except Exception as e:  # noqa: BLE001 — SymPy raises many exception types for malformed input
@@ -68,7 +70,55 @@ def compile_expression(expr: str, param: str | None = None) -> Callable[[float, 
     extra = parsed.free_symbols - {x, p}
     if extra:
         raise PlotError(f"unknown symbols {sorted(map(str, extra))}")
-    return sp.lambdify((x, p), parsed, modules="math")
+    try:
+        return sp.lambdify((x, p), parsed, modules="math")
+    except Exception as e:  # noqa: BLE001 — a printer failure drops only this function
+        raise PlotError(f"cannot compile {expr!r}: {e}") from e
+
+
+def _guard_constant_powers(expr: str, local: dict[str, Any]) -> None:
+    """Parse without evaluation and reject constant powers whose exact value would be astronomically large
+    (x*9**9**9 makes SymPy compute a number with ~370 million digits and blocks for minutes)."""
+    globals_ = dict(_GLOBALS, Add=sp.Add, Mul=sp.Mul, Pow=sp.Pow)
+    try:
+        tree = parse_expr(expr, local_dict=local, global_dict=globals_, transformations=_TRANSFORMS, evaluate=False)
+    except Exception as e:  # noqa: BLE001
+        raise PlotError(f"cannot parse {expr!r}: {e}") from e
+    if not isinstance(tree, sp.Basic):
+        return
+    for node in sp.preorder_traversal(tree):
+        if isinstance(node, sp.Pow) and not node.free_symbols:
+            _estimate(node)
+
+
+def _estimate(node: sp.Basic) -> float:
+    """Float estimate of a constant subexpression; PlotError for a huge exponent or an overflow. nan when unknown
+    (function calls), which leaves the node to SymPy's own (symbolic) handling."""
+    try:
+        if node.is_Number:
+            return float(node)
+        if node is sp.pi:
+            return math.pi
+        if node is sp.E:
+            return math.e
+        if isinstance(node, sp.Add):
+            return math.fsum(_estimate(a) for a in node.args)
+        if isinstance(node, sp.Mul):
+            return math.prod(_estimate(a) for a in node.args)
+        if isinstance(node, sp.Pow):
+            base, exponent = _estimate(node.args[0]), _estimate(node.args[1])
+            if math.isfinite(exponent) and abs(exponent) > MAX_CONST_EXPONENT:
+                raise PlotError(f"constant power with exponent {exponent:g} is too large")
+            try:
+                value = math.pow(base, exponent)
+            except ValueError:  # negative base, fractional exponent
+                return math.nan
+            if math.isinf(value):
+                raise PlotError("constant power overflows")
+            return value
+    except OverflowError as e:
+        raise PlotError("constant overflows") from e
+    return math.nan
 
 
 def valid_param_name(name: str) -> bool:
@@ -218,7 +268,7 @@ def sample_plot(plot: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, An
         try:
             compiled.append((fn.get("label") or fn["expr"], compile_expression(fn["expr"], name)))
             kept.append(fn)
-        except PlotError as e:
+        except Exception as e:  # noqa: BLE001 — PlotError, or anything unexpected: drop only this function
             warnings.append(f"function {fn.get('expr')!r} dropped: {e}")
     if not compiled:
         raise PlotError("no plottable function")

@@ -6,6 +6,9 @@
 The book and course are reused when the data dir already has them (the build resumes and skips finished work), so
 prompt iterations can re-run single stages: --reset deletes that stage's results (optionally only for --skills)
 before building. Costs are printed from the job log.
+
+To refresh a course somebody is already studying (keeps the old lesson if regeneration fails, keeps progress and
+attempt history), use scripts/regenerate.py instead.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ if args.data_dir:
 from app import db  # noqa: E402  (UA_DATA_DIR must be set before the app is imported)
 from app.ingest.pdf import read_book_meta  # noqa: E402
 from app.pipeline import jobs  # noqa: E402
+from app.pipeline.lessons import retire_questions  # noqa: E402
 from app.schemas import CourseCreate, OutlineNode  # noqa: E402
 from app.views import lesson_view  # noqa: E402
 
@@ -123,17 +127,19 @@ def reset_stage(course_id: str, stage: str, keys: list[str]) -> None:
             for table in ("edges", "skills", "foundations"):
                 conn.execute(f"DELETE FROM {table} WHERE course_id = ?", (course_id,))
         elif ids and stage == "lessons":
-            conn.execute(f"DELETE FROM questions WHERE skill_id IN ({marks})", ids)
+            for skill_id in ids:  # answered questions are retired, not deleted (attempts reference them)
+                retire_questions(conn, skill_id)
             conn.execute(
                 f"UPDATE skills SET lesson_status = 'pending', lesson_json = NULL, viz_json = NULL WHERE id IN ({marks})",
                 ids,
             )
         elif ids and stage == "visuals":
             conn.execute(f"UPDATE skills SET viz_json = NULL WHERE id IN ({marks})", ids)
-        elif ids and stage == "verify":
+        elif ids and stage == "verify":  # learner flags and retired questions are left alone
             conn.execute(
                 f"UPDATE questions SET verify_json = '{{}}', flagged = 0, flag_reason = '' "
-                f"WHERE skill_id IN ({marks}) AND kind != 'free_response'",
+                f"WHERE skill_id IN ({marks}) AND kind != 'free_response' "
+                "AND NOT (flagged = 1 AND flag_reason NOT LIKE 'verification:%')",
                 ids,
             )
     print(f"Reset {stage} for {'all skills' if not keys else ', '.join(keys)}")

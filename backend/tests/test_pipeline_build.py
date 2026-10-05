@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -10,10 +11,11 @@ import networkx as nx
 import pymupdf
 import pytest
 
-from app import db, fake_llm
+from app import db, fake_llm, llm
 from app.ingest.pdf import read_book_meta
-from app.llm_schemas import IndependentAnswer
-from app.pipeline import jobs, topup
+from app.llm_schemas import IndependentAnswer, LessonDraft
+from app.pipeline import jobs, topup, verify
+from app.pipeline.questions import normalized_prompt
 from app.schemas import CourseCreate, JobStatus, Lesson
 from app.views import lesson_view
 
@@ -306,9 +308,13 @@ def test_disagreements_are_flagged_but_every_kp_stays_servable(tmp_path, monkeyp
 def test_interrupted_jobs_are_marked_and_resumable(tmp_path):
     cid = tiny_course(tmp_path)
     db.execute("UPDATE jobs SET state = 'running' WHERE course_id = ?", (cid,))
+    tracker = jobs.JobTracker.load(cid)
+    tracker.update("render", status="running")
     assert jobs.mark_interrupted_jobs() == 1
     job = jobs.get_job(cid)
     assert job.state == "interrupted" and "Interrupted" in job.log[-1]
+    assert "running" not in {s.status for s in job.stages}  # never left spinning
+    assert db.query_one("SELECT status FROM courses WHERE id = ?", (cid,))["status"] == "failed"  # UI stops polling
 
     async def resume():
         status = jobs.resume_build(cid)
@@ -392,3 +398,313 @@ def test_request_top_up_deduplicates_in_flight_requests(tmp_path, llm_calls):
     asyncio.run(main())
     assert llm_calls["TopUpDraft"] == 1
     assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kp_index = 1", (skill,))["n"] == 8
+
+
+# ---------------------------------------------------------------------------
+# Regression tests (QA pass)
+# ---------------------------------------------------------------------------
+
+
+def _skill(cid: str, key: str) -> str:
+    return db.query_one("SELECT id FROM skills WHERE course_id = ? AND key = ?", (cid, key))["id"]
+
+
+def test_cancelled_build_leaves_no_running_stage_and_old_rows_are_repaired(tmp_path, monkeypatch):
+    cid = tiny_course(tmp_path)
+    started = asyncio.Event()
+
+    async def hanging_graph(ctx):
+        ctx.tracker.update("graph", status="running")
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(jobs, "run_graph_stage", hanging_graph)
+
+    async def main():
+        jobs.start_build(cid)
+        await started.wait()
+        task = jobs._tasks[cid]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    job = jobs.get_job(cid)
+    assert job.state == "interrupted"
+    assert {s.key: s.status for s in job.stages}["graph"] == "failed"
+    assert "running" not in {s.status for s in job.stages}
+    assert db.query_one("SELECT status FROM courses WHERE id = ?", (cid,))["status"] == "failed"
+
+    # a row written by an older version (interrupted, but a stage still 'running', course 'building') is repaired
+    stages = [s.model_dump() | ({"status": "running"} if s.key == "lessons" else {}) for s in job.stages]
+    db.execute("UPDATE jobs SET stages_json = ? WHERE course_id = ?", (db.dumps(stages), cid))
+    db.execute("UPDATE courses SET status = 'building' WHERE id = ?", (cid,))
+    assert jobs.mark_interrupted_jobs() == 0
+    assert "running" not in {s.status for s in jobs.get_job(cid).stages}
+    assert db.query_one("SELECT status FROM courses WHERE id = ?", (cid,))["status"] == "failed"
+
+    monkeypatch.undo()
+    assert_complete(cid, build(cid))  # resumable: back to building, then ready
+
+
+def test_shutdown_cancels_builds_and_marks_them_interrupted(tmp_path, monkeypatch):
+    cid = tiny_course(tmp_path)
+    started = asyncio.Event()
+
+    async def hanging_render(ctx):
+        ctx.tracker.update("render", status="running")
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(jobs, "run_render_stage", hanging_render)
+
+    async def main():
+        jobs.start_build(cid)
+        await started.wait()
+        await jobs.shutdown(timeout=2)
+        assert not jobs.is_building(cid)
+
+    asyncio.run(main())
+    job = jobs.get_job(cid)
+    assert job.state == "interrupted" and "running" not in {s.status for s in job.stages}
+
+
+def test_verification_never_unflags_a_learner_flag(tmp_path):
+    cid = tiny_course(tmp_path)
+    build(cid)
+    sid = _skill(cid, "S1")
+    q = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND kind = 'multiple_choice'", (sid,))
+    # reported by the learner before verification ran (e.g. while the build was still verifying)
+    db.execute(
+        "UPDATE questions SET verify_json = '{}', flagged = 1, flag_reason = 'Learner: answer key is wrong' WHERE id = ?",
+        (q["id"],),
+    )
+    assert_complete(cid, build(cid))  # resume
+    row = db.query_one("SELECT * FROM questions WHERE id = ?", (q["id"],))
+    assert row["flagged"] == 1 and row["flag_reason"] == "Learner: answer key is wrong"
+
+    # flagged by the learner (empty reason) while the verification call was in flight
+    other = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND kind = 'numeric'", (sid,))
+    db.execute("UPDATE questions SET verify_json = '{}' WHERE id = ?", (other["id"],))
+    snapshot = db.query_one("SELECT * FROM questions WHERE id = ?", (other["id"],))
+    db.execute("UPDATE questions SET flagged = 1, flag_reason = '' WHERE id = ?", (other["id"],))
+    verdict = asyncio.run(verify.verify_question(snapshot))
+    assert verdict is not None and not verdict.flagged
+    row = db.query_one("SELECT * FROM questions WHERE id = ?", (other["id"],))
+    assert row["flagged"] == 1 and row["flag_reason"] == "" and db.loads(row["verify_json"])["status"] == "agree"
+
+    # keep_kps_servable never restores it either, even when the KP runs short
+    db.execute(
+        "UPDATE questions SET flagged = 1, flag_reason = 'Learner: typo' WHERE skill_id = ? AND kp_index = 0", (sid,)
+    )
+    verify.keep_kps_servable(sid)
+    assert all(r["flagged"] for r in db.query("SELECT flagged FROM questions WHERE skill_id = ? AND kp_index = 0", (sid,)))
+
+
+def test_verifier_accepts_an_unsimplified_but_equal_answer(tmp_path):
+    row = {
+        "kind": "expression",
+        "answer": "-7+22*i",
+        "correct_choice": None,
+        "tolerance": None,
+        "choices_json": "[]",
+    }
+    independent = IndependentAnswer(choice=None, answer="(2+3*i)*(4+5*i)", confidence=0.9, problems="")
+    assert not verify.judge(row, independent).flagged
+
+
+def test_top_up_questions_are_held_until_verified(tmp_path, monkeypatch):
+    cid = tiny_course(tmp_path)
+    build(cid)
+    sid = _skill(cid, "S1")
+    before = {r["id"] for r in db.query("SELECT id FROM questions WHERE skill_id = ?", (sid,))}
+    marks = ",".join("?" * len(before))
+    seen_during_verification: list[dict] = []
+    usage_during_call: list[llm.Usage | None] = []
+    original = fake_llm.respond
+
+    def gated(**kwargs):
+        usage_during_call.append(llm.current_usage.get())
+        if kwargs["schema"] is IndependentAnswer and not seen_during_verification:  # the first verifier call
+            seen_during_verification.extend(
+                db.query(f"SELECT * FROM questions WHERE skill_id = ? AND id NOT IN ({marks})", (sid, *before))
+            )
+        return original(**kwargs)
+
+    monkeypatch.setattr(fake_llm, "respond", gated)
+    assert asyncio.run(topup.top_up_questions(sid, kp_index=0, n=3)) == 3
+    assert seen_during_verification and all(
+        r["flagged"] == 1 and r["flag_reason"] == "verification: pending" for r in seen_during_verification
+    )
+    assert all(isinstance(u, llm.Usage) for u in usage_during_call)  # top-up spend is attributed
+    new = db.query(f"SELECT * FROM questions WHERE skill_id = ? AND id NOT IN ({marks})", (sid, *before))
+    assert len(new) == 3 and not any(r["flagged"] for r in new)
+
+
+def test_top_up_releases_questions_when_verification_fails(tmp_path, monkeypatch):
+    cid = tiny_course(tmp_path)
+    build(cid)
+    sid = _skill(cid, "S1")
+    fail_for(monkeypatch, "IndependentAnswer")
+    assert asyncio.run(topup.top_up_questions(sid, kp_index=1, n=2)) == 2
+    new = db.query("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 1 AND verify_json = '{}'", (sid,))
+    assert len(new) == 2 and not any(r["flagged"] for r in new)  # servable unverified, like the build
+
+
+def test_concurrent_top_ups_do_not_duplicate_keys_or_questions(tmp_path):
+    cid = tiny_course(tmp_path)
+    build(cid)
+    sid = _skill(cid, "S1")
+
+    async def twice():
+        return await asyncio.gather(topup.top_up_questions(sid, 0), topup.top_up_questions(sid, 0))
+
+    assert asyncio.run(twice()) == [3, 3]
+    rows = db.query("SELECT key, prompt FROM questions WHERE skill_id = ?", (sid,))
+    keys = [r["key"] for r in rows]
+    assert len(keys) == len(set(keys))
+    kp0 = db.query("SELECT prompt FROM questions WHERE skill_id = ? AND kp_index = 0", (sid,))
+    prompts = [normalized_prompt(r["prompt"]) for r in kp0]
+    assert len(prompts) == len(set(prompts)) == 4 + 6
+
+
+def test_proof_skills_serve_a_free_response_by_the_second_question(tmp_path):
+    cid = tiny_course(tmp_path)
+    build(cid)
+    for key in ("S2", "S6"):  # the fake graph's proof skills
+        rows = db.query("SELECT kp_index, kind FROM questions WHERE skill_id = ? ORDER BY rowid", (_skill(cid, key),))
+        for kp in {r["kp_index"] for r in rows}:
+            kinds = [r["kind"] for r in rows if r["kp_index"] == kp]
+            assert "free_response" in kinds[:2], (key, kp, kinds)
+
+
+def test_proof_lesson_without_a_free_response_is_retried_with_feedback(tmp_path, monkeypatch):
+    cid = tiny_course(tmp_path)
+    original = fake_llm.respond
+    texts: list[str] = []
+
+    def no_proof_first(**kwargs):
+        draft = original(**kwargs)
+        if kwargs["schema"] is LessonDraft and "skill S2:" in kwargs["text"]:
+            texts.append(kwargs["text"])
+            if len(texts) == 1:
+                kps = [kp.model_copy(update={"questions": [q for q in kp.questions if q.kind != "free_response"]}) for kp in draft.knowledge_points]
+                return draft.model_copy(update={"knowledge_points": kps})
+        return draft
+
+    monkeypatch.setattr(fake_llm, "respond", no_proof_first)
+    assert_complete(cid, build(cid))
+    assert len(texts) == 2 and "rejected" in texts[1] and "free-response" in texts[1]
+
+
+def test_proof_lesson_is_kept_with_a_warning_when_the_retry_also_lacks_a_proof(tmp_path, monkeypatch):
+    cid = tiny_course(tmp_path)
+    original = fake_llm.respond
+
+    def never_proof(**kwargs):
+        draft = original(**kwargs)
+        if kwargs["schema"] is LessonDraft and "skill S2:" in kwargs["text"]:
+            kps = [kp.model_copy(update={"questions": [q for q in kp.questions if q.kind != "free_response"]}) for kp in draft.knowledge_points]
+            return draft.model_copy(update={"knowledge_points": kps})
+        return draft
+
+    monkeypatch.setattr(fake_llm, "respond", never_proof)
+    job = build(cid)
+    assert_complete(cid, job)
+    assert any("Lesson S2" in line and "no free-response proof" in line for line in job.log)
+
+
+def test_lessons_keep_item_refs_only_and_show_the_figures_they_reference(tmp_path):
+    cid = tiny_course(tmp_path)
+    build(cid)
+    for skill in db.query("SELECT * FROM skills WHERE course_id = ?", (cid,)):
+        lesson = lesson_view(skill["id"])
+        assert lesson.source_refs == ["1.1", "1.3", "1.13"]
+        placed = set(re.findall(r"\[\[figure:([^\]]+)\]\]", lesson.idea))
+        assert placed <= {f.id for f in lesson.figures}  # every placed figure is shown, under the same (local) id
+        assert all(not f.id.startswith(cid) for f in lesson.figures)
+        if lesson.visualization and lesson.visualization.figure:
+            assert not lesson.visualization.figure.id.startswith(cid)
+
+
+def test_regenerating_a_lesson_retires_answered_questions(tmp_path):
+    from app.pipeline.lessons import persist_lesson, validate_lesson
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    sid = _skill(cid, "S1")
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, created_at) VALUES (?, ?, ?, 'lesson', 'completed', ?)",
+        (task_id, cid, sid, db.now_iso()),
+    )
+    answered = db.query_one("SELECT id, key FROM questions WHERE skill_id = ? ORDER BY rowid", (sid,))
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, created_at) VALUES (?, ?, ?, ?, 1, 'correct', ?)",
+        (db.new_id(), task_id, answered["id"], sid, db.now_iso()),
+    )
+    draft = fake_llm.respond(schema=LessonDraft, role="lesson", instructions="", text="skill S1: x")
+    lesson, pools, _ = validate_lesson(draft)
+    persist_lesson(sid, lesson, pools)  # would violate the attempts foreign key if the row were deleted
+    old = db.query_one("SELECT * FROM questions WHERE id = ?", (answered["id"],))
+    assert old["flagged"] == 1 and old["flag_reason"].startswith("retired") and old["key"] == f"old-{answered['key']}"
+    live = db.query("SELECT key FROM questions WHERE skill_id = ? AND flagged = 0", (sid,))
+    assert len(live) == sum(len(p) for p in pools)
+
+
+def test_regenerate_in_place_keeps_learner_history(tmp_path, llm_calls):
+    from app.pipeline.regenerate import regenerate
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    s1, s3 = _skill(cid, "S1"), _skill(cid, "S3")
+    answered = db.query_one("SELECT * FROM questions WHERE skill_id = ? ORDER BY rowid", (s1,))
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) "
+        "VALUES (?, ?, ?, 'lesson', 'active', '{}', ?)",
+        (task_id, cid, s1, db.now_iso()),
+    )
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, created_at) VALUES (?, ?, ?, ?, 1, 'correct', ?)",
+        (db.new_id(), task_id, answered["id"], s1, db.now_iso()),
+    )
+    reported = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND kind = 'numeric'", (s3,))
+    db.execute("UPDATE questions SET flagged = 1, flag_reason = 'Learner: unclear' WHERE id = ?", (reported["id"],))
+    llm_calls.clear()
+
+    report = asyncio.run(regenerate(cid, ["S1"]))
+    assert report.lessons_regenerated == ["S1"] and report.abandoned_tasks == 1
+    assert llm_calls["LessonDraft"] == 1 and llm_calls["VisualizationPlan"] == 1
+    assert db.query_one("SELECT status FROM tasks WHERE id = ?", (task_id,))["status"] != "active"
+    old = db.query_one("SELECT * FROM questions WHERE id = ?", (answered["id"],))
+    assert old["flagged"] == 1 and old["key"].startswith("old-")
+    assert jobs.get_job(cid).state == "done"
+
+    # verification only: learner flags survive, everything else is re-checked
+    llm_calls.clear()
+    report = asyncio.run(regenerate(cid, ["S3"], lessons=False, visuals=False))
+    machine = db.query_one(
+        "SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kind != 'free_response' AND flagged = 0", (s3,)
+    )["n"]
+    assert llm_calls["IndependentAnswer"] == machine and llm_calls["LessonDraft"] == 0
+    row = db.query_one("SELECT * FROM questions WHERE id = ?", (reported["id"],))
+    assert row["flagged"] == 1 and row["flag_reason"] == "Learner: unclear"
+
+    # a lesson whose regeneration fails is kept as it was
+    before = db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (s3,))["lesson_json"]
+    original = fake_llm.respond
+
+    def failing(**kwargs):
+        if kwargs["schema"] is LessonDraft:
+            raise RuntimeError("simulated")
+        return original(**kwargs)
+
+    fake_llm.respond = failing
+    try:
+        report = asyncio.run(regenerate(cid, ["S3"]))
+    finally:
+        fake_llm.respond = original
+    assert report.lessons_kept == ["S3"]
+    row = db.query_one("SELECT lesson_status, lesson_json FROM skills WHERE id = ?", (s3,))
+    assert row["lesson_status"] == "ready" and row["lesson_json"] == before

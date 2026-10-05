@@ -162,3 +162,76 @@ def test_equation_latex_loses_its_delimiters(raw, bare):
         plan(format="equation_steps", steps=[{"latex": raw, "note": ""}, {"latex": "$$y$$", "note": ""}]), []
     )
     assert [s["latex"] for s in viz["steps"]] == [bare, "y"]
+
+
+# ---------------------------------------------------------------------------
+# Regression tests (QA pass)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("expr", ["x*9**9**9", "x + 7**7**7", "x + 10**5000", "(1+1/1000000)**1000000"])
+def test_constant_power_towers_are_rejected_without_evaluation(expr):
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(PlotError, match="too large|overflow"):
+        compile_expression(expr, "a")
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("expr", ["2^x^2", "x**(1/3)", "Abs(x)**(2/3)", "(1+1/100)**100", "x**(9**9)", "(x-1)**2/(x+2)"])
+def test_reasonable_powers_still_compile(expr):
+    compile_expression(expr, "a")
+
+
+def test_one_bad_function_does_not_drop_the_plot():
+    plot, curves, warnings = sample_plot(
+        {
+            "x_range": [-1, 1],
+            "y_range": None,
+            "functions": [{"expr": "x + 7**7**7", "label": "tower"}, {"expr": "x**2", "label": "square"}],
+            "parameter": None,
+        }
+    )
+    assert [f["label"] for f in plot["functions"]] == ["square"] and curves
+    assert any("dropped" in w for w in warnings)
+
+
+def test_downgraded_plan_falls_back_to_the_chosen_book_figure():
+    viz, warnings = finalize_plan(plan(format="equation_steps", steps=[{"latex": "x", "note": ""}], book_figure_id="p3-f1"), [FIG])
+    assert viz["format"] == "book_figure" and viz["book_figure_id"] == "c1-p3-f1" and viz["steps"] == []
+    assert any("book figure" in w for w in warnings)
+
+
+def test_equation_steps_that_repeat_the_worked_example_are_dropped():
+    lesson = {
+        "knowledge_points": [
+            {
+                "worked_example": {
+                    "problem": "Compute $(2+3i)(4+5i)$.",
+                    "steps": [
+                        {"math": "$(2+3i)(4+5i)=2\\cdot4+2\\cdot5i+3i\\cdot4+(3i)(5i)$", "why": ""},
+                        {"math": "$=8+10i+12i+15i^2$", "why": ""},
+                        {"math": "$=8+22i-15=-7+22i$", "why": ""},
+                    ],
+                    "takeaway": "",
+                }
+            }
+        ]
+    }
+    same = [
+        {"latex": "(2+3i)(4+5i)", "note": ""},
+        {"latex": "8+10i+12i+15\\color{#d9480f}{i^2}", "note": ""},
+        {"latex": "\\color{#d9480f}{-7}+22i", "note": ""},
+    ]
+    viz, warnings = finalize_plan(plan(format="equation_steps", steps=same), [], lesson)
+    assert viz["format"] == "none" and any("repeat a worked example" in w for w in warnings)
+    other = [{"latex": "(1-2i)(3+i)", "note": ""}, {"latex": "3+i-6i-2i^2", "note": ""}, {"latex": "5-5i", "note": ""}]
+    viz, _ = finalize_plan(plan(format="equation_steps", steps=other), [], lesson)
+    assert viz["format"] == "equation_steps"
+
+
+def test_bare_latex_is_still_exported_by_visuals():
+    from app.pipeline.visuals import bare_latex
+
+    assert bare_latex("$$x$$") == "x"

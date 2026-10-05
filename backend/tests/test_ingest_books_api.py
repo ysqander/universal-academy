@@ -21,6 +21,13 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture
+def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Import by path only accepts files under the home folder: make tmp_path the home folder."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return tmp_path
+
+
 def small_pdf(path: Path, pages: int = 3, title: str = "", toc: list[list] | None = None) -> Path:
     doc = pymupdf.open()
     for i in range(pages):
@@ -84,7 +91,7 @@ def test_upload_list_get_delete(client: TestClient, tmp_path: Path) -> None:
     assert r3.status_code == 200 and r3.json()["id"] != b1["id"]
 
 
-def test_delete_with_courses_conflicts(client: TestClient, tmp_path: Path) -> None:
+def test_delete_with_courses_conflicts(client: TestClient, tmp_path: Path, tmp_home: Path) -> None:
     book = client.post("/api/books/import-path", json={"path": str(small_pdf(tmp_path / "c.pdf"))}).json()
     db.execute(
         "INSERT INTO courses(id, book_id, title, start_page, end_page, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -95,7 +102,7 @@ def test_delete_with_courses_conflicts(client: TestClient, tmp_path: Path) -> No
     assert resp.status_code == 409 and "course" in resp.json()["detail"]
 
 
-def test_page_thumbnails(client: TestClient, tmp_path: Path) -> None:
+def test_page_thumbnails(client: TestClient, tmp_path: Path, tmp_home: Path) -> None:
     book = client.post("/api/books/import-path", json={"path": str(small_pdf(tmp_path / "t.pdf"))}).json()
     resp = client.get(f"/api/books/{book['id']}/pages/1.png")
     assert resp.status_code == 200 and resp.headers["content-type"] == "image/png"
@@ -113,7 +120,7 @@ def test_page_thumbnails(client: TestClient, tmp_path: Path) -> None:
     assert client.get("/api/books/nope/pages/0.png").status_code == 404
 
 
-def test_invalid_inputs(client: TestClient, tmp_path: Path) -> None:
+def test_invalid_inputs(client: TestClient, tmp_path: Path, tmp_home: Path) -> None:
     fake = tmp_path / "fake.pdf"
     fake.write_bytes(b"%PDF-1.4 definitely not really a pdf")
     with fake.open("rb") as fh:
@@ -141,3 +148,56 @@ def test_import_path_expands_user(client: TestClient, tmp_path: Path, monkeypatc
     small_pdf(tmp_path / "home.pdf")
     resp = client.post("/api/books/import-path", json={"path": "~/home.pdf"})
     assert resp.status_code == 200 and resp.json()["title"] == "Home"
+
+
+# ---------------------------------------------------------------------------
+# import-path is local-only (D14), stored files are found by id, legacy outlines are rebuilt once
+# ---------------------------------------------------------------------------
+
+
+def test_import_path_rejects_remote_clients(tmp_path: Path, tmp_home: Path) -> None:
+    app = FastAPI()
+    app.include_router(books.router)
+    path = str(small_pdf(tmp_path / "remote.pdf"))
+    remote = TestClient(app, client=("192.168.1.23", 50000))
+    resp = remote.post("/api/books/import-path", json={"path": path})
+    assert resp.status_code == 403 and "Upload the file instead" in resp.json()["detail"]
+    local = TestClient(app, client=("127.0.0.1", 50000))
+    forwarded = local.post("/api/books/import-path", json={"path": path}, headers={"X-Forwarded-For": "10.0.0.7"})
+    assert forwarded.status_code == 403  # a local proxy relaying a LAN request
+    assert TestClient(app, client=("::1", 50000)).post("/api/books/import-path", json={"path": path}).status_code == 200
+
+
+def test_import_path_only_under_home(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home, outside = tmp_path / "home", tmp_path / "outside"
+    home.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    secret = small_pdf(outside / "taxes.pdf")
+    resp = client.post("/api/books/import-path", json={"path": str(secret)})
+    assert resp.status_code == 403 and "Upload the file instead" in resp.json()["detail"]
+    missing = client.post("/api/books/import-path", json={"path": str(outside / "nope.pdf")})
+    assert missing.status_code == 403  # existence outside home is not revealed
+    (home / "link.pdf").symlink_to(secret)
+    assert client.post("/api/books/import-path", json={"path": str(home / "link.pdf")}).status_code == 403
+    assert client.post("/api/books/import-path", json={"path": "~nosuchuser123/x.pdf"}).status_code == 400
+    assert client.get("/api/books").json() == []
+
+
+def test_moved_data_dir_still_serves_pages(client: TestClient, tmp_path: Path, tmp_home: Path) -> None:
+    book = client.post("/api/books/import-path", json={"path": str(small_pdf(tmp_path / "m.pdf"))}).json()
+    db.execute("UPDATE books SET pdf_path = ? WHERE id = ?", ("/old/location/book.pdf", book["id"]))
+    assert client.get(f"/api/books/{book['id']}/pages/0.png").status_code == 200
+    assert client.delete(f"/api/books/{book['id']}").status_code == 204
+
+
+def test_legacy_outline_is_rebuilt_once(client: TestClient, tmp_path: Path, tmp_home: Path) -> None:
+    toc = [[1, "R^n and C^n", 1], [1, "Two", 3]]
+    book = client.post("/api/books/import-path", json={"path": str(small_pdf(tmp_path / "o.pdf", toc=toc))}).json()
+    assert [n["title"] for n in book["outline"]] == ["Rⁿ and Cⁿ", "Two"]
+    legacy = [dict(n, title=t) for n, t in zip(book["outline"], ["R^n and C^n", "Two"])]
+    db.execute("UPDATE books SET outline_json = ? WHERE id = ?", (db.dumps(legacy), book["id"]))
+    db.execute("DELETE FROM kv WHERE key = ?", (f"book_outline_version:{book['id']}",))
+    assert [n["title"] for n in client.get(f"/api/books/{book['id']}").json()["outline"]] == ["Rⁿ and Cⁿ", "Two"]
+    stored = db.loads(db.query_one("SELECT outline_json FROM books WHERE id = ?", (book["id"],))["outline_json"])
+    assert stored[0]["title"] == "Rⁿ and Cⁿ"

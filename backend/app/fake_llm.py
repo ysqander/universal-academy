@@ -46,6 +46,7 @@ _MARKER_RE = re.compile(r'\[//\]: # "ua-fake\|([^|"]*)\|([^"]*)"')
 _PAGE_RE = re.compile(r"<<page (\d+)")
 _FIGURE_RE = re.compile(r"^- (\S+) · page (\d+)", re.MULTILINE)
 _SKILL_RE = re.compile(r"skill (S\d+): (.+)", re.IGNORECASE)
+_PROOF_RE = re.compile(r"^Kind: proof\b|proof skill", re.IGNORECASE | re.MULTILINE)
 
 
 def respond(
@@ -419,9 +420,42 @@ def _kp_vectors(seed: int) -> KnowledgePointDraft:
     )
 
 
+def _proof_question(key: str) -> QuestionDraft:
+    return _question(
+        key=key,
+        tier=2,
+        kind="free_response",
+        prompt="Prove that $\\alpha\\beta=\\beta\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$, starting from the definition of multiplication.",
+        answer_display="See the model proof.",
+        hints=[
+            "Write $\\alpha=a+bi$ and $\\beta=c+di$ with $a,b,c,d\\in\\mathbf{R}$.",
+            "Compute both products with the definition.",
+            "Compare real and imaginary parts using commutativity in $\\mathbf{R}$.",
+        ],
+        solution=(
+            "Let $\\alpha=a+bi$, $\\beta=c+di$. Then $\\alpha\\beta=(ac-bd)+(ad+bc)i$ and "
+            "$\\beta\\alpha=(ca-db)+(cb+da)i$. Since multiplication and addition of real numbers are commutative, "
+            "$ac-bd=ca-db$ and $ad+bc=cb+da$, so $\\alpha\\beta=\\beta\\alpha$."
+        ),
+        checklist=[
+            "Takes arbitrary $\\alpha=a+bi$ and $\\beta=c+di$ (not an example)",
+            "Computes both products from the definition",
+            "Uses commutativity of real addition and multiplication part by part",
+        ],
+        targets="proof from the definition, without assuming the result",
+        source_exercise=None,
+    )
+
+
 def _lesson(text: str, _prefix: str) -> LessonDraft:
     key, title = _skill_from(text)
     seed = _seed(key, title)
+    proof = bool(_PROOF_RE.search(text))
+    figures = [fid for fid, _ in _FIGURE_RE.findall(text)]
+    first_kp = _kp_complex(seed)
+    if proof:  # proof skills: every knowledge point carries a free-response proof, served as its 2nd question
+        first_kp.questions.insert(1, _proof_question("k1q5"))
+    figure_line = f"\n\n[[figure:{figures[0]}]]" if figures else ""
     return LessonDraft(
         why_it_matters=(
             f"*{title}* answers a question the book raises directly: what is the least we must assume to work "
@@ -431,20 +465,22 @@ def _lesson(text: str, _prefix: str) -> LessonDraft:
         idea=(
             "**Definition 1.1** — a complex number is an ordered pair $(a,b)$ with $a,b\\in\\mathbf{R}$, written "
             "$a+bi$. Addition and multiplication are defined by\n\n"
-            "$$(a+bi)+(c+di)=(a+c)+(b+d)i,\\qquad (a+bi)(c+di)=(ac-bd)+(ad+bc)i.$$\n\n"
-            "Lists of such numbers form $\\mathbf{F}^n$, where operations act coordinate by coordinate."
+            "$$(a+bi)+(c+di)=(a+c)+(b+d)i,\\qquad (a+bi)(c+di)=(ac-bd)+(ad+bc)i.$$"
+            + figure_line
+            + "\n\nLists of such numbers form $\\mathbf{F}^n$, where operations act coordinate by coordinate."
         ),
         notation=[
             NotationItem(symbol="$\\mathbf{C}$", meaning="the set of complex numbers"),
             NotationItem(symbol="$\\mathbf{F}^n$", meaning="lists of length $n$ with entries in $\\mathbf{F}$"),
         ],
-        knowledge_points=[_kp_complex(seed), _kp_vectors(seed)],
+        knowledge_points=[first_kp, _kp_vectors(seed)],
         missing_steps=(
             "Why $i^2=-1$ follows from the definition: $(0+1i)(0+1i)=(0\\cdot0-1\\cdot1)+(0\\cdot1+1\\cdot0)i=-1$."
         ),
         common_mistakes=["Dropping the minus sign from $i^2$", "Adding lists of different lengths"],
         connection="Coordinatewise operations on $\\mathbf{F}^n$ are the model for the abstract vector space in 1B.",
-        source_refs=["1.1", "1.3", "1.13"],
+        # the last two are the kind of caption/page note real models emit: the pipeline keeps item numbers only
+        source_refs=["1.1", "1.3", "1.13", "1.13 Definition — addition in F^n", "Printed p.2: complex numbers"],
     )
 
 
@@ -488,12 +524,12 @@ def _viz(text: str, _prefix: str) -> VisualizationPlan:
         }
     elif fmt == "equation_steps":
         base |= {
-            "caption": "Multiplying $(2+3i)(4+5i)$",
+            "caption": "Where the sign flips: $(1-2i)(3+i)$",
             "steps": [
-                VizEqStep(latex="(2+3i)(4+5i)", note="Start"),
-                VizEqStep(latex="8+10i+12i+15\\color{#d9480f}{i^2}", note="Distribute"),
-                VizEqStep(latex="8+22i\\color{#d9480f}{-15}", note="Replace $i^2$ by $-1$"),
-                VizEqStep(latex="\\color{#d9480f}{-7}+22i", note="Collect the real part"),
+                VizEqStep(latex="(1-2i)(3+i)", note="Start"),
+                VizEqStep(latex="3+i-6i-2\\color{#d9480f}{i^2}", note="Distribute"),
+                VizEqStep(latex="3-5i\\color{#d9480f}{+2}", note="Replace $i^2$ by $-1$: $-2i^2=+2$"),
+                VizEqStep(latex="\\color{#d9480f}{5}-5i", note="Collect the real part"),
             ],
         }
     elif fmt == "diagram_2d":
@@ -575,6 +611,9 @@ class _TopUp(BaseModel):
 def _top_up(text: str, _prefix: str) -> _TopUp:
     keys = re.findall(r"\bk\d+q\d+\b", text.split("\n", 1)[0]) or ["k1q9"]
     questions = []
+    if _PROOF_RE.search(text) and len(keys) > 1:
+        proof = _proof_question(keys.pop())
+        questions.append(proof.model_copy(update={"prompt": f"{proof.prompt} (Variant {proof.key}.)"}))
     for key in keys:
         a, b, c, d = _numbers(_seed(key, text[:200]), 4, -9, 10)
         re_, im = a * c - b * d, a * d + b * c

@@ -1,5 +1,8 @@
 """Verify stage: every machine-checkable question is re-solved by a second model that sees only the prompt and the
-choices; disagreements and reported defects are flagged (kept out of serving and scoring)."""
+choices; disagreements and reported defects are flagged (kept out of serving and scoring).
+
+Flags are shared with the learner: a question the learner reported (any flag whose reason does not start with
+'verification:') is never un-flagged or re-verified here — verification only manages its own flags."""
 
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ log = logging.getLogger("ua.pipeline.verify")
 
 MIN_CONFIDENCE = 0.5
 MIN_UNFLAGGED_PER_KP = 2
+VERIFICATION_PREFIX = "verification:"
 _NO_PROBLEM = {"", "none", "none.", "n/a", "no", "no problems", "no problems.", "-"}
 
 
@@ -28,8 +32,13 @@ class Verdict:
     record: dict[str, Any]
 
 
+def learner_flagged(row: dict[str, Any]) -> bool:
+    """Flagged for a reason other than verification (the learner reported it, or it was retired)."""
+    return bool(row["flagged"]) and not (row["flag_reason"] or "").startswith(VERIFICATION_PREFIX)
+
+
 def needs_verification(row: dict[str, Any]) -> bool:
-    return is_machine_checkable(row["kind"]) and not db.loads(row["verify_json"], {})
+    return is_machine_checkable(row["kind"]) and not db.loads(row["verify_json"], {}) and not learner_flagged(row)
 
 
 def verify_request(row: dict[str, Any]) -> str:
@@ -52,6 +61,7 @@ def judge(row: dict[str, Any], independent: IndependentAnswer) -> Verdict:
         tolerance=row["tolerance"],
         response=independent.answer,
         choice=independent.choice,
+        require_simplified=False,  # the solver may answer in any equivalent form; only learners must simplify
     )
     record: dict[str, Any] = {"independent": independent.model_dump()}
     if not grade.correct:
@@ -92,9 +102,13 @@ async def verify_question(row: dict[str, Any]) -> Verdict | None:
             log.warning("verification of question %s failed (attempt %d): %s", row["id"], attempt + 1, e)
             continue
         verdict = judge(row, independent)
+        # The CASE reads the current row, so a learner flag set while the call was in flight is kept as well.
         db.execute(
-            "UPDATE questions SET flagged = ?, flag_reason = ?, verify_json = ? WHERE id = ?",
-            (int(verdict.flagged), verdict.reason, db.dumps(verdict.record), row["id"]),
+            "UPDATE questions SET verify_json = ?, "
+            "flagged = CASE WHEN flagged = 1 AND flag_reason NOT LIKE 'verification:%' THEN 1 ELSE ? END, "
+            "flag_reason = CASE WHEN flagged = 1 AND flag_reason NOT LIKE 'verification:%' THEN flag_reason ELSE ? END "
+            "WHERE id = ?",
+            (db.dumps(verdict.record), int(verdict.flagged), verdict.reason, row["id"]),
         )
         return verdict
     return None
@@ -119,13 +133,14 @@ def keep_kps_servable(skill_id: str) -> list[str]:
         missing = MIN_UNFLAGGED_PER_KP - sum(1 for r in pool if not r["flagged"])
         if missing <= 0:
             continue
-        candidates = [r for r in pool if r["flagged"] and r["flag_reason"].startswith("verification:")]
+        candidates = [r for r in pool if r["flagged"] and r["flag_reason"].startswith(VERIFICATION_PREFIX)]
         candidates.sort(key=_keep_rank)
         for r in candidates[:missing]:
             record = db.loads(r["verify_json"], {})
             record.update({"status": "disagree_kept", "was": record.get("status"), "reason": r["flag_reason"]})
             db.execute(
-                "UPDATE questions SET flagged = 0, flag_reason = '', verify_json = ? WHERE id = ?",
+                "UPDATE questions SET flagged = 0, flag_reason = '', verify_json = ? "
+                "WHERE id = ? AND flag_reason LIKE 'verification:%'",
                 (db.dumps(record), r["id"]),
             )
             notes.append(f"kept {r['key']} (KP {kp + 1}) despite {r['flag_reason'].removeprefix('verification: ')}")

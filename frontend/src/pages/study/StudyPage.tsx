@@ -1,24 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import {
-  abandonTask,
-  continueLearning,
-  easierStep,
-  getCourse,
-  getNext,
-  isApiError,
-  startPractice,
-  startTask,
-} from "../../api";
+import { abandonTask, continueLearning, easierStep, getCourse, getNext, isApiError, startPractice, startTask } from "../../api";
 import { CourseProvider } from "../../components/CourseProvider";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
 import { ErrorState, LoadingState, StateMessage } from "../../components/StateMessage";
+import { TaskMenu } from "../../components/TaskMenu";
 import { useToast } from "../../context/toast";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import { useResource } from "../../hooks/useResource";
-import { plainText } from "../../lib/markdown";
+import { TASK_LABEL } from "../../lib/format";
+import { plainText, prettyTitle } from "../../lib/markdown";
 import type { StudyLocationState } from "../../hooks/useStartTask";
 import type { AnswerResult, NextTaskResponse, SessionInfo, Task, TaskOption } from "../../types";
 import { CompletionScreen } from "./CompletionScreen";
@@ -34,18 +28,13 @@ interface Initial {
 
 type BootState = { status: "loading" } | { status: "error"; error: unknown } | { status: "ready"; next: NextTaskResponse | null };
 
-/** Resume the active task, or start the top option; null when there is nothing to do. */
+/**
+ * The task handed over by an explicit start (router state), else the already active task. Never starts a task:
+ * a reload, browser Back or a bookmark must not create one (D10) — without an open task the page offers a menu.
+ */
 async function loadInitial(courseId: string, provided: Task | null): Promise<Initial> {
   const next = await getNext(courseId);
-  if (provided) return { task: provided, next };
-  if (next.task) return { task: next.task, next };
-  if (next.options.length === 0) return { task: null, next };
-  try {
-    return { task: await continueLearning(courseId), next };
-  } catch (err) {
-    if (isApiError(err, 409)) return { task: null, next };
-    throw err;
-  }
+  return { task: provided ?? next.task, next };
 }
 
 export default function StudyPage({ courseId }: { courseId: string }) {
@@ -63,10 +52,12 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const [xp, setXp] = useState<{ taskId: string; earned: number }>({ taskId: "", earned: 0 });
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  // The last answer finished the task while its feedback is still on screen (task is replaced on "See results").
+  const [finishedId, setFinishedId] = useState<string | null>(null);
   const bootPromise = useRef<Promise<Initial> | null>(null);
   const autoStarted = useRef<string | null>(null);
   const course = useResource(`course:${courseId}`, (signal) => getCourse(courseId, signal));
-  useDocumentTitle(task ? `${task.type === "lesson" ? "Lesson" : "Review"}: ${plainText(task.skill.title)}` : "Study");
+  useDocumentTitle(task ? `${task.type === "lesson" ? "Lesson" : "Review"}: ${plainText(prettyTitle(task.skill.title))}` : "Study");
 
   // Router state carries a freshly started task; drop it so a reload resumes from the server instead.
   useEffect(() => {
@@ -98,7 +89,26 @@ export default function StudyPage({ courseId }: { courseId: string }) {
     setAttempt((n) => n + 1);
   };
 
-  const replaceTask = useCallback((next: Task) => setTask(next), []);
+  const replaceTask = useCallback((next: Task) => {
+    setTask(next);
+    setFinishedId(null);
+  }, []);
+
+  const refreshSession = useCallback(() => {
+    getNext(courseId).then(
+      (next) => setSession(next.session),
+      () => undefined,
+    );
+  }, [courseId]);
+
+  // A flag can void an answer that earned XP or re-grade the task: take the server's task and fresh session totals.
+  const onFlagged = useCallback(
+    (next: Task) => {
+      replaceTask(next);
+      refreshSession();
+    },
+    [replaceTask, refreshSession],
+  );
 
   // A new task or phase starts at the top of the page.
   const view = task ? `${task.id}:${task.phase}` : null;
@@ -131,6 +141,10 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   }, [task, beginPractice]);
 
   const onAnswered = useCallback((result: AnswerResult) => {
+    if (result.task.phase === "done") {
+      setFinishedId(result.task.id);
+      setConfirmEnd(false);
+    }
     if (result.xp_awarded > 0) {
       setXp((prev) => ({ taskId: result.task.id, earned: (prev.taskId === result.task.id ? prev.earned : 0) + result.xp_awarded }));
     }
@@ -150,9 +164,11 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const startNext = async (key: string, start: () => Promise<Task>) => {
     setBusy(key);
     try {
-      setTask(await start());
+      replaceTask(await start());
     } catch (err) {
       toast.error(err);
+      // 409 "Finish or leave '…' first": another task is open after all — pick it up instead.
+      if (isApiError(err, 409) && task === null) retryBoot();
     } finally {
       setBusy(null);
     }
@@ -162,9 +178,17 @@ export default function StudyPage({ courseId }: { courseId: string }) {
     if (!task) return;
     setBusy("end");
     try {
-      await abandonTask(task.id);
+      const after = await abandonTask(task.id);
+      setConfirmEnd(false);
+      setBusy(null);
+      if (after.outcome !== "abandoned") {
+        // The task had already finished (passed / failed): show its results rather than "set aside".
+        replaceTask(after);
+        return;
+      }
       toast.show("Task set aside. It will be offered again later.", "info");
-      navigate(`/courses/${encodeURIComponent(courseId)}`);
+      // Replace: browser Back should not land on a study page for the task that was just left.
+      navigate(`/courses/${encodeURIComponent(courseId)}`, { replace: true });
     } catch (err) {
       toast.error(err);
       setBusy(null);
@@ -174,7 +198,7 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const goToMap = useCallback(() => navigate(`/courses/${encodeURIComponent(courseId)}`), [navigate, courseId]);
   const onSession = useCallback((next: NextTaskResponse) => setSession(next.session), []);
   const pageRange: [number, number] | null = course.data ? [course.data.start_page, course.data.end_page] : null;
-  const ongoing = task !== null && task.phase !== "done";
+  const ongoing = task !== null && task.phase !== "done" && finishedId !== task.id;
 
   let body;
   if (task === null) {
@@ -182,6 +206,45 @@ export default function StudyPage({ courseId }: { courseId: string }) {
       body = <ErrorState error={boot.error} onRetry={retryBoot} title="Couldn't start a task" />;
     } else if (boot.status === "loading") {
       body = <LoadingState label="Preparing your next task…" />;
+    } else if (boot.next && boot.next.options.length > 0) {
+      const { options, session: info } = boot.next;
+      const top = options[0];
+      body = (
+        <div className="study-ready">
+          <div className="study-ready__head">
+            <p className="kicker">{info.goal_reached ? "Daily goal reached — anything more is a bonus" : "Ready when you are"}</p>
+            <h1 className="study-ready__title">Your next step</h1>
+            <p className="study-ready__reason">
+              Next: {TASK_LABEL[top.type].toLowerCase()} <span className="key">{top.skill.key}</span>{" "}
+              <Markdown inline>{prettyTitle(top.skill.title)}</Markdown> — {top.reason}
+            </p>
+            <button
+              type="button"
+              className="btn btn--primary btn--lg"
+              onClick={() => void startNext("continue", () => continueLearning(courseId))}
+              disabled={busy !== null}
+            >
+              {busy === "continue" ? <Spinner size={16} label="Starting" /> : <Icon name="play" size={18} />} Continue learning
+            </button>
+          </div>
+          {options.length > 1 && (
+            <section className="completion__section">
+              <h2 className="lesson__h">Or choose</h2>
+              <TaskMenu
+                options={options}
+                pendingKey={busy && busy !== "continue" ? busy : null}
+                disabled={busy !== null}
+                onStart={(option: TaskOption) =>
+                  void startNext(`${option.skill.id}:${option.type}`, () => startTask(courseId, { skill_id: option.skill.id, type: option.type }))
+                }
+              />
+            </section>
+          )}
+          <Link to={`/courses/${encodeURIComponent(courseId)}`} className="btn btn--ghost study-ready__map">
+            <Icon name="graph" size={16} /> Back to the map
+          </Link>
+        </div>
+      );
     } else {
       body = (
         <StateMessage
@@ -231,7 +294,9 @@ export default function StudyPage({ courseId }: { courseId: string }) {
         <LoadingState label="Starting your review…" />
       );
   } else {
-    body = <PracticeView task={task} onAnswered={onAnswered} onAdvance={replaceTask} onEasier={onEasier} onGoToMap={goToMap} />;
+    body = (
+      <PracticeView task={task} onAnswered={onAnswered} onAdvance={replaceTask} onFlagged={onFlagged} onEasier={onEasier} onGoToMap={goToMap} />
+    );
   }
 
   return (
@@ -258,7 +323,8 @@ export default function StudyPage({ courseId }: { courseId: string }) {
       >
         <p>
           Progress inside this task is discarded and it earns no XP. It will be offered again later. To pause instead, just go back
-          to the map — the task stays open and <strong>Continue learning</strong> resumes it.
+          to the map — the task stays open and <strong>Continue learning</strong> resumes it (starting a different task there asks
+          first).
         </p>
       </Dialog>
     </CourseProvider>

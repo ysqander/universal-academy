@@ -10,9 +10,11 @@ import type {
   CourseSummary,
   FoundationNode,
   Health,
+  HintResponse,
   JobStatus,
   Lesson,
   NextTaskResponse,
+  RevealRequest,
   RevealResponse,
   SourcePage,
   StartTaskRequest,
@@ -181,7 +183,11 @@ export const startPractice = (taskId: string) => post<Task>(`/api/tasks/${seg(ta
 export const submitAnswer = (taskId: string, body: AnswerSubmit) => post<AnswerResult>(`/api/tasks/${seg(taskId)}/answer`, body);
 export const easierStep = (taskId: string) => post<Task>(`/api/tasks/${seg(taskId)}/easier`);
 export const abandonTask = (taskId: string) => post<Task>(`/api/tasks/${seg(taskId)}/abandon`);
-export const revealSolution = (questionId: string) => post<RevealResponse>(`/api/questions/${seg(questionId)}/reveal`);
+/** Show the model solution. Free response: pass the committed answer so this counts as a comparison, not as help. */
+export const revealSolution = (questionId: string, response: string | null = null) =>
+  post<RevealResponse>(`/api/questions/${seg(questionId)}/reveal`, { response } satisfies RevealRequest);
+/** The next hint for the current attempt; recorded server-side, so it still counts after a reload. */
+export const getHint = (questionId: string) => post<HintResponse>(`/api/questions/${seg(questionId)}/hint`);
 export const flagQuestion = (questionId: string, reason: string) =>
   post<Task>(`/api/questions/${seg(questionId)}/flag`, { reason });
 

@@ -5,6 +5,7 @@ import { Markdown } from "../../components/Markdown";
 import { ProgressBar } from "../../components/ProgressBar";
 import { Spinner } from "../../components/Spinner";
 import { pageRangeLabel, percent, plural, relativeTime, TASK_LABEL } from "../../lib/format";
+import { prettyTitle } from "../../lib/markdown";
 import type { Course, NextTaskResponse } from "../../types";
 
 interface CourseHeaderProps {
@@ -35,7 +36,9 @@ export function CourseHeader({ course, next, onContinue, continuing, onEditGoal 
           <span aria-current="page">{course.book_title}</span>
         </nav>
         <p className="kicker">Course · {pageRangeLabel(course.label_start, course.label_end)}</p>
-        <h1 className="course-header__title">{course.title}</h1>
+        <h1 className="course-header__title">
+          <Markdown inline>{prettyTitle(course.title)}</Markdown>
+        </h1>
         <p className="course-header__book">{course.book_title}</p>
         {course.big_picture ? (
           <div className="course-header__big-picture" data-expanded={expanded || undefined}>
@@ -101,7 +104,7 @@ export function CourseHeader({ course, next, onContinue, continuing, onEditGoal 
         <p className="course-header__next">
           {active ? (
             <>
-              <span className="key">{active.skill.key}</span> <Markdown inline>{active.skill.title}</Markdown>
+              <span className="key">{active.skill.key}</span> <Markdown inline>{prettyTitle(active.skill.title)}</Markdown>
             </>
           ) : top ? (
             top.reason

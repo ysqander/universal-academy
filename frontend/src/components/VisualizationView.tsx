@@ -37,6 +37,7 @@ export function BookFigure({ figure }: { figure: Figure }) {
 function renderBody(viz: Visualization): ReactNode {
   switch (viz.format) {
     case "book_figure":
+    case "none":
       return viz.figure ? <BookFigure figure={viz.figure} /> : null;
     case "comparison_table":
       return viz.table && viz.table.rows.length > 0 ? <ComparisonTable table={viz.table} /> : null;
@@ -56,15 +57,15 @@ function renderBody(viz: Visualization): ReactNode {
       ) : null;
     case "frames":
       return viz.frames.length > 0 ? <FramesStepper frames={viz.frames} /> : null;
-    case "none":
-      return null;
   }
 }
 
 /** Renders every visualization format the planner can choose; prompt above, caption below. */
 export function VisualizationView({ viz }: { viz: Visualization }) {
   const body = renderBody(viz);
-  if (!body) return null;
+  // The planner may pair the book's own figure with a generated visual: show it alongside.
+  const companion = viz.figure && viz.format !== "book_figure" && viz.format !== "none" ? <BookFigure figure={viz.figure} /> : null;
+  if (!body && !companion) return null;
   return (
     <figure className="viz" data-format={viz.format}>
       {viz.learner_prompt && (
@@ -73,7 +74,10 @@ export function VisualizationView({ viz }: { viz: Visualization }) {
           <Markdown inline>{viz.learner_prompt}</Markdown>
         </div>
       )}
-      <div className="viz__body">{body}</div>
+      <div className="viz__body">
+        {body}
+        {companion}
+      </div>
       {viz.caption && (
         <figcaption className="viz__caption">
           <Markdown inline>{viz.caption}</Markdown>

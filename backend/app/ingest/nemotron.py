@@ -9,7 +9,10 @@ Two hosted protocols are supported (docs/research/nemotron-parse.md):
   un-padding is exact); the API may answer 202 + NVCF-REQID, which is polled.
 - nemotron-parse (v1): `tools=[markdown_bbox]`, JSON blocks in tool_calls with image-normalized bboxes.
 The primary model (DEFAULT_MODEL unless UA_NEMOTRON_MODEL names another one) is tried first; if it fails the
-other protocol is used as a fallback.
+other protocol is used as a fallback (not when the host itself is unreachable / rate limiting).
+
+Layout blocks are an optional hint, so failures are cheap: every page has a time budget (PAGE_BUDGET_S), and
+after BREAKER_THRESHOLD consecutive failed pages a circuit breaker disables Nemotron for the rest of the process.
 """
 
 from __future__ import annotations
@@ -44,8 +47,11 @@ MAX_TOKENS_V1 = 8192
 MAX_TOKENS_V2 = 4000  # hosted 2.0 has max_model_len 4096 (prompt + output)
 STATUS_URL = "https://integrate.api.nvidia.com/v1/status/{req_id}"
 
-REQUEST_TIMEOUT = 180.0
-MAX_ATTEMPTS = 5
+REQUEST_TIMEOUT = httpx.Timeout(90.0, connect=10.0)
+POLL_DEADLINE_S = 90.0  # max wait for a 202-accepted request
+MAX_ATTEMPTS = 3
+PAGE_BUDGET_S = 180.0  # all models and retries of one page together
+BREAKER_THRESHOLD = 3  # consecutive failed pages → Nemotron off for the rest of the process
 MAX_IN_FLIGHT = 3
 MIN_SPACING_S = 1.6  # free tier allows ~40 requests/minute
 
@@ -57,10 +63,17 @@ _RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 _disabled_logged = False
+_consecutive_failures = 0
+_breaker_open = False
 
 
 class NemotronError(RuntimeError):
-    pass
+    """`unreachable`: the host timed out, refused the connection or rate-limited us — the other model on the
+    same host would fail the same way, so it is not tried."""
+
+    def __init__(self, message: str, *, unreachable: bool = False) -> None:
+        super().__init__(message)
+        self.unreachable = unreachable
 
 
 @dataclass
@@ -91,8 +104,8 @@ def canvas_zoom(width_pt: float, height_pt: float) -> float:
 async def parse_layout(png: bytes) -> list[Block]:
     """Layout blocks of one page image, in the model's reading order.
 
-    Returns [] when Nemotron is disabled (no NVIDIA key, UA_PARSE_ENGINE=openai or fake mode).
-    Raises NemotronError when every model failed.
+    Returns [] when Nemotron is disabled (no NVIDIA key, UA_PARSE_ENGINE=openai or fake mode) or the circuit
+    breaker is open. Raises NemotronError when every model failed or the page budget ran out.
     """
     global _disabled_logged
     if not enabled():
@@ -103,6 +116,20 @@ async def parse_layout(png: bytes) -> list[Block]:
             )
             _disabled_logged = True
         return []
+    if _breaker_open:
+        return []
+    try:
+        blocks = await asyncio.wait_for(_parse_any(png), timeout=PAGE_BUDGET_S)
+    except (NemotronError, asyncio.TimeoutError) as e:
+        _record_failure()
+        if isinstance(e, NemotronError):
+            raise
+        raise NemotronError(f"no answer within {PAGE_BUDGET_S:.0f}s", unreachable=True) from e
+    _record_success()
+    return blocks
+
+
+async def _parse_any(png: bytes) -> list[Block]:
     first = primary_model()
     models = [first] + [m for m in (MODEL_V2, MODEL_V1) if m != first]
     errors: list[str] = []
@@ -114,7 +141,38 @@ async def parse_layout(png: bytes) -> list[Block]:
         except NemotronError as e:
             log.warning("nemotron %s failed: %s", model, e)
             errors.append(f"{model}: {e}")
+            if e.unreachable:
+                raise NemotronError("; ".join(errors), unreachable=True) from e
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError) as e:  # malformed response
+            log.warning("nemotron %s: unusable response: %s: %s", model, type(e).__name__, e)
+            errors.append(f"{model}: {type(e).__name__}: {e}")
     raise NemotronError("; ".join(errors))
+
+
+def _record_success() -> None:
+    global _consecutive_failures
+    _consecutive_failures = 0
+
+
+def _record_failure() -> None:
+    global _consecutive_failures, _breaker_open
+    _consecutive_failures += 1
+    if _consecutive_failures >= BREAKER_THRESHOLD and not _breaker_open:
+        _breaker_open = True
+        log.warning(
+            "Nemotron Parse failed on %d pages in a row — layout hints disabled for the rest of this run "
+            "(pages are still parsed by the vision model; restart the server to try Nemotron again)",
+            _consecutive_failures,
+        )
+
+
+def breaker_open() -> bool:
+    return _breaker_open
+
+
+def reset_breaker() -> None:
+    global _consecutive_failures, _breaker_open
+    _consecutive_failures, _breaker_open = 0, False
 
 
 async def _parse_with(model: str, png: bytes) -> list[Block]:
@@ -126,6 +184,8 @@ async def _parse_with(model: str, png: bytes) -> list[Block]:
             "max_tokens": MAX_TOKENS_V1,
         }
         body = await _post(payload)
+        if _first_choice(body).get("finish_reason") == "length":
+            log.warning("nemotron %s output truncated at max_tokens; the response may be unusable", model)
         return parse_v1_response(body)
 
     fitted, w, h = fit_to_canvas(png)
@@ -144,11 +204,19 @@ async def _parse_with(model: str, png: bytes) -> list[Block]:
         "temperature": 0,
     }
     body = await _post(payload)
-    choice = (body.get("choices") or [{}])[0]
+    choice = _first_choice(body)
     if choice.get("finish_reason") == "length":
         log.warning("nemotron %s output truncated at max_tokens; trailing blocks may be missing", model)
     content = (choice.get("message") or {}).get("content") or ""
+    if not isinstance(content, str):
+        raise NemotronError(f"unexpected v2 content: {str(content)[:200]}")
     return parse_v2_content(content, w, h)
+
+
+def _first_choice(body: dict[str, Any]) -> dict[str, Any]:
+    choices = body.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else {}
+    return choice if isinstance(choice, dict) else {}
 
 
 def _is_v1(model: str) -> bool:
@@ -203,11 +271,20 @@ def parse_v1_response(body: dict[str, Any]) -> list[Block]:
         arguments = message["tool_calls"][0]["function"]["arguments"]
     except (KeyError, IndexError, TypeError) as e:
         raise NemotronError(f"unexpected v1 response shape: {str(body)[:300]}") from e
-    data = json.loads(arguments) if isinstance(arguments, str) else arguments
-    if data and isinstance(data[0], list):
-        data = [item for group in data for item in group]
+    if isinstance(arguments, str):
+        try:
+            data = json.loads(arguments)
+        except ValueError as e:  # truncated at max_tokens, or not JSON at all
+            raise NemotronError(f"unparseable v1 arguments ({len(arguments)} chars): {e}") from e
+    else:
+        data = arguments
+    if not isinstance(data, list):
+        raise NemotronError(f"v1 arguments are not a list: {str(data)[:200]}")
+    data = [item for group in data for item in (group if isinstance(group, list) else [group])]
     blocks: list[Block] = []
     for item in data:
+        if not isinstance(item, dict):
+            continue
         box = item.get("bbox") or {}
         try:
             coords = [float(box[k]) for k in ("xmin", "ymin", "xmax", "ymax")]
@@ -265,34 +342,49 @@ _limiter = _RateLimiter()
 async def _post(payload: dict[str, Any]) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {settings.nvidia_api_key}", "Accept": "application/json"}
     last = ""
+    unreachable = False  # the last failure was a timeout / connection error / rate limit
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         for attempt in range(MAX_ATTEMPTS):
+            final = attempt == MAX_ATTEMPTS - 1
             try:
                 async with _limiter:
                     resp = await client.post(settings.nemotron_url, headers=headers, json=payload)
                 resp = await _poll_if_pending(client, resp, headers)
             except httpx.HTTPError as e:
                 last = f"{type(e).__name__}: {e}"
-                await asyncio.sleep(min(30.0, 2.0**attempt + 1))
+                unreachable = isinstance(e, (httpx.TimeoutException, httpx.NetworkError))
+                if not final:
+                    await asyncio.sleep(min(30.0, 2.0**attempt + 1))
                 continue
             if resp.status_code == 200:
-                return resp.json()
+                try:
+                    body = resp.json()
+                except ValueError:  # e.g. an HTML page from a proxy
+                    last, unreachable = f"non-JSON 200 response: {resp.text[:200]}", False
+                    if not final:
+                        await asyncio.sleep(min(30.0, 2.0**attempt + 1))
+                    continue
+                if not isinstance(body, dict):
+                    raise NemotronError(f"unexpected response body: {str(body)[:200]}")
+                return body
             last = f"HTTP {resp.status_code}: {resp.text[:300]}"
             if resp.status_code not in _RETRYABLE:
                 raise NemotronError(last)
-            retry_after = _retry_after(resp)
-            await asyncio.sleep(retry_after if retry_after is not None else min(60.0, 2.0 ** (attempt + 1)))
-    raise NemotronError(f"gave up after {MAX_ATTEMPTS} attempts ({last})")
+            unreachable = resp.status_code == 429
+            if not final:
+                retry_after = _retry_after(resp)
+                await asyncio.sleep(retry_after if retry_after is not None else min(60.0, 2.0 ** (attempt + 1)))
+    raise NemotronError(f"gave up after {MAX_ATTEMPTS} attempts ({last})", unreachable=unreachable)
 
 
 async def _poll_if_pending(client: httpx.AsyncClient, resp: httpx.Response, headers: dict[str, str]) -> httpx.Response:
-    deadline = time.monotonic() + REQUEST_TIMEOUT
+    deadline = time.monotonic() + POLL_DEADLINE_S
     while resp.status_code == 202:
         req_id = resp.headers.get("NVCF-REQID")
         if not req_id:
             raise NemotronError("202 Accepted without an NVCF-REQID header")
         if time.monotonic() > deadline:
-            raise NemotronError(f"request {req_id} still pending after {REQUEST_TIMEOUT:.0f}s")
+            raise NemotronError(f"request {req_id} still pending after {POLL_DEADLINE_S:.0f}s", unreachable=True)
         await asyncio.sleep(1.0)
         resp = await client.get(STATUS_URL.format(req_id=req_id), headers=headers)
     return resp

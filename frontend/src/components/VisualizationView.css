@@ -441,3 +441,8 @@
     background: #f4efe4;
   }
 }
+
+/* A book figure shown next to a generated visual (the planner may pair them). */
+.viz__body > * + .viz-book-figure {
+  margin-top: var(--space-4);
+}

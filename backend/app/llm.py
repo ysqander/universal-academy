@@ -19,6 +19,7 @@ from typing import Literal, TypeVar
 
 import openai
 from openai import AsyncOpenAI
+from openai.lib._parsing._responses import type_to_text_format_param
 from pydantic import BaseModel, ValidationError
 
 from .config import settings
@@ -76,7 +77,7 @@ class LLMError(RuntimeError):
 
 
 class _StreamFailed(RuntimeError):
-    """A streamed response ended with status 'failed' (retried like a server error)."""
+    """A streamed response failed, reported an error event or ended early (retried like a server error)."""
 
 
 def _get_client() -> AsyncOpenAI:
@@ -132,8 +133,9 @@ async def structured(
     - `stream`: stream the response events instead of waiting for one silent HTTP response. Use it for calls that
       can take minutes (graph, lessons): some networks drop connections that stay idle that long, and the
       non-streaming request then hangs until the client timeout.
-    Retries: the SDK retries transport/429/5xx; we additionally retry once on truncation (larger budget) and
-    once on schema-validation failure.
+    Retries (3 attempts): the SDK retries transport/429/5xx itself; on top of that we retry server errors, failed or
+    broken streams, truncation (with a larger output budget) and output that does not fit the schema. Every failure
+    surfaces as LLMError. The usage of every billed attempt — also failed and invalid ones — is recorded.
     """
     if settings.fake_llm:
         from . import fake_llm
@@ -153,26 +155,31 @@ async def structured(
         {"role": "developer", "content": developer_content},
         {"role": "user", "content": user_content},
     ]
+    # The same JSON-schema format responses.parse() would send; we parse the output ourselves so that usage is
+    # recorded before validation (an invalid answer is billed too).
+    text_format = {"format": type_to_text_format_param(schema)}
 
     budget = max_output_tokens
     last_error: Exception | None = None
     for attempt in range(3):
         started = time.monotonic()
+        request = dict(
+            model=model,
+            reasoning={"effort": effort},
+            input=messages,
+            text=text_format,
+            max_output_tokens=budget,
+            prompt_cache_options={"mode": "explicit"},
+            store=False,
+        )
         try:
-            request = dict(
-                model=model,
-                reasoning={"effort": effort},
-                input=messages,
-                text_format=schema,
-                max_output_tokens=budget,
-                prompt_cache_options={"mode": "explicit"},
-                store=False,
-            )
             async with _get_semaphore():
                 if stream:
-                    resp = await _stream_parse(request)
+                    resp = await _stream_response(request, role=role, model=model, label=label, started=started)
                 else:
-                    resp = await _get_client().responses.parse(**request)
+                    resp = await _get_client().responses.create(**request)
+        except LLMError:
+            raise  # configuration problems (no API key) — not retryable
         except openai.BadRequestError as e:  # not retryable: bad schema / param / image
             raise LLMError(f"OpenAI rejected the request ({model}): {e.message}") from e
         except openai.AuthenticationError as e:
@@ -183,40 +190,86 @@ async def structured(
             last_error = e
             await asyncio.sleep(10 * (attempt + 1))
             continue
-        except (openai.APIConnectionError, openai.InternalServerError, openai.APITimeoutError, _StreamFailed) as e:
+        except (openai.APIConnectionError, openai.InternalServerError, _StreamFailed) as e:
             last_error = e
             await asyncio.sleep(5 * (attempt + 1))
             continue
-        except ValidationError as e:  # model produced JSON that does not fit the schema
+        except openai.APIStatusError as e:
+            if e.status_code in (408, 409) or e.status_code >= 500:
+                last_error = e
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+            # 403 / 404 (unknown model name) / 422 …: retrying cannot help
+            raise LLMError(f"OpenAI rejected the request ({model}): HTTP {e.status_code} {e.message}") from e
+        except openai.APIError as e:  # error payloads inside a stream (no HTTP status)
             last_error = e
+            await asyncio.sleep(5 * (attempt + 1))
+            continue
+        except Exception as e:  # noqa: BLE001 — anything else (SDK protocol errors …) is retried, then LLMError
+            log.warning("%s call %s: unexpected %s: %s", role, label, type(e).__name__, e)
+            last_error = e
+            await asyncio.sleep(5 * (attempt + 1))
             continue
 
         _record_usage(role, model, resp, label, time.monotonic() - started)
-        if resp.status == "incomplete":
-            reason = getattr(resp.incomplete_details, "reason", "unknown")
+        if getattr(resp, "status", None) == "incomplete":
+            reason = getattr(getattr(resp, "incomplete_details", None), "reason", None) or "unknown"
             last_error = LLMError(f"incomplete response ({reason})")
             if reason == "max_output_tokens":
                 budget = min(int(budget * 1.75), 128000)
             continue
-        parsed = resp.output_parsed
-        if parsed is None:
-            last_error = LLMError("model returned no parsed output (refusal?)")
+        output = _output_text(resp)
+        if not output:
+            refusal = _refusal(resp)
+            last_error = LLMError(f"model refused: {refusal}" if refusal else "model returned no output")
             continue
-        return parsed
+        try:
+            return schema.model_validate_json(output)
+        except ValidationError as e:  # model produced JSON that does not fit the schema
+            last_error = e
+            continue
 
     raise LLMError(f"{role} call failed after retries ({label}): {last_error}")
 
 
-async def _stream_parse(request: dict):
-    """responses.parse() over a stream. Returns the parsed final response, or the raw response of a
-    'response.incomplete' event (status 'incomplete', handled by the caller's truncation retry)."""
-    async with _get_client().responses.stream(**request) as events:
+async def _stream_response(request: dict, *, role: str, model: str, label: str, started: float):
+    """A streamed responses.create(). Returns the final response of a 'response.completed' or 'response.incomplete'
+    event (the caller handles truncation). Failed responses, 'error' events and streams that end without a final
+    response raise _StreamFailed (retried like a server error); a failed response's usage is still recorded."""
+    events = await _get_client().responses.create(**request, stream=True)
+    async with events:
         async for event in events:
-            if event.type == "response.incomplete":
+            kind = getattr(event, "type", "")
+            if kind in ("response.completed", "response.incomplete"):
                 return event.response
-            if event.type == "response.failed":
-                raise _StreamFailed(str(getattr(event.response, "error", None) or "response failed"))
-        return await events.get_final_response()
+            if kind == "response.failed":
+                response = getattr(event, "response", None)
+                _record_usage(role, model, response, f"{label} (failed)", time.monotonic() - started)
+                raise _StreamFailed(str(getattr(response, "error", None) or "response failed"))
+            if kind == "error":
+                code = getattr(event, "code", None) or "error"
+                raise _StreamFailed(f"{code}: {getattr(event, 'message', '') or 'stream error'}")
+    raise _StreamFailed("stream ended without a response.completed event")
+
+
+def _output_text(resp) -> str:
+    text = getattr(resp, "output_text", None)
+    if isinstance(text, str) and text:
+        return text
+    chunks = []
+    for item in getattr(resp, "output", None) or []:
+        for content in getattr(item, "content", None) or []:
+            if getattr(content, "type", "") == "output_text":
+                chunks.append(getattr(content, "text", "") or "")
+    return "".join(chunks)
+
+
+def _refusal(resp) -> str:
+    for item in getattr(resp, "output", None) or []:
+        for content in getattr(item, "content", None) or []:
+            if getattr(content, "type", "") == "refusal":
+                return getattr(content, "refusal", "") or "refusal"
+    return ""
 
 
 def _record_usage(role: str, model: str, resp, label: str, seconds: float) -> None:

@@ -62,6 +62,8 @@ export function FeedbackPanel({ result, before, onContinue, onSuggestion }: Feed
   const continueRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const tone = toneOf(result);
+  // The server's feedback already explains "with help" answers; don't say it twice.
+  const toneNote = tone.note && !(result.correct && !result.independent && result.feedback.trim()) ? tone.note : null;
   const note = progressNote(before, result.task);
   const suggestion = result.suggestion ? SUGGESTION_ACTIONS[result.suggestion] : undefined;
   const taskOngoing = result.task.phase !== "done";
@@ -86,7 +88,7 @@ export function FeedbackPanel({ result, before, onContinue, onSuggestion }: Feed
       </header>
 
       {result.feedback && <Markdown className="feedback__text">{result.feedback}</Markdown>}
-      {tone.note && <p className="feedback__note">{tone.note}</p>}
+      {toneNote && <p className="feedback__note">{toneNote}</p>}
 
       {showAnswer && (
         <div className="feedback__answer">

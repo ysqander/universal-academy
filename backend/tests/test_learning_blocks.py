@@ -166,7 +166,7 @@ def test_inline_check_grades_every_kind(client: TestClient, index: int, body: di
     check = BLOCKS[index]["check"]
     assert out["correct"] is correct and out["feedback"] == feedback
     assert out["explanation"] == check["explanation"]  # always shown after a readable response, right or wrong
-    expected_display = {5: "bottom-right", 7: "1. False; 2. True; 3. True", 4: "4"}.get(index, check["answer_display"])
+    expected_display = {5: "bottom-right", 7: "1 False · 2 True · 3 True", 4: "4"}.get(index, check["answer_display"])
     assert out["answer_display"] == expected_display
     nothing_recorded()  # formative: no attempt, task, XP or progress change
 
@@ -399,7 +399,7 @@ def test_lesson_with_true_false_set_questions() -> None:
 
     second = missed.task.question
     hinted = engine.submit_answer(task_id, right(second.id, hints_used=1), T0)  # with help: not independent
-    assert hinted.correct and not hinted.independent and hinted.correct_answer == "1. True; 2. False; 3. True"
+    assert hinted.correct and not hinted.independent and hinted.correct_answer == "1 True · 2 False · 3 True"
     third = hinted.task.question
     a = engine.submit_answer(task_id, right(third.id), T0)
     assert a.correct and a.independent and a.task.progress.streak == 1
@@ -438,7 +438,7 @@ def test_reveal_and_skip_on_a_true_false_set() -> None:
     task_id = engine.start_lesson(fx.sid("S1"), "test", T0)
     qid = engine.begin_practice(task_id, T0).question.id
     shown = engine.reveal(qid, T0)
-    assert shown.correct_answer == "1. False; 2. True; 3. True"
+    assert shown.correct_answer == "1 False · 2 True · 3 True"
     result = engine.submit_answer(task_id, AnswerSubmit(question_id=qid), T0)  # solution viewed, nothing submitted
     assert not result.correct and result.feedback.startswith("Solution viewed")
 
@@ -464,8 +464,8 @@ def test_review_with_true_false_set_questions(client: TestClient) -> None:
     flipped = "".join("F" if c == "T" else "T" for c in second_q["answer"])
     second = client.post(f"/api/tasks/{task_id}/answer", json={"question_id": second_q["id"], "response": flipped}).json()
     assert second["correct"] is False and second["feedback"].count("is actually") == 3
-    assert second["correct_answer"] == "; ".join(
-        f"{n}. {'True' if c == 'T' else 'False'}" for n, c in enumerate(second_q["answer"], start=1)
+    assert second["correct_answer"] == " · ".join(
+        f"{n} {'True' if c == 'T' else 'False'}" for n, c in enumerate(second_q["answer"], start=1)
     )
     third = engine.submit_answer(task_id, right(second["task"]["question"]["id"], hints_used=1), now)
     assert third.task.phase == "done"

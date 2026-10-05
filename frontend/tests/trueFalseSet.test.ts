@@ -35,7 +35,7 @@ test("a stored response decodes back to marks; anything else stays unmarked", ()
 
 test("the answer key is read from the usual ways of writing it", () => {
   const ftt = ["F", "T", "T"];
-  for (const text of ["FTT", "1. False; 2. True; 3. True", "F, T, T", "(F, T, T)", "1. F 2. T 3. T", "False, True, True", "1 — false; 2 — true; 3 — true", "**F**, **T**, **T**", "$\\text{F T T}$", "1) false\n2) true\n3) true"]) {
+  for (const text of ["FTT", "1 False · 2 True · 3 True", "1. False; 2. True; 3. True", "F, T, T", "(F, T, T)", "1. F 2. T 3. T", "False, True, True", "1 — false; 2 — true; 3 — true", "**F**, **T**, **T**", "$\\text{F T T}$", "1) false\n2) true\n3) true"]) {
     assert.deepEqual(parseTfKey(text, 3), ftt, text);
   }
 });
@@ -87,6 +87,7 @@ test("the key comes from the most authoritative source", () => {
   // a wrong answer: the grader's feedback wins over a prose answer_display
   assert.deepEqual(resolveTfKey("Only (1,9)=(9,1) is false", feedback, "TTT", false, 3), ["F", "T", "T"]);
   assert.deepEqual(resolveTfKey("1. False; 2. True; 3. True", "Not quite.", "TTT", false, 3), ["F", "T", "T"]);
+  assert.deepEqual(resolveTfKey("1 False · 2 True · 3 True", "Not quite.", "TTT", false, 3), ["F", "T", "T"]);
   // a right answer is its own key
   assert.deepEqual(resolveTfKey("prose", "Correct.", "FTT", true, 3), ["F", "T", "T"]);
   // not graded yet (a revealed solution): the answer text only

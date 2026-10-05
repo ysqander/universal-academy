@@ -540,7 +540,7 @@ def test_true_false_set_is_checkable_and_displayed() -> None:
     assert not is_checkable("true_false_set", "", None)
     assert not is_checkable("true_false_set", "3", None)
     assert not is_checkable("true_false_set", "1 0 1", None)
-    assert grading.true_false_set_display("FTT") == "1. False; 2. True; 3. True"
+    assert grading.true_false_set_display("FTT") == "1 False · 2 True · 3 True"
     assert grading.true_false_set_display("not a key") == "not a key"
     assert grading.true_false_set_request("TFTF") == "Mark every statement true or false (4 statements)."
 

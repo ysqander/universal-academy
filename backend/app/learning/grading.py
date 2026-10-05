@@ -4,7 +4,7 @@ Public interface (stable):
     check_answer(kind, *, answer, correct_choice, tolerance, response, choice, require_simplified=True) -> GradeResult
     is_checkable(kind, answer, correct_choice, choices=None) -> bool  # does the answer key parse / exist?
     parse_true_false_set(text) -> str | None                # 'T F T', 'true,false,true' ... -> 'TFT'
-    true_false_set_display(answer) -> str                   # 'FTT' -> '1. False; 2. True; 3. True'
+    true_false_set_display(answer) -> str                   # 'FTT' -> '1 False · 2 True · 3 True'
     true_false_set_request(answer) -> str                   # 'Mark every statement true or false (3 statements).'
 
 true_false_set ("mark each statement true or false"): the key is one letter per statement, in order ('FTT'). The
@@ -1201,11 +1201,11 @@ def true_false_set_request(answer: str) -> str:
 
 
 def true_false_set_display(answer: str) -> str:
-    """'FTT' -> '1. False; 2. True; 3. True' (the key as it is shown after an answer)."""
+    """'FTT' -> '1 False · 2 True · 3 True' (the key as shown after an answer; no '1.' so Markdown keeps it inline)."""
     key = parse_true_false_set(answer)
     if not key:
         return answer
-    return "; ".join(f"{k}. {'True' if mark == 'T' else 'False'}" for k, mark in enumerate(key, start=1))
+    return " · ".join(f"{k} {'True' if mark == 'T' else 'False'}" for k, mark in enumerate(key, start=1))
 
 
 def _check_true_false_set(answer: str, response: str | None) -> GradeResult:

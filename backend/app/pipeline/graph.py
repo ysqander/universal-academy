@@ -107,8 +107,12 @@ def validate_graph(draft: KnowledgeGraphDraft, *, valid_pages: set[int], figure_
     return ValidatedGraph(skills=cleaned, edges=edges, foundations=foundations, warnings=warnings)
 
 
-def learning_order(graph: nx.DiGraph, first_page: Callable[[str], int]) -> list[str]:
-    """SPEC §4.1 order: topological, ties broken by first source page, then key number, then key ('S2a' < 'S2b')."""
+def learning_order(graph: nx.DiGraph, first_page: Callable[[str], int], *, keep_key_order: bool = False) -> list[str]:
+    """SPEC §4.1 order: topological, ties broken by first source page, then key number, then key ('S2a' < 'S2b').
+    keep_key_order (stored courses, e.g. after a split): ties broken by key number first, so an existing course keeps
+    its learning order and the parts of a split skill (S2a, S2b, …) stay where the original skill was."""
+    if keep_key_order:
+        return list(nx.lexicographical_topological_sort(graph, key=lambda k: (key_number(k), first_page(k), k)))
     return list(nx.lexicographical_topological_sort(graph, key=lambda k: (first_page(k), key_number(k), k)))
 
 
@@ -134,7 +138,7 @@ def reorder_course(conn: sqlite3.Connection, course_id: str) -> list[str]:
         pages = db.loads(by_key[key]["source_pages_json"], [])
         return min(pages) if pages else 10**6
 
-    order = learning_order(graph, first_page)
+    order = learning_order(graph, first_page, keep_key_order=True)
     for index, key in enumerate(order):
         conn.execute("UPDATE skills SET order_index = ? WHERE id = ?", (index, by_key[key]["id"]))
     reduction = nx.transitive_reduction(graph)

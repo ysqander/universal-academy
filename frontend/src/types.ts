@@ -307,6 +307,7 @@ export interface TeachingBlockView {
 export interface BlockCheckRequest {
   response?: string | null; // numeric / expression / true_false_set ("TFT")
   choice?: number | null; // multiple_choice / true_false
+  version?: string | null; // Lesson.version
 }
 
 export interface BlockCheckResult {
@@ -319,6 +320,7 @@ export interface BlockCheckResult {
 export interface BlockFeedbackRequest {
   kind?: "unclear";
   note?: string;
+  version?: string | null; // Lesson.version
 }
 
 export interface Lesson {
@@ -327,6 +329,7 @@ export interface Lesson {
   title: string;
   objective: string;
   format: "v1" | "v2"; // v2 = planned teaching sequence (blocks)
+  version: string; // hash of the stored lesson; send with block checks/feedback (409 when stale)
   goal_line: string;
   blocks: TeachingBlockView[];
   assumed: string[];

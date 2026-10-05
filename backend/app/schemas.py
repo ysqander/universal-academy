@@ -272,6 +272,7 @@ class Lesson(BaseModel):
     title: str
     objective: str
     format: Literal["v1", "v2"] = "v1"  # v2 = planned teaching sequence (blocks) instead of the fixed sections
+    version: str = ""  # hash of the stored lesson; sent back with inline checks / block feedback (409 when stale)
     goal_line: str = ""  # v2
     blocks: list[TeachingBlockView] = Field(default_factory=list)  # v2
     assumed: list[str] = Field(default_factory=list)  # v2: prerequisites the lesson treats as learned
@@ -435,6 +436,7 @@ class BlockCheckRequest(BaseModel):
 
     response: str | None = None  # numeric / expression / true_false_set ('TFT')
     choice: int | None = None  # multiple_choice / true_false
+    version: str | None = None  # Lesson.version the learner is looking at; 409 when the lesson changed since
 
 
 class BlockCheckResult(BaseModel):
@@ -449,6 +451,7 @@ class BlockFeedbackRequest(BaseModel):
 
     kind: Literal["unclear"] = "unclear"
     note: str = ""
+    version: str | None = None  # Lesson.version; 409 when the lesson changed since
 
 
 class FoundationKnownRequest(BaseModel):

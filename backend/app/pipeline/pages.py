@@ -123,7 +123,7 @@ def store_page(course_id: str, parsed: ingest_parse.ParsedPage) -> None:
                     db.dumps(list(fig.bbox)),
                     fig.caption,
                     fig.description,
-                    str(fig.image_path),
+                    ingest_pdf.stored_path(fig.image_path),  # relative to the data dir
                 ),
             )
         conn.execute(

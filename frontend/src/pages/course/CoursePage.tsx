@@ -65,11 +65,13 @@ export default function CoursePage({ courseId }: { courseId: string }) {
   const graph = useResource(course.data ? `graph:${courseId}` : null, (signal) => getGraph(courseId, signal), {
     pollMs: building ? GRAPH_POLL_MS : null,
   });
+  const skillCount = graph.data?.skills.length ?? 0;
   const lessonsReady = graph.data?.skills.filter((s) => s.lesson_status === "ready").length ?? 0;
   const failedLessons = graph.data?.skills.filter((s) => s.lesson_status === "failed").length ?? 0;
-  // While building, newly written lessons change the menu; afterwards it only changes through actions.
+  // While building, the mapped skills and newly written lessons change the menu (and its "nothing to do" message);
+  // afterwards it only changes through actions.
   const next = useResource(
-    courseData ? `next:${courseId}:${building ? lessonsReady : "ready"}` : null,
+    courseData ? `next:${courseId}:${building ? `${skillCount}:${lessonsReady}` : "ready"}` : null,
     (signal) => getNext(courseId, signal),
     { keepPrevious: true },
   );
@@ -131,6 +133,15 @@ export default function CoursePage({ courseId }: { courseId: string }) {
   const options = next.data?.options ?? [];
   const graphData = graph.data;
   const hasSkills = Boolean(graphData && graphData.skills.length > 0);
+  // Nothing to start yet while the build runs: say what is happening rather than a possibly stale server message
+  // ("This course has no skills yet." from before the map existed).
+  const idleMessage = building
+    ? !hasSkills
+      ? "The chapter is still being mapped into skills — lessons follow once that's done."
+      : lessonsReady === 0
+        ? "Lessons are being written — the first one appears here as soon as it's ready."
+        : next.data?.message || "Lessons are still being generated…"
+    : next.data?.message || "Nothing to do right now.";
 
   return (
     <CourseProvider courseId={courseId} pageRange={[courseData.start_page, courseData.end_page]}>
@@ -138,6 +149,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
         <CourseHeader
           course={courseData}
           next={next.data}
+          idleMessage={idleMessage}
           onContinue={() => void continueNext()}
           continuing={pending === "continue"}
           onEditGoal={() => setGoalOpen(true)}
@@ -169,7 +181,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           ) : next.data ? (
             <div className="course-page__empty-menu">
               <Icon name={building ? "clock" : "check"} size={18} />
-              <span>{next.data.message || (building ? "Lessons are still being generated…" : "Nothing to do right now.")}</span>
+              <span>{idleMessage}</span>
             </div>
           ) : (
             <div className="skeleton course-page__menu-skeleton" />
@@ -253,11 +265,14 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           selection={selection}
           onSelect={setSelection}
           onClose={() => setSelection(null)}
+          // "Learn anyway" forces a locked skill; resuming one started that way needs no force (a 409 "locked" from an
+          // older server is retried once with force by api.startTask).
           onLearn={(skill) => void startSkill(skill.id, "lesson", { force: skill.status === "locked" })}
           onReview={(skill) => void startSkill(skill.id, "review")}
           onPreview={(skill) => setPreviewSkill(skill)}
           onFoundationChange={onFoundationChange}
           pending={pending}
+          activeTask={next.data?.task ?? null}
         />
       )}
       <LessonPreviewDialog skill={previewSkill} onClose={() => setPreviewSkill(null)} />

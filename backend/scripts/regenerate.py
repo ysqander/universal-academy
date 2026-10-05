@@ -1,20 +1,22 @@
 """Regenerate an existing course's lessons, visuals and/or verification in place, keeping the learner's progress.
 
     python scripts/regenerate.py --data-dir ../data --course <course_id> [--skills S1,S4]
-                                 [--only lessons,visuals,verify] [--dry-run] [--yes] [--no-backup]
+                                 [--only lessons,visuals,verify] [--dry-run] [--yes] [--no-backup] [--force]
 
 Use it after prompt or pipeline fixes to refresh a course that is already being studied:
 - lessons: each selected lesson is rewritten with the current prompts; the new version replaces the old one only
   if it validates (otherwise the old lesson stays). Questions the learner answered are retired (kept as flagged
-  history), never deleted; active tasks on those skills are abandoned first. Regenerated lessons also get a new
-  visual and verification.
+  history), never deleted; an active task on a regenerated skill is abandoned when its new lesson is stored.
+  Regenerated lessons also get a new visual and verification.
 - visuals / verify: redo only the visual plans / the independent verification of machine-checkable questions
-  (learner flags are never cleared).
+  (learner flags are never cleared). Questions stay servable while they are re-checked, and a visual is replaced
+  only by a successful new plan.
 Skill status, FSRS cards and XP are untouched. A consistent copy of the database is written to
 <data-dir>/backups/ first (unless --no-backup). Costs real API calls unless UA_FAKE_LLM=1.
 
-The job shows as running while this works. Do not press Resume or Delete for this course in the app meanwhile
-(stopping the server is safest).
+This is a maintenance tool: stop the app server first. It refuses to run while the app answers on
+http://127.0.0.1:8000/api/health (pass --force if that server uses another data dir). Ctrl-C is safe: every lesson
+keeps its old or its new version and the job is marked interrupted (Resume in the app finishes visuals/verification).
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ import logging
 import os
 import sqlite3
 import sys
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 PARTS = ("lessons", "visuals", "verify")
+SERVER_HEALTH_URL = "http://127.0.0.1:8000/api/health"
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="show what would be regenerated and the current quality")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     p.add_argument("--no-backup", action="store_true", help="skip the database backup")
+    p.add_argument("--force", action="store_true", help="run even though the app server answers (another data dir)")
+    p.add_argument("--server-url", default=SERVER_HEALTH_URL, help="health URL of the app server (default: %(default)s)")
     return p.parse_args()
 
 
@@ -68,6 +75,17 @@ def list_courses() -> None:
         print("No courses in", settings.data_dir)
     for r in rows:
         print(f"{r['id']}  [{r['status']}] {r['title']} — {r['book']} ({r['n']} skills)")
+
+
+def server_answers(url: str = SERVER_HEALTH_URL, timeout: float = 1.5) -> bool:
+    """True when something answers HTTP on the app's port (any status: a busy or erroring server is still running)."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
 
 
 def backup() -> Path:
@@ -98,7 +116,8 @@ def quality(course_id: str, keys: list[str]) -> None:
             if cc is not None and 0 <= cc < len(lengths) and all(lengths[cc] > n for i, n in enumerate(lengths) if i != cc):
                 longest += 1
         kps = sorted({r["kp_index"] for r in rows})
-        fr = "".join("✓" if any(r["kind"] == "free_response" for r in rows if r["kp_index"] == k) else "·" for k in kps)
+        # free-response questions per knowledge point (proof skills want 2: a second one when the first was assisted)
+        fr = "".join(str(min(9, sum(1 for r in rows if r["kp_index"] == k and r["kind"] == "free_response"))) for k in kps)
         viz = db.loads(s["viz_json"], None) or {}
         lesson = lesson_view(s["id"])
         refs = ", ".join(lesson.source_refs) if lesson else "-"
@@ -142,11 +161,17 @@ async def main() -> int:
     )["n"]
     print(f"course {course['id']} · {course['title']} · {course['status']}")
     print(f"regenerate {', '.join(sorted(parts))} for {', '.join(keys) if keys else f'all {len(skills)} skills'}")
-    print(f"learner data on these skills: {attempts} attempts (kept), {active} active task(s) (abandoned if lessons are redone)")
+    print(f"learner data on these skills: {attempts} attempts (kept), {active} active task(s) (abandoned when their lesson is replaced)")
     print("\nCurrent content:")
     quality(args.course, keys)
     if args.dry_run:
         return 0
+    if not args.force and server_answers(args.server_url):
+        print(
+            f"\nThe app server is running ({args.server_url} answers). Stop it first: this tool rewrites lessons and "
+            "questions the app may be serving. (Use --force only if that server uses a different data dir.)"
+        )
+        return 1
     if not args.yes and input("\nProceed? [y/N] ").strip().lower() not in ("y", "yes"):
         print("Cancelled.")
         return 1
@@ -173,4 +198,11 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    try:
+        sys.exit(asyncio.run(main()))
+    except KeyboardInterrupt:  # Ctrl-C cancels regenerate(), which records the interruption in the job row
+        print(
+            "\nInterrupted. Every lesson keeps its old or its new version and its questions stay servable. "
+            "Resume the course in the app (or run this again) to finish visuals and verification."
+        )
+        sys.exit(130)

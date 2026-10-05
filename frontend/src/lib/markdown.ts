@@ -5,53 +5,98 @@ const INLINE_PARENS = /(?<!\\)\\\(([\s\S]+?)(?<!\\)\\\)/g;
 const DOLLARS = /(?<!\\)\$\$/g;
 const FIGURE_PLACEHOLDER = /\[\[figure:([A-Za-z0-9_.:-]+)\]\]/g;
 // Blockquote markers / indentation in front of a line (kept on every line a display block is split into).
-const LINE_PREFIX = /^([ \t]*(?:>[ \t]?)*)(.*)$/;
-const CODE_FENCE = /^(?:[ \t]*>?[ \t]*)*(```|~~~)/;
+// Linear: each `>` iteration must consume a `>`, and `.` with the s flag lets `(.*)$` match any rest (even a stray \r).
+const LINE_PREFIX = /^([ \t]*(?:>[ \t]?)*)(.*)$/s;
+// Any mix of spaces, tabs and `>` before a fence. One character class, so a long indent can be split only one way
+// (the old `(?:[ \t]*>?[ \t]*)*` backtracked exponentially on lines of spaces: 16 spaces froze the tab for seconds).
+const CODE_FENCE = /^[ \t>]*(```|~~~)/;
+const INLINE_CODE = /`[^`\n]*`/g;
 const LOST_MATH = /(?<![\\$])\$\\\$(?=[\s.,;:)]|$)/gm;
 const UNREADABLE = "⟨?⟩";
 
 export const FIGURE_ALT_PREFIX = "figure:";
 
-const dollarPositions = (text: string): number[] => Array.from(text.matchAll(DOLLARS), (m) => m.index ?? 0);
+/** Positions of `$$` delimiters; with `skipCode`, a `$$` inside an inline code span (`` `$$` ``) is not one. */
+const dollarPositions = (text: string, skipCode = false): number[] => {
+  const scanned = skipCode && text.includes("`") ? text.replace(INLINE_CODE, (m) => "_".repeat(m.length)) : text;
+  return Array.from(scanned.matchAll(DOLLARS), (m) => m.index ?? 0);
+};
+
+const splitPrefix = (line: string): [prefix: string, rest: string] => {
+  const m = LINE_PREFIX.exec(line);
+  return m ? [m[1], m[2]] : ["", line];
+};
 
 /**
  * Puts every `$$` display fence on a line of its own (keeping the blockquote/indent prefix), so remark-math sees a
  * real display block. Transcriptions often write `$$\begin{aligned}` … `\end{aligned}$$` or `> $$x = 1.$$`;
  * remark-math treats text after an opening `$$` as fence "meta" (dropping `\begin{aligned}`) and never finds the
  * closing fence, which turns the rest of the page into one red KaTeX error.
+ *
+ * An odd `$$` opens a display only when a later line closes it: a stray or truncated `$$` in running text ("costs
+ * $$ more") stays literal text instead of swallowing every following paragraph. Runs in linear time.
  */
 function splitDisplayFences(md: string): string {
+  const lines = md.split("\n");
   const out: string[] = [];
   let inMath = false;
   let inCode = false;
-  for (const line of md.split("\n")) {
+
+  // Does a display opened just before line `from` close later? A `$$` opened mid-line must close within its
+  // paragraph (remark-math leaves an unclosed mid-line `$$` as text); a `$$` at the start of a line is a fence for
+  // remark-math anyway, so any later `$$` outside code closes it.
+  const closesLater = (from: number, withinParagraph: boolean): boolean => {
+    let code = false;
+    for (let j = from; j < lines.length; j++) {
+      if (CODE_FENCE.test(lines[j])) {
+        if (withinParagraph) return false;
+        code = !code;
+        continue;
+      }
+      if (code) continue;
+      const rest = splitPrefix(lines[j])[1];
+      if (withinParagraph && !rest.trim()) return false;
+      if (dollarPositions(rest, true).length) return true;
+    }
+    return false;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (!inMath && CODE_FENCE.test(line)) {
       inCode = !inCode;
       out.push(line);
       continue;
     }
-    const positions = inCode ? [] : dollarPositions(line);
+    if (inCode || !line.includes("$$")) {
+      out.push(line);
+      continue;
+    }
+    const [prefix, rest] = splitPrefix(line);
+    const positions = dollarPositions(rest, !inMath);
     if (positions.length === 0) {
       out.push(line);
       continue;
     }
-    const [, prefix, rest] = LINE_PREFIX.exec(line) ?? ["", "", line];
-    const restPositions = dollarPositions(rest);
     if (!inMath) {
       const trimmed = rest.trim();
       // `$$…$$` alone on a line → a display block (inline `$$` would otherwise render inline).
-      if (restPositions.length === 2 && trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4) {
+      if (positions.length === 2 && trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4) {
         out.push(`${prefix}$$`, `${prefix}${trimmed.slice(2, -2).trim()}`, `${prefix}$$`);
         continue;
       }
       // Balanced `$$` pairs inside running text stay inline.
-      if (restPositions.length % 2 === 0) {
+      if (positions.length % 2 === 0) {
         out.push(line);
         continue;
       }
-      // An odd count opens a display block on this line: split at the last `$$`.
-      const at = restPositions[restPositions.length - 1];
+      // An odd count opens a display block on this line: split at the last `$$` — if something closes it.
+      const at = positions[positions.length - 1];
       const before = rest.slice(0, at).trimEnd();
+      if (!closesLater(i + 1, before.trim() !== "")) {
+        out.push(line); // stray / truncated `$$`: literal text, as remark-math would read it
+        continue;
+      }
       const after = rest.slice(at + 2).trim();
       if (before.trim()) out.push(`${prefix}${before}`);
       out.push(`${prefix}$$`);
@@ -60,13 +105,14 @@ function splitDisplayFences(md: string): string {
       continue;
     }
     // Inside a display block: the first `$$` closes it.
-    const at = restPositions[0];
+    const at = positions[0];
     const before = rest.slice(0, at).trimEnd();
     const after = rest.slice(at + 2).trim();
     if (before.trim()) out.push(`${prefix}${before}`);
     out.push(`${prefix}$$`);
     inMath = false;
-    if (after) out.push(...splitDisplayFences(`${prefix}${after}`).split("\n"));
+    // Text after the closing fence ("$$ and then $$" …) is processed as the next line, against the real lines below.
+    if (after) lines.splice(i + 1, 0, `${prefix}${after}`);
   }
   return out.join("\n");
 }

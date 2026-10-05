@@ -8,6 +8,7 @@ npm install
 npm run dev      # http://localhost:5173, proxies /api → http://127.0.0.1:8000
 npm run build    # tsc (strict) + vite build → dist/, which FastAPI serves in production
 npm run lint     # oxlint
+npm test         # node --test tests/*.test.ts (Markdown/TeX normaliser, map viewport; Node >= 23)
 ```
 
 `UA_API_TARGET=http://127.0.0.1:9000 npm run dev` points the dev proxy at another backend.
@@ -31,3 +32,5 @@ npm run lint     # oxlint
 - Reading text is serif (Source Serif 4), UI is sans (Instrument Sans); KaTeX is pinned to the 0.16 line that `rehype-katex` renders with, so its CSS matches.
 - Keyboard in practice: `1`–`5` choose, `H` next hint, `Enter` check / continue, `⌘/Ctrl+Enter` for free responses.
 - Free-response flow: after the learner commits a written answer the UI calls `POST /api/questions/{qid}/reveal` to show the model solution and checklist, then submits the self-grade with `revealed_solution: false` (only an explicit "Show solution" before answering sends `true`).
+- The server owns per-attempt state: a question card starts from `QuestionPublic.hints_used` / `revealed` / `committed_response` (a reload reopens hints, a shown solution, or the committed answer in self-grading mode), and "Give me an easier step" is shown only when `TaskProgress.easier_available`.
+- `GET /api/health` is fetched once per page load (`useHealth`); the picker's page limit comes from `Health.max_course_pages`.

@@ -16,12 +16,17 @@ This mirrors complex-number texts (z = a + bi with a, b real) and lets |z|^2 and
 Indexed names are canonical: x1, x_1, x_{1} and x₁ are the same symbol x_1.
 
 Letter runs: 'xy' is x*y, glued function names are peeled off ('sinx' -> sin(x), 'xsin(x)' -> x*sin(x)),
-'re'/'im'/'arg' are functions only when called ('re^(iθ)' is r·e^(iθ)), and an ASCII Greek name typed by the
+'re'/'im'/'arg' are functions only when applied to something ('re z', 'arg(z)'; but 're^(iθ)' is r·e^(iθ)), \\Re,
+\\Im and \\arg are always functions, and an ASCII Greek name typed by the
 learner ('xi', 'eta', 'nu' ...) is kept whole only if the answer key uses that letter ('2xi' is 2·x·i).
 
 require_simplified (learner path): when the expected answer is a numeric constant in reduced form and the
 response has the same value but is not reduced (e.g. '(2+3i)(4+5i)' for -7+22i, '3+4-2i', '(1+2, 3)'), the
 result is invalid ("Same value — now simplify it …"): the learner is asked again and nothing is recorded.
+A linear combination of lists ('(-5, 5, 2) + 4(1, 5, -4)') is read componentwise, so retyping a vector question's
+own expression gets the same "simplify" message; any other arithmetic on lists asks for the resulting list.
+An irreducible radical typed in its textbook form (∛4, \\sqrt[4]{8}) counts as reduced even though SymPy rewrites it
+onto a smaller base (2^(2/3), 2^(3/4)).
 """
 
 from __future__ import annotations
@@ -121,8 +126,8 @@ _SUPERSCRIPTS = {
 _SUBSCRIPT_DIGITS = {chr(0x2080 + d): str(d) for d in range(10)}
 
 _LATEX_SYMBOLS = {
-    "cdot": "*", "times": "*", "ast": "*", "div": "/", "pi": "pi", "lambda": "lamda", "Re": "re", "Im": "im",
-    "sin": "sin", "cos": "cos", "tan": "tan", "ln": "ln", "log": "log", "exp": "exp", "arg": "arg",
+    "cdot": "*", "times": "*", "ast": "*", "div": "/", "pi": "pi", "lambda": "lamda", "Re": "Re", "Im": "Im",
+    "sin": "sin", "cos": "cos", "tan": "tan", "ln": "ln", "log": "log", "exp": "exp", "arg": "Arg",
     "arcsin": "asin", "arccos": "acos", "arctan": "atan", "sinh": "sinh", "cosh": "cosh", "tanh": "tanh",
     "lvert": "|", "rvert": "|", "vert": "|", "mid": "|", "lVert": "|", "rVert": "|",
     "varepsilon": "epsilon", "varphi": "phi", "vartheta": "theta", "imath": "i",
@@ -139,7 +144,7 @@ _FUNCTIONS: dict[str, object] = {
     "sin": sp.sin, "cos": sp.cos, "tan": sp.tan, "asin": sp.asin, "acos": sp.acos, "atan": sp.atan,
     "arcsin": sp.asin, "arccos": sp.acos, "arctan": sp.atan, "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
     "abs": sp.Abs, "Abs": sp.Abs, "conj": sp.conjugate, "conjugate": sp.conjugate, "bar": sp.conjugate,
-    "re": sp.re, "Re": sp.re, "im": sp.im, "Im": sp.im, "arg": sp.arg,
+    "re": sp.re, "Re": sp.re, "im": sp.im, "Im": sp.im, "arg": sp.arg, "Arg": sp.arg,
 }  # fmt: skip
 _CONSTANTS: dict[str, object] = {"i": sp.I, "j": sp.I, "I": sp.I, "e": sp.E, "E": sp.E, "pi": sp.pi}
 _RESERVED = {"Symbol", "Integer", "Float", "Rational", "Number", "Add", "Mul", "Pow"}
@@ -321,7 +326,9 @@ def _star_unknown_calls(s: str) -> str:
 
 
 _TOKEN = re.compile(r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|[A-Za-z_][A-Za-z0-9_]*")
-_INDEXED_WORD = re.compile(r"(?:[A-Za-z]+(?:_?\d+)?)+")
+# letters, then (index, letters)*, then an optional index: unambiguous, so matching is linear (no nested
+# quantifiers: a letter run ending in "_" must not backtrack exponentially).
+_INDEXED_WORD = re.compile(r"[A-Za-z]+(?:_?\d+[A-Za-z]+)*(?:_?\d+)?")
 
 
 def _peel(word: str, call: bool, keep_greek: frozenset[str], peel: tuple[str, ...]) -> list[str]:
@@ -356,7 +363,10 @@ def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
             return tok  # a number
         if iskeyword(tok):
             raise AnswerParseError(f"Unexpected word: {tok}")
-        call = s[m.end() :].lstrip().startswith("(")
+        rest = s[m.end() :].lstrip()
+        call = rest.startswith("(")
+        if tok in _PAREN_ONLY and rest[:1] and (rest[0].isalnum() or rest[0] in "(_."):
+            call = True  # 'arg z', 're z', 'im z_1', 'arg |z|' (-> ' Abs(') are applications; 're**(it)' is not
         if "_" not in tok and not any(c.isdigit() for c in tok):
             return " ".join(_peel(tok, call, keep_greek, peel))
         if not _INDEXED_WORD.fullmatch(tok):
@@ -490,8 +500,79 @@ def _parse_structure(s: str, depth: int = 0) -> Node:
     parts = _split_top(s)
     if len(parts) > 1:
         return Node("tuple", items=[_parse_structure(p, depth + 1) for p in parts])
+    if "," in s:
+        combined = _parse_list_arithmetic(s)
+        if combined is not None:
+            return combined
     expr, raw = _parse_scalar(s)
     return Node("scalar", expr=expr, raw=raw)
+
+
+LIST_ARITHMETIC = "Enter the resulting list itself — work out each component first."
+_LIST_PLACEHOLDER = "listarg"
+_MAX_LIST_TERMS = 8
+
+
+def _tuple_groups(s: str) -> list[tuple[int, int, list[str]]]:
+    """Bracketed flat lists inside a scalar-looking string: [(open, close, components)]. A group that is a
+    function's argument list ('root(8, 3)') is not a list; a list nested in a list raises."""
+    groups: list[tuple[int, int, list[str]]] = []
+    k = 0
+    while k < len(s):
+        if s[k] not in "([":
+            k += 1
+            continue
+        close = _matching_close(s, k)
+        if close < 0:
+            raise AnswerParseError("Unbalanced brackets.")
+        parts = _split_top(s[k + 1 : close])
+        before = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", s[:k])
+        if len(parts) < 2 or (before and before.group(1) in _FUNCTIONS):
+            k += 1  # not a list: look inside it
+            continue
+        if any("," in p or "[" in p for p in parts):
+            raise AnswerParseError(LIST_ARITHMETIC)
+        groups.append((k, close, parts))
+        k = close + 1
+    return groups
+
+
+def _parse_list_arithmetic(s: str) -> Node | None:
+    """'(-5, 5, 2) + 4(1, 5, -4)' -> the list of component expressions ('(-5)+4(1)', ...), so the value can be
+    checked (and an unsimplified form gets the D3 'simplify' message). Only linear combinations of lists of the
+    same length are read this way; other arithmetic on lists is unreadable. None if `s` contains no list."""
+    groups = _tuple_groups(s)
+    if not groups:
+        return None
+    sizes = {len(parts) for _, _, parts in groups}
+    if len(sizes) != 1 or len(groups) > _MAX_LIST_TERMS:
+        raise AnswerParseError(LIST_ARITHMETIC)
+
+    def substitute(pick) -> str:
+        out, last = [], 0
+        for j, (start, close, parts) in enumerate(groups):
+            out.append(s[last:start])
+            out.append(f"({pick(j, parts)})")
+            last = close + 1
+        out.append(s[last:])
+        return "".join(out)
+
+    names = [_LIST_PLACEHOLDER + chr(ord("a") + j) for j in range(len(groups))]
+    try:
+        shape, _ = _parse_scalar(substitute(lambda j, parts: names[j]))
+        placeholders = [sym for sym in shape.free_symbols if sym.name in names]
+        poly = sp.Poly(shape, *placeholders) if placeholders and shape.is_polynomial(*placeholders) else None
+    except AnswerParseError:
+        raise AnswerParseError(LIST_ARITHMETIC) from None
+    except Exception:  # SymPy: not a polynomial in the placeholders
+        poly = None
+    if poly is None or not all(sum(m) == 1 for m in poly.monoms()):
+        raise AnswerParseError(LIST_ARITHMETIC)  # e.g. (1, 2)(3, 4), |(1, 2)|, 1 + (2, 3)
+    items = []
+    for k in range(next(iter(sizes))):
+        expr, raw = _parse_scalar(substitute(lambda j, parts: parts[k]))
+        items.append(Node("scalar", expr=expr, raw=raw))
+    return Node("tuple", items=items)
 
 
 _ALLOWED = re.compile(r"^[A-Za-z0-9_+\-*/(). ]*$")
@@ -835,7 +916,18 @@ def _literal_factor(f: sp.Basic) -> bool:
         if not (base.is_positive and (base.is_Integer or _is_reduced_number(f.base, real_only=True))):
             return False
         value = sp.Pow(base, exp)
-        return isinstance(value, sp.Pow) and value.base == base and value.exp == exp
+        if isinstance(value, sp.Pow) and value.base == base and value.exp == exp:
+            return True
+        # SymPy rewrites an irreducible radical onto a smaller base (4**(1/3) -> 2**(2/3), 8**(1/4) -> 2**(3/4),
+        # 12**(1/3) -> 2**(2/3)*3**(1/3)). That is still reduced when nothing was pulled out of the root
+        # (sqrt(8) -> 2*sqrt(2)) and the root index did not shrink (4**(1/4) -> sqrt(2), 36**(1/4) -> sqrt(6)).
+        if base.is_Integer and base > 1 and 0 < exp < 1:
+            coeff, rest = value.as_coeff_Mul()
+            parts = rest.args if isinstance(rest, sp.Mul) else (rest,)
+            return coeff == 1 and all(
+                isinstance(p, sp.Pow) and p.base.is_Integer and p.exp.is_Rational and p.exp.q == exp.q for p in parts
+            )
+        return False
     if isinstance(f, sp.exp):
         return _literal_factor(sp.Pow(sp.E, f.args[0], evaluate=False))
     if isinstance(f, _TRANSCENDENTAL) and len(f.args) == 1:

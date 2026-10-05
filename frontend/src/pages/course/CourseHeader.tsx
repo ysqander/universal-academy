@@ -11,17 +11,21 @@ import type { Course, NextTaskResponse } from "../../types";
 interface CourseHeaderProps {
   course: Course;
   next: NextTaskResponse | undefined;
+  /** Shown under "Continue learning" when there is nothing to start (no active task, empty menu). */
+  idleMessage: string;
   onContinue: () => void;
   continuing: boolean;
   onEditGoal: () => void;
 }
 
-export function CourseHeader({ course, next, onContinue, continuing, onEditGoal }: CourseHeaderProps) {
+export function CourseHeader({ course, next, idleMessage, onContinue, continuing, onEditGoal }: CourseHeaderProps) {
   const { stats } = course;
   const [expanded, setExpanded] = useState(false);
-  const xpToday = next?.session.xp_today ?? stats.xp_today;
-  const goal = next?.session.daily_goal ?? stats.daily_goal;
-  const goalReached = next?.session.goal_reached ?? xpToday >= goal;
+  // The daily goal counts XP across all courses: only the session total (from /next) is shown against it, never the
+  // per-course stats.xp_today (which would flip from "0/30" to "8/30" once /next arrives).
+  const session = next?.session;
+  const goal = session?.daily_goal ?? stats.daily_goal;
+  const goalReached = session?.goal_reached ?? false;
   const active = next?.task ?? null;
   const top = next?.options[0];
   const canContinue = Boolean(active || top);
@@ -78,7 +82,7 @@ export function CourseHeader({ course, next, onContinue, continuing, onEditGoal 
             onClick={onEditGoal}
             title="Change your daily goal"
           >
-            <Icon name="spark" size={14} /> {xpToday}/{goal} XP today
+            <Icon name="spark" size={14} /> {session ? session.xp_today : "–"}/{goal} XP today
           </button>
           {stats.streak_days > 0 && (
             <span className="chip">
@@ -109,7 +113,7 @@ export function CourseHeader({ course, next, onContinue, continuing, onEditGoal 
           ) : top ? (
             top.reason
           ) : next ? (
-            next.message || "Nothing to do right now."
+            idleMessage
           ) : (
             "Finding your next step…"
           )}

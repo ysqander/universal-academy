@@ -30,15 +30,9 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
   const explainerRef = useRef<HTMLDetailsElement>(null);
   const [explainer, setExplainer] = useState<{ kp: number; open: boolean } | null>(null);
   const explainerOpen = explainer && explainer.kp === progress.kp_index ? explainer.open : progress.kp_questions_used <= 1;
-  // An easier step is offered only after a miss in the current knowledge point (the server enforces it too).
-  const [missedIn, setMissedIn] = useState<string | null>(null);
-  const kpKey = `${task.id}:${progress.kp_index}`;
-  const easierAllowed = task.type === "lesson" && missedIn === kpKey;
-
-  const answered = (result: AnswerResult) => {
-    if (task.type === "lesson" && !result.correct && result.status !== "voided") setMissedIn(kpKey);
-    onAnswered(result);
-  };
+  // The server decides whether POST /easier would succeed now (a miss in this knowledge point that wasn't voided,
+  // and a strictly easier unseen question left), so the button survives reloads and never leads to a 409.
+  const easierAllowed = task.type === "lesson" && Boolean(progress.easier_available);
 
   const openExplainer = () => {
     setExplainer({ kp: progress.kp_index, open: true });
@@ -106,7 +100,7 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
           task={task}
           question={question}
           position={position}
-          onAnswered={answered}
+          onAnswered={onAnswered}
           onContinue={(result) => onAdvance(result.task)}
           onSuggestion={onSuggestion}
           onEasier={easierAllowed ? easier : null}

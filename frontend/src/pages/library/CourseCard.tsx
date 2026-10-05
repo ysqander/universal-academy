@@ -65,9 +65,12 @@ export function CourseCard({ course }: { course: CourseSummary }) {
             <Icon name="review" size={14} /> {plural(stats.due_reviews, "review")} due
           </span>
         )}
-        <span className="chip" title="Experience points today (1 XP ≈ 1 focused minute)">
-          <Icon name="spark" size={14} /> {stats.xp_today}/{stats.daily_goal} XP today
-        </span>
+        {/* Per-course XP: the daily goal counts every course, so it is not shown against the goal here. */}
+        {stats.xp_today > 0 && (
+          <span className="chip" title="XP earned in this course today (1 XP ≈ 1 focused minute; the daily goal counts all courses)">
+            <Icon name="spark" size={14} /> {stats.xp_today} XP here today
+          </span>
+        )}
         {stats.streak_days > 1 && (
           <span className="chip">
             <Icon name="flame" size={14} /> {stats.streak_days}-day streak

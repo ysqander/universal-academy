@@ -1,8 +1,15 @@
 .toaster {
   position: fixed;
   z-index: 1000;
-  right: var(--space-4);
-  bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  inset: auto var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom)) auto;
+  /* Reset the UA popover box (centred, bordered, opaque): the toaster is a transparent stack in the corner. */
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  height: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -77,6 +84,10 @@
     opacity: 0;
     transform: translateY(8px);
   }
+}
+
+.toaster::backdrop {
+  display: none;
 }
 
 @media (max-width: 699px) {

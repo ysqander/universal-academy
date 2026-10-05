@@ -3,17 +3,25 @@
 A task's mutable state lives in tasks.state_json:
 
 lesson  {"kp_total", "kp", "playable": [kp...], "current", "served": [qid...],
-         "revealed", "hints", "compared",       # per current question: see _set_current
+         "revealed", "hints", "compared", "compared_raw",  # per current question: see _set_current
          "slots": {"<kp>": [qid...]},          # questions counted toward that KP's 5-question limit
          "easier": [qid...],                   # questions swapped in by the easier step (scaffolding)
          "log": [{"q", "kp", "res", "void", "scaffold"}],  # kp = the question's own KP; res: correct | assisted | wrong
-         "wrong_run", "self_grades": {qid: grade}, "fail": {...} | None, "result": {...}}
-review  {"set": [qid...], "pos", "current", "revealed", "hints", "compared", "served",
+         "wrong_run", "self_grades": {qid: grade}, "proof_waived": [kp...], "fail": {...} | None, "result": {...}}
+review  {"set": [qid...], "pos", "current", "revealed", "hints", "compared", "compared_raw", "served",
          "log": [{"q", "res", "credit", "void"}], "self_grades", "result": {..., "fire": [implicit events]}}
 
 Per current question the server records whether the solution was revealed before an answer was committed
 ("revealed"), how many hints were shown ("hints"), and — for free response — the answer the learner committed
-before comparing it with the model solution ("compared"). A reload cannot erase any of these.
+before comparing it with the model solution ("compared", whitespace-normalized; "compared_raw" as typed). A reload
+cannot erase any of these, and build_task hands them back to the client (QuestionPublic.hints_used / revealed /
+committed_response) so a reload restores the card.
+
+Written proofs (E1): a knowledge point whose pool has a free-response question needs one independent, self-graded
+"correct" written answer. A written answer that was assisted, too short or self-graded partial/incorrect never fails
+the KP by itself: another unseen written question of the KP is served if there is one; otherwise the requirement is
+waived for this KP (it passes on the plain two-in-a-row rule), and a lesson passed with a waived proof gets the
+initial FSRS rating Hard (an earlier first review, which includes a written question).
 
 Every mutating function takes an explicit `now` and serializes through `lock` (single-process app; SQLite
 writes are short and each step is a handful of statements). Grading an answer (SymPy, bounded by its own time
@@ -163,6 +171,7 @@ def _set_current(st: dict[str, Any], qid: str | None) -> None:
     st["revealed"] = False
     st["hints"] = 0
     st["compared"] = None
+    st["compared_raw"] = None
 
 
 def _answer_display(q: dict[str, Any]) -> str:
@@ -249,10 +258,26 @@ def _kp_free_response(skill_id: str, kp: int) -> set[str]:
     return {q["id"] for q in _questions(skill_id) if q["kp_index"] == kp and not q["flagged"] and q["kind"] == "free_response"}
 
 
-def _proof_pending(st: dict[str, Any], skill_id: str, kp: int) -> bool:
-    """A KP whose pool has a free-response question also needs one independent, self-graded correct one (D4)."""
+def _proof_state(st: dict[str, Any], skill_id: str, kp: int) -> str:
+    """The written-proof requirement of a KP (E1):
+    'none'    no (unflagged) free-response question in the KP's pool
+    'done'    an independent, self-graded correct written answer in this task
+    'waived'  written answers were given, none of them independent and correct, and no written question is left
+    'pending' still needed (a written question is current or still unserved)"""
     fr = _kp_free_response(skill_id, kp)
-    return bool(fr) and not any(e["q"] in fr and e["res"] == "correct" for e in _kp_entries(st, kp))
+    if not fr:
+        return "none"
+    answered = [e for e in _kp_entries(st, kp) if e["q"] in fr]
+    if any(e["res"] == "correct" for e in answered):
+        return "done"
+    served = set(st["served"])
+    if answered and st.get("current") not in fr and all(qid in served for qid in fr):
+        return "waived"
+    return "pending"
+
+
+def _proof_pending(st: dict[str, Any], skill_id: str, kp: int) -> bool:
+    return _proof_state(st, skill_id, kp) == "pending"
 
 
 def _kp_passed(st: dict[str, Any], skill_id: str, kp: int) -> bool:
@@ -281,11 +306,14 @@ def _progress_view(task: dict[str, Any], st: dict[str, Any], skill_id: str) -> T
     streak = min(_kp_streak(st, kp), NEEDED_IN_ROW)
     if not passed and _proof_pending(st, skill_id, kp):
         streak = min(streak, NEEDED_IN_ROW - 1)  # one more (the written answer) is still needed
+    ongoing = task["status"] == "active" and task["phase"] == "practice"
+    kp_wrong = sum(1 for e in _kp_entries(st, kp) if e["res"] == "wrong") if ongoing else 0
     return TaskProgress(
         kp_index=kp, kp_total=kp_total,
         streak=NEEDED_IN_ROW if passed else streak,
         needed_in_row=NEEDED_IN_ROW, kp_questions_used=len(st["slots"].get(str(kp), [])),
         kp_questions_available=min(pool, MAX_KP_QUESTIONS), answered=answered, correct=correct, total_questions=0,
+        kp_wrong=kp_wrong, easier_available=ongoing and _easier_blocker(st, skill_id) is None,
     )  # fmt: skip
 
 
@@ -296,8 +324,11 @@ def build_task(task: dict[str, Any]) -> Task:
     if task["status"] == "active" and st.get("current"):
         qrow = db.query_one("SELECT * FROM questions WHERE id = ?", (st["current"],))
         question = views.question_public(qrow) if qrow else None
-        if question is not None:
+        if question is not None:  # the server's record of the current attempt (E3): a reload restores it
             question.hints_used = min(len(question.hints), int(st.get("hints") or 0))
+            question.revealed = bool(st.get("revealed"))
+            if question.kind == "free_response" and st.get("compared") is not None:
+                question.committed_response = st.get("compared_raw") or st["compared"]
     if task["status"] == "completed":
         xp_value = task["xp_awarded"]
     elif task["type"] == "lesson":
@@ -386,21 +417,55 @@ def _start_lesson(skill_id: str, reason: str, now: datetime, st: dict[str, Any] 
     task_id = _insert_task(skill["course_id"], skill_id, "lesson", "learn", reason, st, now)
     progress = _progress_row(skill)
     if progress["status"] not in scheduler.LEARNED:
+        # A lesson started on a locked skill ("Learn anyway") stays locked until its prerequisites are learned (the
+        # menu never offers it); lesson_attempts > 0 lets the learner resume or restart it without forcing again.
+        locked = bool(skill_state.unmet_prerequisites(skill["course_id"], skill_id))
         db.execute(
-            "UPDATE progress SET status = 'in_progress', lesson_attempts = lesson_attempts + 1, updated_at = ? WHERE skill_id = ?",
-            (scheduler.iso(now), skill_id),
+            "UPDATE progress SET status = ?, lesson_attempts = lesson_attempts + 1, updated_at = ? WHERE skill_id = ?",
+            ("locked" if locked else "in_progress", scheduler.iso(now), skill_id),
         )
     log.info("started lesson task %s for skill %s (%s)", task_id, skill["key"], reason)
     return task_id
 
 
+def _is_proof_skill(skill: dict[str, Any]) -> bool:
+    try:
+        from ..pipeline.lessons import is_proof_skill
+    except ImportError:  # pragma: no cover - the pipeline is part of the app
+        return skill.get("kind") == "proof"
+    return is_proof_skill(skill)
+
+
+def _review_written_question(skill_id: str, pool: list[dict[str, Any]], answered: dict[str, str]) -> dict[str, Any] | None:
+    """The written question a proof skill's review includes: one never answered independently and correctly first
+    (a proof waived in the lesson comes back here), then never-answered ones, then the least recently answered."""
+    written = [q for q in pool if q["kind"] == "free_response"]
+    if not written:
+        return None
+    solid = {
+        r["question_id"]
+        for r in db.query(
+            "SELECT DISTINCT question_id FROM attempts WHERE skill_id = ? AND independent = 1 AND correct = 1 AND status != 'voided'",
+            (skill_id,),
+        )
+    }
+    written.sort(key=lambda q: (q["id"] in solid, q["id"] not in answered, answered.get(q["id"], "")))
+    return written[0]
+
+
 def _review_set(skill_id: str) -> list[str]:
-    """One question per knowledge point where possible: never answered first, then least recently answered."""
+    """One question per knowledge point where possible: never answered first, then least recently answered.
+    A proof skill's review includes one written (free-response) question when it has one (E1)."""
     answered = _answered_ids(skill_id)
     pool = [q for q in _questions(skill_id) if not q["flagged"]]
     pool.sort(key=lambda q: (q["id"] in answered, answered.get(q["id"], "")))  # stable: pool order breaks ties
     chosen: list[dict[str, Any]] = []
-    for kp in sorted({q["kp_index"] for q in pool}):
+    written = _review_written_question(skill_id, pool, answered) if _is_proof_skill(_skill_row(skill_id)) else None
+    if written is not None:
+        chosen.append(written)
+        # one written answer per review is enough: the rest of the set prefers questions that are checked
+        pool = [q for q in pool if q["kind"] != "free_response"] + [q for q in pool if q["kind"] == "free_response"]
+    for kp in sorted({q["kp_index"] for q in pool} - {q["kp_index"] for q in chosen}):
         best = next((q for q in pool if q["kp_index"] == kp), None)
         if best and len(chosen) < REVIEW_SIZE:
             chosen.append(best)
@@ -513,6 +578,8 @@ def _lesson_progress(
     """After an answer (or a voided one): pass the KP, fail the lesson, or serve the next question."""
     kp = st["kp"]
     if _kp_passed(st, skill["id"], kp):
+        if _proof_state(st, skill["id"], kp) == "waived" and kp not in st.setdefault("proof_waived", []):
+            st["proof_waived"].append(kp)  # passed on two in a row without an unaided written proof (E1)
         later = [k for k in st["playable"] if k > kp]
         st["wrong_run"] = 0
         if later:
@@ -532,23 +599,31 @@ def _lesson_progress(
     return None
 
 
+PROOF_WAIVED_TEXT = (
+    "A written proof in this lesson isn't secure yet, so it comes back in your first review — "
+    "scheduled a little sooner than usual."
+)
+
+
 def _finish_lesson_pass(task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime) -> _Finish:
     wrong = sum(1 for e in _live(st) if e["res"] == "wrong")
     amount = xp.lesson_xp(skill["est_minutes"], wrong)
-    _, log_id = scheduler.apply_rating(skill["course_id"], skill["id"], Rating.Good, now)
+    waived = bool(st.get("proof_waived"))
+    # E1: a lesson passed without an unaided written proof starts with Hard (an earlier first review) instead of Good
+    _, log_id = scheduler.apply_rating(skill["course_id"], skill["id"], Rating.Hard if waived else Rating.Good, now)
     db.execute(
         "UPDATE progress SET lesson_passed_at = ?, cooldown_until = NULL, updated_at = ? WHERE skill_id = ?",
         (scheduler.iso(now), scheduler.iso(now), skill["id"]),
     )
     st["kp"] = st["kp_total"]
-    st["result"] = {"review_log_id": log_id, "wrong": wrong}
+    st["result"] = {"review_log_id": log_id, "wrong": wrong, "proof_waived": waived}
     _complete(task, st, "passed", amount, now)
     xp.award(skill["course_id"], task["id"], amount, now)
     scheduler.apply_success_credit(skill["course_id"], skill["id"], now)
     scheduler.clear_remedial(target=skill["id"])
     skill_state.recompute_unlocks(skill["course_id"])
-    log.info("lesson passed: skill %s, %d XP", skill["key"], amount)
-    return _Finish(xp=amount)
+    log.info("lesson passed: skill %s, %d XP%s", skill["key"], amount, " (written proof waived: Hard)" if waived else "")
+    return _Finish(xp=amount, suggestion_text=PROOF_WAIVED_TEXT if waived else None)
 
 
 def _finish_lesson_fail(
@@ -628,6 +703,22 @@ def _easier_candidate(skill_id: str, st: dict[str, Any]) -> dict[str, Any] | Non
     return min(pool, key=lambda pq: (pq[1]["tier"], pq[1]["kp_index"] != kp, pq[1]["id"] in answered, pq[0]))[1]
 
 
+def _easier_blocker(st: dict[str, Any], skill_id: str) -> str | None:
+    """Why POST /easier would be refused right now (None: it would succeed). The task must be an ongoing lesson."""
+    if not st.get("current"):
+        return "There is no current lesson question to swap."
+    if not any(e["res"] == "wrong" for e in _kp_entries(st, st["kp"])):
+        return "Try this question first."
+    if _needed_written_question(st, skill_id):
+        return (
+            "This written answer is needed to finish the step, so it can't be swapped for an easier question. "
+            "Re-read the worked example — or use a hint: it won't count as a miss."
+        )
+    if _easier_candidate(skill_id, st) is None:
+        return "No easier question is left in this lesson — try a hint or show the solution."
+    return None
+
+
 def easier_step(task_id: str, now: datetime) -> Task:
     with lock:
         task = _task_row(task_id)
@@ -636,13 +727,11 @@ def easier_step(task_id: str, now: datetime) -> Task:
             raise Conflict("An easier step is only available during a lesson.")
         if task["status"] != "active" or task["phase"] != "practice" or not st.get("current"):
             raise Conflict("There is no current lesson question to swap.")
-        if not any(e["res"] == "wrong" for e in _kp_entries(st, st["kp"])):
-            raise Conflict("Try this question first.")
-        if _needed_written_question(st, task["skill_id"]):
-            raise Conflict("This written answer is needed to finish the step — try a hint, or compare with the model solution.")
+        blocker = _easier_blocker(st, task["skill_id"])
+        if blocker is not None:
+            raise Conflict(blocker)
         candidate = _easier_candidate(task["skill_id"], st)
-        if candidate is None:
-            raise Conflict("No easier question is left in this lesson — try a hint or show the solution.")
+        assert candidate is not None
         slot = st["slots"].setdefault(str(st["kp"]), [])
         if st["current"] in slot:
             slot.remove(st["current"])
@@ -726,7 +815,7 @@ def _finish_review(task: dict[str, Any], st: dict[str, Any], skill: dict[str, An
 _SELF_GRADE_FEEDBACK = {
     "correct": "Self-assessed as correct.",
     "partial": "Self-assessed as partly correct — it counts as a miss for passing, and it's logged.",
-    "incorrect": "Self-assessed as incorrect. Study the model solution, then try the next one.",
+    "incorrect": "Self-assessed as incorrect. Study the model solution.",
 }
 
 
@@ -769,7 +858,8 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
         if compared is not None and (sub.response or "").strip() and _norm_text(sub.response) != compared:
             revealed = True  # the answer was changed after seeing the model solution
         correct = sub.self_grade == "correct"
-        independent = correct and hints == 0 and not revealed
+        too_short = len(re.sub(r"\s", "", sub.response or "")) < COMPARE_MIN_CHARS  # not a written answer (E1)
+        independent = correct and hints == 0 and not revealed and not too_short
         res = "correct" if independent else ("assisted" if correct else "wrong")
         return _Graded(correct, "self_graded", independent, _SELF_GRADE_FEEDBACK[sub.self_grade], res, sub.response or "", revealed, hints)
     if check is None:
@@ -786,8 +876,14 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
     return _Graded(correct, "correct" if correct else "incorrect", independent, feedback, res, response, revealed, hints)
 
 
-def _assisted_note(task_type: str, revealed: bool) -> str:
+def _assisted_note(task_type: str, revealed: bool, *, lesson_paused: bool = False, helped: bool = True) -> str:
+    if not helped:  # a self-graded written answer too short to count (no hint, no reveal)
+        if task_type == "lesson":
+            return " It's too short to count as a written answer, so it doesn't count toward the two in a row."
+        return " It's too short to count as a written answer, so half credit."
     if task_type == "lesson":
+        if lesson_paused:  # never "it isn't a miss" next to "this lesson pauses here"
+            return " With help, so it doesn't count toward the two in a row."
         return " With help, so it doesn't count toward the two in a row — but it isn't a miss."
     return " The solution was shown first, so no credit." if revealed else " With hints, so half credit."
 
@@ -827,8 +923,6 @@ def submit_answer(task_id: str, sub: AnswerSubmit, now: datetime) -> AnswerResul
         q = _question_row(sub.question_id)
         skill = _skill_row(task["skill_id"])
         graded = _grade(q, sub, st, check)
-        if graded.res == "assisted":
-            graded.feedback += _assisted_note(task["type"], graded.revealed)
         _record_attempt(task, q, graded, sub, now)
         if q["kind"] == "free_response" and sub.self_grade:
             st["self_grades"][q["id"]] = sub.self_grade
@@ -836,11 +930,18 @@ def submit_answer(task_id: str, sub: AnswerSubmit, now: datetime) -> AnswerResul
         finish = (_after_lesson_answer if task["type"] == "lesson" else _after_review_answer)(task, st, skill, q, graded, now)
         if task["status"] == "active":
             _save_state(task_id, st)
+        feedback = graded.feedback
+        if graded.res == "assisted":
+            feedback += _assisted_note(
+                task["type"], graded.revealed, lesson_paused=task["outcome"] == "failed", helped=graded.revealed or graded.hints > 0
+            )
+        if q["kind"] == "free_response" and sub.self_grade == "incorrect" and task["status"] == "active":
+            feedback = feedback.rstrip(".") + ", then try the next one."
         return AnswerResult(
             correct=graded.correct,
             status=graded.status,
             independent=graded.independent,
-            feedback=graded.feedback + finish.note,
+            feedback=feedback + finish.note,
             correct_answer=_answer_display(q),
             correct_choice=q["correct_choice"] if _is_choice(q) else None,
             solution=q["solution"],
@@ -865,8 +966,17 @@ def _after_lesson_answer(
     note = ""
     if st["kp"] == kp and _kp_streak(st, kp) >= NEEDED_IN_ROW and _proof_pending(st, skill["id"], kp):
         note = " That's two in a row — to finish this step, also answer one written question in your own words."
+    elif q["kind"] == "free_response" and g.res != "correct" and st["kp"] == q["kp_index"] == kp:
+        proof = _proof_state(st, skill["id"], kp)
+        if proof == "pending":
+            note = " This step still needs one written answer without help — another written question comes up soon."
+        elif proof == "waived":
+            note = (
+                " No other written question is left in this step, so it can still pass on two in a row — "
+                "the proof comes back in your first review."
+            )
     if st["wrong_run"] >= EASIER_AFTER_WRONG:
-        if _easier_candidate(skill["id"], st) is not None:
+        if _easier_blocker(st, skill["id"]) is None:  # the same test as TaskProgress.easier_available
             return _Finish(
                 suggestion="easier_step",
                 suggestion_text="Two misses in a row. Take an easier step: re-read the worked example, then try a simpler question.",
@@ -941,6 +1051,7 @@ def reveal(question_id: str, now: datetime, response: str | None = None) -> Reve
                 continue  # already revealed, or the answer was committed before (a later reveal changes nothing)
             if committed:
                 st["compared"] = _norm_text(response)
+                st["compared_raw"] = (response or "").strip()[:4000]
                 log.info("task %s: free-response answer committed and compared for question %s", task["id"], q["key"])
             else:
                 st["revealed"] = True

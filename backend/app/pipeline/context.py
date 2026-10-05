@@ -8,6 +8,7 @@ from typing import Any
 
 from .. import db, llm
 from ..config import settings
+from ..ingest.pdf import book_pdf_path
 from ..views import label_of
 from .tracker import JobTracker
 
@@ -47,6 +48,7 @@ class BuildContext:
     course: CourseInfo
     tracker: JobTracker
     usage: llm.Usage
+    abandoned_tasks: int = 0  # active tasks closed because their lesson was replaced (regeneration)
 
     def cost(self, *roles: str) -> float:
         return sum(self.usage.by_role.get(role, 0.0) for role in roles)
@@ -72,7 +74,7 @@ def load_course(course_id: str) -> CourseInfo:
         start_page=row["start_page"],
         end_page=row["end_page"],
         sections=db.loads(row["sections_json"], []),
-        pdf_path=Path(row["pdf_path"]),
+        pdf_path=book_pdf_path(row["book_id"], row["pdf_path"]),  # follows a moved data dir
         labels=db.loads(row["page_labels_json"], []),
     )
 

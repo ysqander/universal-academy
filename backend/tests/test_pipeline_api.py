@@ -170,3 +170,44 @@ def test_more_questions_reports_llm_failures_as_502(client, tmp_path, monkeypatc
     monkeypatch.setattr(courses, "top_up_questions", broken)
     r = client.post(f"/api/skills/{skill}/more-questions")
     assert r.status_code == 502 and "Could not generate questions" in r.json()["detail"]
+
+
+def test_a_moved_data_dir_keeps_courses_working(client, tmp_path):
+    """#32: rows store paths relative to the data dir; the book PDF and figures are found by id after a move."""
+    import shutil
+
+    from app.config import settings
+    from app.pipeline.context import course_dir
+
+    with open(make_tiny_pdf(tmp_path / "tiny.pdf"), "rb") as fh:
+        book_id = client.post("/api/books", files={"file": ("tiny.pdf", fh, "application/pdf")}).json()["id"]
+    cid = client.post("/api/courses", json={"book_id": book_id, "title": "", "start_page": 0, "end_page": 2}).json()["id"]
+    assert wait_for_job(client, cid).state == "done"
+    stored_pdf = db.query_one("SELECT pdf_path FROM books WHERE id = ?", (book_id,))["pdf_path"]
+    figure = db.query_one("SELECT id, image_path FROM figures WHERE course_id = ?", (cid,))
+    assert stored_pdf == f"books/{book_id}/book.pdf" and not figure["image_path"].startswith("/")
+    fid = figure["id"].removeprefix(f"{cid}-")
+
+    old, new = settings.data_dir, tmp_path / "moved"
+    shutil.copytree(old, new)
+    shutil.rmtree(old)
+    object.__setattr__(settings, "data_dir", new)
+    db._initialized_for = None
+    assert client.get(f"/api/courses/{cid}/figures/{fid}.png").status_code == 200
+    assert client.get(f"/api/books/{book_id}/pages/0.png").status_code == 200
+
+    # rows written by older versions hold absolute paths into the old location: still found by id
+    db.execute("UPDATE books SET pdf_path = ? WHERE id = ?", (str(old / "books" / book_id / "book.pdf"), book_id))
+    db.execute("UPDATE figures SET image_path = ? WHERE id = ?", (str(old / "courses" / cid / "figures" / f"{fid}.png"), figure["id"]))
+    assert client.get(f"/api/courses/{cid}/figures/{fid}.png").status_code == 200
+
+    # a new course on the same book builds; a course whose pages must be read again resumes
+    other = client.post("/api/courses", json={"book_id": book_id, "title": "", "start_page": 0, "end_page": 1}).json()["id"]
+    assert wait_for_job(client, other).state == "done"
+    db.execute("DELETE FROM pages WHERE course_id = ?", (cid,))
+    shutil.rmtree(course_dir(cid) / "pages")
+    assert client.post(f"/api/courses/{cid}/resume").status_code == 200
+    job = wait_for_job(client, cid)
+    assert job.state == "done", job.error
+    assert db.query_one("SELECT COUNT(*) AS n FROM pages WHERE course_id = ?", (cid,))["n"] == 3
+    assert client.get(f"/api/courses/{cid}/figures/{fid}.png").status_code == 200

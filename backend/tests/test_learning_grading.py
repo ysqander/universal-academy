@@ -203,6 +203,18 @@ UNSIMPLIFIED = [
     ("2*sqrt(2)", "sqrt(8)", "simplify"),
     ("sqrt(6)", "sqrt(2)*sqrt(3)", "simplify"),
     ("pi/4", "atan(1)", "simplify"),
+    # radicals: a root index that shrinks or a factor that can be pulled out is not reduced
+    ("sqrt(2)", "\\sqrt[4]{4}", "simplify"),
+    ("2*2^(1/3)", "∛16", "simplify"),
+    ("2*2^(1/3)", "4^(2/3)", "simplify"),
+    ("sqrt(6)", "36^(1/4)", "simplify"),
+    ("2*3^(2/3)", "∛72", "simplify"),
+    ("3*sqrt(3)", "9^(3/4)", "simplify"),
+    ("2^(2/3)", "2^(1/3)*2^(1/3)", "simplify"),
+    # QA: arithmetic on lists (the question's own expression) gets the simplify message, not a parse error
+    ("(-1, 25, -14)", "(-5, 5, 2)+4(1, 5, -4)", "each component"),
+    ("(4, 6)", "[1, 2] + [3, 4]", "each component"),
+    ("(1/2, 1)", "(1, 2)/2", "each component"),
 ]
 
 
@@ -240,6 +252,17 @@ REDUCED = [
     ("{1+i, 1-i}", "{1-i, 1+i}"),
     ("e^(i*pi/4)", "sqrt(2)/2 + sqrt(2)/2 i"),  # the key itself is not reduced: any equivalent form is fine
     ("exp(i*pi/2)", "i"),
+    # QA: SymPy moves an irreducible radical to a smaller base (4^(1/3) -> 2^(2/3)); the textbook form is reduced
+    ("2^(2/3)", "∛4"),
+    ("2^(2/3)", "\\sqrt[3]{4}"),
+    ("2^(2/3)", "4^(1/3)"),
+    ("2^(2/3)", "cbrt(4)"),
+    ("3^(2/3)", "∛9"),
+    ("5^(2/3)", "∛25"),
+    ("2^(3/4)", "\\sqrt[4]{8}"),
+    ("2^(3/4)", "8^(1/4)"),
+    ("1/2^(2/3)", "1/∛4"),
+    ("12^(1/3)", "∛12"),
 ]
 
 
@@ -307,6 +330,22 @@ READS = [
     ("sin(x)^2", "sin^2(x)"),
     ("re(z)", "re(z)"),
     ("re(z)", "Re(z)"),
+    # QA: re / im / arg applied without parentheses are functions ('re^(it)' above is still r·e^(it))
+    ("arg(z)", "arg z"),
+    ("arg(z)", "Arg z"),
+    ("arg(z)", "\\arg z"),
+    ("re(z)", "re z"),
+    ("re(z)", "\\Re z"),
+    ("im(z)", "im z"),
+    ("im(z)", "\\Im z"),
+    ("arg(z_1)+arg(z_2)", "arg z_1 + arg z_2"),
+    ("abs(z)*cos(arg(z))", "|z|cos(arg z)"),
+    ("abs(z)*exp(i*arg(z))", "|z|e^(i arg z)"),
+    ("abs(z)*exp(i*arg(z))", "|z|e^{i\\arg z}"),
+    # ... and on the answer-key side
+    ("\\Re z", "re(z)"),
+    ("\\arg z", "arg(z)"),
+    ("\\Im(z)", "im z"),
 ]
 
 
@@ -314,6 +353,44 @@ READS = [
 def test_notation_is_read_as_intended(answer: str, response: str) -> None:
     result = grade(answer, response)
     assert result.correct and not result.invalid, (answer, response, result.feedback)
+
+
+def test_trailing_re_is_still_r_times_e() -> None:
+    assert grade("r*e", "re").correct
+    assert not grade("re(z)", "re").correct
+
+
+@pytest.mark.parametrize(
+    "response,expected",
+    [("(1, 2)(3, 4)", "(3, 8)"), ("1 + (2, 3)", "(3, 4)"), ("|(1, 2)|", "(1, 2)"), ("(1, 2) + (1, 1, 1)", "(2, 3)")],
+)
+def test_other_list_arithmetic_asks_for_the_resulting_list(response: str, expected: str) -> None:
+    result = grade(expected, response)
+    assert result.invalid and not result.correct
+    assert result.feedback.startswith(grading.LIST_ARITHMETIC), result.feedback
+
+
+def test_list_arithmetic_is_graded_by_value() -> None:
+    wrong = grade("(-1, 25, -14)", "(-5, 5, 2)+4(1, 5, 4)")
+    assert not wrong.correct and not wrong.invalid and "Component 3" in wrong.feedback
+    assert grade("(2*a, 2*b)", "a(2, 0) + b(0, 2)").correct
+    assert grade("(-1, 25, -14)", "(-5, 5, 2)+4(1, 5, -4)", require_simplified=False).correct
+    assert "Unexpected character" in grade("2", "root(8, 3)").feedback  # a function's arguments are not a list
+
+
+def test_indexed_word_matching_is_linear() -> None:
+    """QA: the old pattern (?:[A-Za-z]+(?:_?\\d+)?)+ backtracked exponentially on a letter run ending in '_'."""
+    for token in ("a" * 60 + "_", "ab" * 30 + "_", "a1" * 30 + "_"):
+        start = time.perf_counter()
+        assert grading._INDEXED_WORD.fullmatch(token) is None
+        assert time.perf_counter() - start < 0.05
+    start = time.perf_counter()
+    normalize("x" * 60 + "_")
+    assert time.perf_counter() - start < 0.05
+    for ok in ("a_1v_1", "x1x2", "theta1", "ab1", "sin2x", "x_12y_3", "sqrt2"):
+        assert grading._INDEXED_WORD.fullmatch(ok), ok
+    for bad in ("x_1_2", "v_k", "x_", "x1_", "x__1", "_x"):
+        assert not grading._INDEXED_WORD.fullmatch(bad), bad
 
 
 def test_still_wrong_after_canonicalization() -> None:

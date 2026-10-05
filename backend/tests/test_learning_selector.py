@@ -226,3 +226,33 @@ def test_stale_locked_status_does_not_block_manual_start() -> None:
     db.execute("UPDATE progress SET status = 'locked' WHERE skill_id = ?", (fx.sid("S3"),))
     task = selector.start_task(fx.course_id, fx.sid("S3"), None, T0)
     assert task.type == "lesson" and task.skill.key == "S3"
+
+
+def test_learn_anyway_skill_stays_locked_off_the_menu_and_resumes_without_force() -> None:
+    """E2: a lesson started with force on a locked skill can be resumed or restarted without force; the menu never
+    offers a locked skill."""
+    fx = build_course()
+    task = selector.start_task(fx.course_id, fx.sid("S3"), "lesson", T0, force=True)
+    assert status(fx.sid("S3")) == "locked"  # still locked: S1 and S2 are not learned
+    # the drawer's / menu's buttons don't send force for it any more: resuming the open task works
+    assert selector.start_task(fx.course_id, fx.sid("S3"), "lesson", T0).id == task.id
+    assert selector.start_task(fx.course_id, fx.sid("S3"), None, T0).id == task.id
+    assert selector.continue_task(fx.course_id, T0).id == task.id
+    engine.abandon(task.id, T0)
+    assert ("S3", "lesson") not in menu(fx.course_id, T0)
+    assert selector.continue_task(fx.course_id, T0).skill.key == "S1"  # the top option, never the locked skill
+    restarted = selector.start_task(fx.course_id, fx.sid("S3"), None, T0 + timedelta(minutes=1), replace_active=True)
+    assert restarted.type == "lesson" and restarted.skill.key == "S3" and restarted.id != task.id
+    assert status(fx.sid("S3")) == "locked"
+    # a skill never started still needs force
+    with pytest.raises(engine.Conflict, match="S4 is locked"):
+        selector.start_task(fx.course_id, fx.sid("S4"), "lesson", T0, replace_active=True)
+
+
+def test_menu_never_offers_a_locked_skill_even_with_a_stale_status() -> None:
+    fx = build_course()
+    db.execute("UPDATE progress SET status = 'in_progress', lesson_attempts = 1 WHERE skill_id = ?", (fx.sid("S3"),))
+    assert ("S3", "lesson") not in menu(fx.course_id, T0)
+    learn(fx, "S1", T0)
+    learn(fx, "S2", T0)
+    assert ("S3", "lesson") in menu(fx.course_id, T0)

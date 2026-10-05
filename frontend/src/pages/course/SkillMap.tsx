@@ -17,7 +17,7 @@ import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
 import { kindLabel, STATUS_LABEL } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
-import { FOUNDATION_H, FOUNDATION_W, foundationNodeId, layoutGraph, NODE_H, NODE_W, type Bounds } from "../../lib/graphLayout";
+import { FOUNDATION_H, FOUNDATION_W, foundationNodeId, initialViewport, layoutGraph, NODE_H, NODE_W, type Bounds } from "../../lib/graphLayout";
 import type { CourseGraph, FoundationNode, SkillNode } from "../../types";
 import type { GraphSelection } from "./selection";
 import "./SkillMap.css";
@@ -99,30 +99,29 @@ function LaneNodeView({ data }: NodeProps<LaneFlowNode>) {
 
 const NODE_TYPES = { skill: SkillNodeView, foundation: FoundationNodeView, lane: LaneNodeView };
 
-const PADDING = 24;
-/** Below this zoom node titles stop being readable; tall graphs are then shown from the top instead. */
-const READABLE_ZOOM = 0.72;
-
 /**
- * Initial viewport: fit the whole graph when that keeps it readable, otherwise fit the width (up to READABLE_ZOOM)
- * and anchor the top, where the learner starts. Re-applied when the set of nodes changes, and when the pane is
- * resized (window resize, iPad rotation) as long as the learner hasn't panned or zoomed — polling never undoes
- * their view. The Controls' fit button still shows everything.
+ * Applies the initial viewport (see initialViewport: readable zoom, top anchored, first skill centred on narrow
+ * panes). Re-applied when the set of nodes changes, and when the pane is resized (window resize, iPad rotation) as
+ * long as the learner hasn't panned or zoomed — polling never undoes their view. The Controls' fit button still shows
+ * everything.
  */
 interface InitialViewportProps {
   signature: string;
   bounds: Bounds;
+  /** The box to centre horizontally when the graph doesn't fit the pane's width (the first skill). */
+  focus: Bounds;
   /** Whether the learner has panned/zoomed since the last fit; `reset` marks a fresh fit. */
   userMoved: (reset?: boolean) => boolean;
 }
 
-function InitialViewport({ signature, bounds, userMoved }: InitialViewportProps) {
+function InitialViewport({ signature, bounds, focus, userMoved }: InitialViewportProps) {
   const { setViewport } = useReactFlow();
   // React Flow measures its pane with a ResizeObserver; these update on every container resize.
   const width = useStore((s) => s.width);
   const height = useStore((s) => s.height);
   const applied = useRef<{ signature: string; width: number; height: number } | null>(null);
   const { x: bx, y: by, width: bw, height: bh } = bounds;
+  const { x: fx, width: fw } = focus;
 
   useEffect(() => {
     if (!width || !height) return;
@@ -133,13 +132,9 @@ function InitialViewport({ signature, bounds, userMoved }: InitialViewportProps)
     }
     applied.current = { signature, width, height };
     userMoved(true);
-    const fitAll = Math.min((width - 2 * PADDING) / bw, (height - 2 * PADDING) / bh);
-    const fitWidth = (width - 2 * PADDING) / bw;
-    const zoom = Math.min(1, fitAll >= READABLE_ZOOM ? fitAll : Math.max(fitAll, Math.min(READABLE_ZOOM, fitWidth)));
-    const x = (width - bw * zoom) / 2 - bx * zoom;
-    const y = bh * zoom <= height - 2 * PADDING ? (height - bh * zoom) / 2 - by * zoom : PADDING - by * zoom;
-    void setViewport({ x, y, zoom }, { duration: 200 });
-  }, [signature, width, height, bx, by, bw, bh, setViewport, userMoved]);
+    const graphBounds = { x: bx, y: by, width: bw, height: bh };
+    void setViewport(initialViewport(width, height, graphBounds, { x: fx, y: by, width: fw, height: bh }), { duration: 200 });
+  }, [signature, width, height, bx, by, bw, bh, fx, fw, setViewport, userMoved]);
   return null;
 }
 
@@ -233,6 +228,9 @@ export function SkillMap({ graph, selection, onSelect }: SkillMapProps) {
   });
 
   const signature = `${graph.skills.length}:${graph.foundations.length}`;
+  // layout.skills follows order_index: the first entry is where a learner starts.
+  const first = layout.skills[0];
+  const focus: Bounds = first ? { x: first.x, y: first.y, width: NODE_W, height: NODE_H } : layout.bounds;
   const interacted = useRef(false);
   const userMoved = useCallback((reset = false) => {
     const moved = interacted.current;
@@ -270,7 +268,7 @@ export function SkillMap({ graph, selection, onSelect }: SkillMapProps) {
         aria-label="Knowledge graph"
       >
         <Controls showInteractive={false} position="top-right" />
-        <InitialViewport signature={signature} bounds={layout.bounds} userMoved={userMoved} />
+        <InitialViewport signature={signature} bounds={layout.bounds} focus={focus} userMoved={userMoved} />
       </ReactFlow>
     </div>
   );

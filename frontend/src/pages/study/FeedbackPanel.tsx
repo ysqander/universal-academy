@@ -24,13 +24,18 @@ function toneOf(result: AnswerResult): Tone {
     return { tone: "neutral", icon: "flag", title: "Not counted", note: "This question was set aside and doesn't affect your progress." };
   }
   if (result.correct) {
+    // Never "it isn't wrong" next to "this lesson pauses here": when the task just ended without passing, only
+    // say why the answer didn't count (E1 — keep the copy consistent).
+    const paused = result.task.phase === "done" && result.task.outcome === "failed";
     return result.independent
       ? { tone: "correct", icon: "check", title: "Correct", note: null }
       : {
           tone: "correct",
           icon: "check",
           title: "Correct — with help",
-          note: "Answers after a hint or the solution don't count toward two in a row, but they aren't wrong either.",
+          note: paused
+            ? "Answers after a hint or the solution don't count toward two in a row."
+            : "Answers after a hint or the solution don't count toward two in a row, but they aren't wrong either.",
         };
   }
   if (result.status === "self_graded") {

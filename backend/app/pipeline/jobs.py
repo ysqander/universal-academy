@@ -8,7 +8,8 @@ Public interface:
                                               (+ their visuals/verification) of a ready course
     get_job(course_id) -> JobStatus | None
     is_building(course_id) -> bool
-    mark_interrupted_jobs() -> int            on startup: running/queued → interrupted
+    mark_interrupted_jobs() -> int            on startup: running/queued → interrupted (+ stale verification holds
+                                              released, see topup.release_stale_holds)
     await shutdown()                          on server shutdown: cancel builds/top-ups, mark them interrupted
     delete_course(course_id)                  rows + files; RuntimeError while building
 
@@ -169,6 +170,11 @@ def mark_interrupted_jobs(
         count += 1
     if count:
         log.info("marked %d unfinished build(s) as interrupted", count)
+    if only is None and not force:  # startup: questions an interrupted top-up (or regeneration) left held
+        try:
+            topup.release_stale_holds()
+        except Exception:  # noqa: BLE001 — never block the start over this
+            log.exception("releasing stale verification holds failed")
     return count
 
 

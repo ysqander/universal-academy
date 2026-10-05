@@ -446,14 +446,50 @@ def _proof_question(key: str) -> QuestionDraft:
     )
 
 
+def _proof_variant(key: str, statement: str, steps: str, checklist: list[str]) -> QuestionDraft:
+    """A second written proof for a knowledge point of a proof skill (served when the first one was assisted)."""
+    return _question(
+        key=key,
+        tier=3,
+        kind="free_response",
+        prompt=f"Prove that {statement}, starting from the definitions.",
+        answer_display="See the model proof.",
+        hints=["Take arbitrary elements and write them out.", "Apply the definition of the operation.", steps],
+        solution=steps,
+        checklist=checklist,
+        targets="a second proof from the definition (variant)",
+        source_exercise=None,
+    )
+
+
 def _lesson(text: str, _prefix: str) -> LessonDraft:
     key, title = _skill_from(text)
     seed = _seed(key, title)
     proof = bool(_PROOF_RE.search(text))
     figures = [fid for fid, _ in _FIGURE_RE.findall(text)]
     first_kp = _kp_complex(seed)
-    if proof:  # proof skills: every knowledge point carries a free-response proof, served as its 2nd question
+    second_kp = _kp_vectors(seed)
+    if proof:  # proof skills: every knowledge point carries a free-response proof as q2 and a variant as q4
         first_kp.questions.insert(1, _proof_question("k1q5"))
+        first_kp.questions.insert(
+            3,
+            _proof_variant(
+                "k1q6",
+                "$\\alpha+\\beta=\\beta+\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$",
+                "With $\\alpha=a+bi$, $\\beta=c+di$: $\\alpha+\\beta=(a+c)+(b+d)i=(c+a)+(d+b)i=\\beta+\\alpha$ by "
+                "commutativity of real addition.",
+                ["Takes arbitrary $\\alpha=a+bi$ and $\\beta=c+di$", "Uses the definition of addition", "Cites commutativity in $\\mathbf{R}$"],
+            ),
+        )
+        proof_q = next(q for q in second_kp.questions if q.kind == "free_response")
+        others = [q for q in second_kp.questions if q is not proof_q]
+        variant = _proof_variant(
+            "k2q6",
+            "$(x+y)+z=x+(y+z)$ for all $x,y,z\\in\\mathbf{F}^n$",
+            "Coordinatewise, $((x+y)+z)_k=(x_k+y_k)+z_k=x_k+(y_k+z_k)=(x+(y+z))_k$ by associativity in $\\mathbf{F}$.",
+            ["Takes arbitrary lists $x,y,z$", "Works coordinate by coordinate", "Cites associativity in $\\mathbf{F}$"],
+        )
+        second_kp.questions = [others[0], proof_q, others[1], variant, *others[2:]]
     figure_line = f"\n\n[[figure:{figures[0]}]]" if figures else ""
     return LessonDraft(
         why_it_matters=(
@@ -472,7 +508,7 @@ def _lesson(text: str, _prefix: str) -> LessonDraft:
             NotationItem(symbol="$\\mathbf{C}$", meaning="the set of complex numbers"),
             NotationItem(symbol="$\\mathbf{F}^n$", meaning="lists of length $n$ with entries in $\\mathbf{F}$"),
         ],
-        knowledge_points=[first_kp, _kp_vectors(seed)],
+        knowledge_points=[first_kp, second_kp],
         missing_steps=(
             "Why $i^2=-1$ follows from the definition: $(0+1i)(0+1i)=(0\\cdot0-1\\cdot1)+(0\\cdot1+1\\cdot0)i=-1$."
         ),

@@ -2,6 +2,7 @@
 
     await top_up_questions(skill_id, kp_index=None, n=3) -> int     # generate, validate, insert held, verify, release
     request_top_up(skill_id, kp_index=None) -> None                 # fire-and-forget with in-flight dedup
+    release_stale_holds(skill_ids=None) -> int                      # holds left by an interrupted top-up → servable
 
 New machine-checkable questions are inserted flagged 'verification: pending', so they are never served before the
 verifier has checked them; verification then writes the final flag (a failed verification call releases the
@@ -15,6 +16,8 @@ import asyncio
 import logging
 import re
 import threading
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -44,6 +47,9 @@ class TopUpUnavailable(LookupError):
 
 _kp_locks: dict[tuple[str, int], tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 _kp_locks_guard = threading.Lock()
+_running: Counter[str] = Counter()  # skill id → top-ups executing in this process (their held rows are not stale)
+_running_guard = threading.Lock()
+STALE_HOLD_S = 600.0  # a held question this old has outlived any top-up (another process may run one meanwhile)
 
 
 def _kp_lock(skill_id: str, kp: int) -> asyncio.Lock:
@@ -71,10 +77,16 @@ async def top_up_questions(skill_id: str, kp_index: int | None = None, n: int = 
     n = max(1, min(MAX_NEW, n))
     usage = llm.current_usage.get()
     token = llm.current_usage.set(llm.Usage()) if usage is None else None
+    with _running_guard:
+        _running[skill_id] += 1
     try:
         async with _kp_lock(skill_id, kp):
             added = await _top_up(skill, lesson, kp, n)
     finally:
+        with _running_guard:
+            _running[skill_id] -= 1
+            if _running[skill_id] <= 0:
+                del _running[skill_id]
         if token is not None:
             spent = llm.current_usage.get()
             llm.current_usage.reset(token)
@@ -141,6 +153,32 @@ async def _top_up(skill: dict[str, Any], lesson: dict[str, Any], kp: int, n: int
     for note in keep_kps_servable(skill_id):
         log.info("top-up %s: %s", skill["key"], note)
     log.info("top-up %s KP %d: added %d questions", skill["key"], kp + 1, len(ids))
+    return len(ids)
+
+
+def release_stale_holds(skill_ids: list[str] | None = None, *, older_than_s: float = STALE_HOLD_S) -> int:
+    """Questions left held as 'verification: pending' without a verdict — by a top-up that was interrupted (server
+    stopped) or by an older version of the regeneration tool — become servable unverified, as when a verification call
+    fails; the next resume verifies them. Holds of top-ups running in this process, and recent ones (a top-up in
+    another process), are kept. `skill_ids=None`: every course. Returns the number of questions released."""
+    cutoff = (datetime.now(UTC) - timedelta(seconds=older_than_s)).isoformat(timespec="seconds")
+    with _running_guard:
+        busy = set(_running)
+    sql = "SELECT id, skill_id FROM questions WHERE flagged = 1 AND flag_reason = ? AND verify_json = '{}' AND created_at <= ?"
+    params: list[Any] = [PENDING_REASON, cutoff]
+    if skill_ids is not None:
+        if not skill_ids:
+            return 0
+        sql += f" AND skill_id IN ({','.join('?' * len(skill_ids))})"
+        params += skill_ids
+    ids = [r["id"] for r in db.query(sql, tuple(params)) if r["skill_id"] not in busy]
+    for qid in ids:
+        db.execute(
+            "UPDATE questions SET flagged = 0, flag_reason = '' WHERE id = ? AND flag_reason = ? AND verify_json = '{}'",
+            (qid, PENDING_REASON),
+        )
+    if ids:
+        log.info("released %d question(s) left held for verification", len(ids))
     return len(ids)
 
 
@@ -257,7 +295,8 @@ def _spawn(key: tuple[str, int | None]) -> None:
 
 async def shutdown(timeout: float = 5.0) -> None:
     """Server shutdown: cancel background top-ups of this loop. Questions still held as 'verification: pending' stay
-    out of serving; the next build/resume or top-up verifies them."""
+    out of serving until a resume or a later top-up of their knowledge point verifies them, or release_stale_holds
+    (next server start) releases them."""
     tasks = [t for t in _tasks if not t.done()]
     for task in tasks:
         task.cancel()

@@ -10,10 +10,11 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 
 from .. import db, llm
+from ..ingest.pdf import resolve_stored
 from ..learning.state import skill_states
 from ..learning.stats import compute_stats
 from ..pipeline import jobs
-from ..pipeline.context import figure_db_id
+from ..pipeline.context import course_dir, figure_db_id, figure_local_id
 from ..pipeline.topup import TopUpUnavailable, top_up_questions
 from ..schemas import (
     Course,
@@ -216,11 +217,23 @@ def set_foundation_known(cid: str, key: str, req: FoundationKnownRequest) -> Fou
 @router.get("/api/courses/{cid}/figures/{fid}.png", response_class=FileResponse)
 def get_figure(cid: str, fid: str) -> FileResponse:
     row = db.query_one(
-        "SELECT image_path FROM figures WHERE course_id = ? AND id IN (?, ?)", (cid, fid, figure_db_id(cid, fid))
+        "SELECT id, image_path FROM figures WHERE course_id = ? AND id IN (?, ?)", (cid, fid, figure_db_id(cid, fid))
     )
-    if row is None or not Path(row["image_path"]).is_file():
+    if row is None:
         raise HTTPException(404, f"Figure {fid} not found")
-    return FileResponse(row["image_path"], media_type="image/png")
+    path = figure_file(cid, row["id"], row["image_path"])
+    if path is None:
+        raise HTTPException(404, f"Figure {fid} not found")
+    return FileResponse(path, media_type="image/png")
+
+
+def figure_file(course_id: str, figure_id: str, stored: str) -> Path | None:
+    """The cropped figure: in the course dir (data/courses/<cid>/figures/<local id>.png, so a moved data dir keeps
+    working), else at the stored path (relative to the data dir; older rows hold an absolute path)."""
+    for path in (course_dir(course_id) / "figures" / f"{figure_local_id(course_id, figure_id)}.png", resolve_stored(stored)):
+        if path.is_file():
+            return path
+    return None
 
 
 @router.get("/api/courses/{cid}/source/{page}", response_model=SourcePage)

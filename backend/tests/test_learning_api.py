@@ -174,3 +174,27 @@ def test_unsimplified_answer_is_asked_again_over_http(client: TestClient) -> Non
     assert not db.query("SELECT 1 FROM attempts WHERE task_id = ?", (task["id"],))
     ok = client.post(f"/api/tasks/{task['id']}/answer", json={"question_id": qid, "response": "101"}).json()
     assert ok["correct"] and ok["independent"]
+
+
+def test_learn_anyway_then_resume_without_force_and_reload_restores_state(client: TestClient) -> None:
+    """E2 + E3 over HTTP: the drawer's 'Continue lesson' (no force) on a force-started locked skill is not a 409,
+    and a reload hands back the hints shown, the reveal and the easier-step availability."""
+    fx = build_course()
+    cid = fx.course_id
+    forced = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S3"), "force": True}).json()
+    resumed = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S3")})
+    assert resumed.status_code == 200 and resumed.json()["id"] == forced["id"]
+    assert all(o["skill"]["key"] != "S3" for o in client.get(f"/api/courses/{cid}/next").json()["options"])
+
+    task = client.post(f"/api/tasks/{forced['id']}/practice").json()
+    assert task["progress"]["kp_wrong"] == 0 and task["progress"]["easier_available"] is False
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"], correct=False)).json()
+    qid = result["task"]["question"]["id"]
+    assert client.post(f"/api/questions/{qid}/hint").json()["hints_used"] == 1
+    client.post(f"/api/questions/{qid}/reveal", json={})
+    reloaded = client.get(f"/api/tasks/{task['id']}").json()
+    assert reloaded["question"]["id"] == qid
+    assert reloaded["question"]["hints_used"] == 1 and reloaded["question"]["revealed"] is True
+    assert reloaded["question"]["committed_response"] is None
+    assert reloaded["progress"]["kp_wrong"] == 1
+    assert reloaded["progress"]["easier_available"] is False  # the current question is tier 1: nothing easier

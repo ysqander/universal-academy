@@ -376,8 +376,22 @@ def test_free_response_revealed_review_gets_no_credit() -> None:
     assert st["log"][0]["credit"] == 0.0
 
 
-def test_proof_kp_serves_free_response_by_second_question_and_requires_it() -> None:
-    """D4: a KP whose pool has a free-response question needs one independent self-graded correct one."""
+def _lesson_rating(skill_id: str) -> int:
+    row = db.query_one("SELECT rating FROM review_log WHERE skill_id = ? AND implicit = 0 ORDER BY created_at, rowid", (skill_id,))
+    return row["rating"]
+
+
+def _finish_lesson(task_id: str, task):
+    result = None
+    while task.phase != "done":
+        result = engine.submit_answer(task_id, right(task.question.id), T0)
+        task = result.task
+    return result
+
+
+def test_proof_kp_serves_free_response_by_second_question_and_waives_it_after_a_miss() -> None:
+    """E1: a KP's only written question self-graded 'incorrect' no longer fails the lesson: the requirement is
+    waived, the KP passes on two in a row, and the lesson starts with an earlier first review (Hard)."""
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     _make_free_response(kp0[3])  # last in pool order
@@ -386,8 +400,94 @@ def test_proof_kp_serves_free_response_by_second_question_and_requires_it() -> N
     assert first.task.question.id == kp0[3]  # served no later than the KP's 2nd question
     assert first.task.progress.streak == 1
     miss = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[3], response=PROOF, self_grade="incorrect"), T0)
-    # no written question left in the KP: two in a row can no longer pass it
-    assert miss.task.outcome == "failed"
+    assert miss.task.phase == "practice" and miss.task.outcome is None  # not failed: 3 of 5 questions are left
+    assert miss.task.progress.streak == 0 and "then try the next one" in miss.feedback
+    assert "can still pass on two in a row" in miss.feedback and "first review" in miss.feedback
+    task = engine.submit_answer(task_id, right(miss.task.question.id), T0).task
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.progress.kp_index == 1  # passed on the plain two-in-a-row rule
+    done = _finish_lesson(task_id, task)
+    assert done.task.outcome == "passed" and done.suggestion is None
+    assert done.suggestion_text == engine.PROOF_WAIVED_TEXT
+    assert _lesson_rating(fx.sid("S1")) == 2  # Hard: an earlier first review
+    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
+    assert st["proof_waived"] == [0] and st["result"]["proof_waived"] is True
+    progress = db.query_one("SELECT * FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
+    assert db.loads(progress["kp_failures_json"], {}) == {}
+
+
+@pytest.mark.parametrize("how", ["hint", "reveal", "short", "partial"])
+def test_written_answer_with_help_never_fails_the_lesson(how: str) -> None:
+    """E1 (QA): a hint, 'Show solution', a too-short committed answer or 'Partly' on the KP's only written question
+    used to end the lesson at question 2 of 5 while the feedback said 'it isn't a miss'."""
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    _make_free_response(kp0[1])  # the KP's only written question, served 2nd
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.question.id == kp0[1]
+    grade = "partial" if how == "partial" else "correct"
+    if how == "hint":
+        engine.hint(kp0[1], T0)
+    elif how == "reveal":
+        engine.reveal(kp0[1], T0)
+    else:
+        engine.reveal(kp0[1], T0, response="zz̄ = |z|²" if how == "short" else PROOF)
+    response = "zz̄ = |z|²" if how == "short" else PROOF
+    result = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[1], response=response, self_grade=grade), T0)
+    assert not result.independent
+    assert result.task.phase == "practice" and result.task.outcome is None and result.suggestion is None
+    if how != "partial":
+        assert "isn't a miss" in result.feedback  # consistent: the lesson really goes on
+    assert "pauses" not in result.feedback
+    task = engine.submit_answer(task_id, right(result.task.question.id), T0).task
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.progress.kp_index == 1
+    done = _finish_lesson(task_id, task)
+    assert done.task.outcome == "passed" and _lesson_rating(fx.sid("S1")) == 2
+    progress = db.query_one("SELECT * FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
+    assert db.loads(progress["kp_failures_json"], {}) == {} and progress["cooldown_until"] is None
+
+
+def test_assisted_written_answer_serves_another_written_question_if_one_is_left() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    _make_free_response(kp0[1], kp0[3])
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.question.id == kp0[1]
+    engine.hint(kp0[1], T0)
+    helped = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[1], response=PROOF, self_grade="correct"), T0)
+    assert "another written question comes up soon" in helped.feedback
+    task = engine.submit_answer(task_id, right(helped.task.question.id), T0).task  # kp0[2]
+    assert task.question.id == kp0[3] and task.progress.streak == 1  # the requirement still counts
+    engine.reveal(kp0[3], T0, response=PROOF)
+    proof = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[3], response=PROOF, self_grade="correct"), T0)
+    assert proof.independent and proof.task.progress.kp_index == 1
+    done = _finish_lesson(task_id, proof.task)
+    assert done.task.outcome == "passed" and done.suggestion_text is None
+    assert _lesson_rating(fx.sid("S1")) == 3  # Good: the proof was written unaided
+
+
+def test_too_short_written_answer_is_not_independent_even_without_a_reveal() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    _make_free_response(kp0[0])
+    task_id, _ = start_practice(fx, "S1")
+    short = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[0], response="z = z", self_grade="correct"), T0)
+    assert short.correct and not short.independent and "too short" in short.feedback and "With help" not in short.feedback
+    assert short.task.phase == "practice"
+
+
+def test_assisted_answer_that_ends_the_lesson_does_not_claim_it_isnt_a_miss() -> None:
+    fx = build_course()
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    assert task.phase == "practice"  # two left: still passable
+    last = engine.submit_answer(task_id, right(task.question.id, hints_used=1), T0)
+    assert last.task.outcome == "failed" and last.suggestion == "retry_later"
+    assert "With help" in last.feedback and "isn't a miss" not in last.feedback
 
 
 def test_proof_kp_two_in_a_row_without_the_written_answer_is_not_a_pass() -> None:
@@ -777,3 +877,76 @@ def test_top_up_wrapper_calls_pipeline_once_per_window(monkeypatch: pytest.Monke
     real_request_top_up("s1", 0)
     real_request_top_up("s1", 1)
     assert calls == [("s1", 0), ("s1", 1)]
+
+
+# ---------------------------------------------------------------------------
+# E3: the server's per-attempt record is handed back to the client
+# ---------------------------------------------------------------------------
+
+
+def test_task_restores_hints_reveal_and_committed_answer_after_a_reload() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    _make_free_response(kp0[1])
+    task_id, task = start_practice(fx, "S1")
+    assert (task.question.hints_used, task.question.revealed, task.question.committed_response) == (0, False, None)
+    engine.hint(task.question.id, T0)
+    engine.hint(task.question.id, T0)
+    reloaded = engine.get_task(task_id)
+    assert reloaded.question.hints_used == 2 and reloaded.question.revealed is False
+    engine.reveal(task.question.id, T0)
+    assert engine.get_task(task_id).question.revealed is True
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.question.id == kp0[1] and task.question.hints_used == 0 and task.question.revealed is False
+    typed = "Let z = a + bi.\n\nThen z times its conjugate is a^2 + b^2."
+    engine.reveal(kp0[1], T0, response=typed)
+    reloaded = engine.get_task(task_id)
+    assert reloaded.question.committed_response == typed.strip()  # as typed, line breaks kept
+    assert reloaded.question.revealed is False  # a comparison after a committed answer is not a reveal
+
+
+def test_progress_reports_kp_wrong_and_whether_an_easier_step_is_available() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
+    task_id, task = start_practice(fx, "S1")
+    assert (task.progress.kp_wrong, task.progress.easier_available) == (0, False)  # no miss yet
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    assert task.question.tier == 1 and task.progress.kp_wrong == 1
+    assert task.progress.easier_available is False  # nothing strictly easier than a tier-1 question
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.question.tier == 2 and task.progress.kp_wrong == 1
+    assert task.progress.easier_available is True  # an unseen tier-1 question is left
+    assert engine.get_task(task_id).progress.easier_available is True  # survives a reload
+    swapped = engine.easier_step(task_id, T0)
+    assert swapped.progress.easier_available is False  # nothing easier than the swapped-in question
+    task = engine.submit_answer(task_id, right(swapped.question.id), T0).task
+    assert task.phase == "done" and (task.progress.kp_wrong, task.progress.easier_available) == (0, False)
+
+
+def test_easier_step_is_not_available_for_the_needed_written_question() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    _make_free_response(kp0[2])
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    assert task.question.id == kp0[2] and task.progress.kp_wrong == 1
+    assert task.progress.easier_available is False
+    with pytest.raises(engine.Conflict, match="won't count as a miss"):
+        engine.easier_step(task_id, T0)
+
+
+def test_review_of_a_proof_skill_includes_one_written_question() -> None:
+    fx = build_course()
+    learn(fx, "S1", T0)
+    kp0, kp1 = fx.questions["S1"]
+    _make_free_response(kp0[1], kp1[1], kp1[2])
+    now = T0 + days(3)
+    plain = engine.start_review(fx.sid("S1"), "Review due", now)  # not a proof skill: no rule
+    engine.abandon(plain, now)
+    db.execute("UPDATE skills SET kind = 'proof' WHERE id = ?", (fx.sid("S1"),))
+    task_id = engine.start_review(fx.sid("S1"), "Review due", now)
+    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
+    kinds = [question(q)["kind"] for q in st["set"]]
+    assert kinds.count("free_response") == 1 and len(st["set"]) == 3
+    assert {question(q)["kp_index"] for q in st["set"]} == {0, 1}

@@ -93,6 +93,16 @@ def _review_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
     return out
 
 
+def _locked(view: _CourseView, skill_id: str) -> bool:
+    """Some in-chapter prerequisite is not learned yet (a prerequisite whose lesson failed to generate doesn't gate)."""
+    return any(
+        src in view.skills
+        and view.progress.get(src, {}).get("status") not in scheduler.LEARNED
+        and view.skills[src]["lesson_status"] != "failed"
+        for src, _ in view.graph.prereqs.get(skill_id, [])
+    )
+
+
 def _lesson_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
     due = {sid for sid, card in view.cards.items() if scheduler.is_due(card, now)}
     out = []
@@ -100,6 +110,8 @@ def _lesson_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
         p = view.progress.get(sid)
         if not p or p["status"] not in ("available", "in_progress") or skill["lesson_status"] != "ready":
             continue
+        if _locked(view, sid):
+            continue  # never offer a locked skill, even one started with "Learn anyway" (E2)
         if not view.question_counts.get(sid):
             continue
         cooldown = db.parse_iso(p["cooldown_until"])
@@ -278,25 +290,27 @@ def start_task(
 
     Everything that could stop the new task is checked BEFORE the active task is touched. Another active task is a
     409 ("Finish or leave … first.") unless `replace_active`, in which case it is abandoned. `force` starts a lesson
-    on a locked skill (the learner's override of prerequisite gating)."""
+    on a locked skill (the learner's override of prerequisite gating); a skill whose lesson was already started that
+    way (lesson_attempts > 0) is resumed or restarted without `force` (E2)."""
     with engine.lock:
         _require_course(course_id)
         skill = db.query_one("SELECT * FROM skills WHERE id = ? AND course_id = ?", (skill_id, course_id))
         if not skill:
             raise engine.NotFound("Skill not found in this course.")
-        progress = db.query_one("SELECT status FROM progress WHERE skill_id = ?", (skill_id,))
+        progress = db.query_one("SELECT status, lesson_attempts FROM progress WHERE skill_id = ?", (skill_id,))
         learned = bool(progress) and progress["status"] in scheduler.LEARNED
         type_ = type_ or ("review" if learned else "lesson")
-        if type_ == "lesson" and not learned and not force:
+        active = engine.active_task_row(course_id)
+        if active and active["skill_id"] == skill_id and active["type"] == type_:
+            return engine.build_task(active)  # resuming the open task never needs `force`
+        started_before = bool(progress) and (progress["lesson_attempts"] or 0) > 0
+        if type_ == "lesson" and not learned and not force and not started_before:
             blockers = unmet_prerequisites(course_id, skill_id)
             if blockers:
                 names = ", ".join(f"{b['key']} ({b['title']})" for b in blockers)
                 raise engine.Conflict(f"{skill['key']} is locked — learn {names} first.")
         if type_ == "review" and not learned:
             raise engine.Conflict("Reviews start after the lesson has been passed.")
-        active = engine.active_task_row(course_id)
-        if active and active["skill_id"] == skill_id and active["type"] == type_:
-            return engine.build_task(active)
         initial = engine.prepare_start(skill_id, type_)  # raises Conflict while the active task is still intact
         if active:
             if not replace_active:

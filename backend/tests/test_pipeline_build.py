@@ -12,8 +12,8 @@ import pymupdf
 import pytest
 
 from app import db, fake_llm, llm
-from app.ingest.pdf import read_book_meta
-from app.llm_schemas import IndependentAnswer, LessonDraft
+from app.ingest.pdf import read_book_meta, resolve_stored
+from app.llm_schemas import IndependentAnswer, LessonDraft, VisualizationPlan
 from app.pipeline import jobs, topup, verify
 from app.pipeline.questions import normalized_prompt
 from app.schemas import CourseCreate, JobStatus, Lesson
@@ -128,7 +128,8 @@ def test_full_build_on_tiny_pdf(tmp_path, llm_calls):
     assert len(pages) == 3 and any(p["is_exercise_page"] for p in pages)
     assert all((jobs.course_dir(cid) / "pages" / f"{p['page_index']}.png").is_file() for p in pages)
     figures = db.query("SELECT * FROM figures WHERE course_id = ?", (cid,))
-    assert figures and all(f["id"].startswith(f"{cid}-") and Path(f["image_path"]).is_file() for f in figures)
+    assert figures and all(f["id"].startswith(f"{cid}-") and resolve_stored(f["image_path"]).is_file() for f in figures)
+    assert all(not Path(f["image_path"]).is_absolute() for f in figures)  # relative to the data dir (#32)
 
     skills = db.query("SELECT * FROM skills WHERE course_id = ? ORDER BY order_index", (cid,))
     assert [s["key"] for s in skills] == [f"S{i + 1}" for i in range(len(skills))]
@@ -397,7 +398,8 @@ def test_request_top_up_deduplicates_in_flight_requests(tmp_path, llm_calls):
 
     asyncio.run(main())
     assert llm_calls["TopUpDraft"] == 1
-    assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kp_index = 1", (skill,))["n"] == 8
+    # S2 is a proof skill: 6 lesson questions in KP 2 (two written proofs) + 3 from the one top-up
+    assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kp_index = 1", (skill,))["n"] == 9
 
 
 # ---------------------------------------------------------------------------
@@ -708,3 +710,218 @@ def test_regenerate_in_place_keeps_learner_history(tmp_path, llm_calls):
     assert report.lessons_kept == ["S3"]
     row = db.query_one("SELECT lesson_status, lesson_json FROM skills WHERE id = ?", (s3,))
     assert row["lesson_status"] == "ready" and row["lesson_json"] == before
+
+
+# ---------------------------------------------------------------------------
+# Regeneration safety (final QA round 2)
+# ---------------------------------------------------------------------------
+
+
+def _servable(cid: str) -> dict[str, int]:
+    rows = db.query(
+        "SELECT s.key, COUNT(q.id) AS n FROM skills s LEFT JOIN questions q ON q.skill_id = s.id AND q.flagged = 0 "
+        "WHERE s.course_id = ? GROUP BY s.key",
+        (cid,),
+    )
+    return {r["key"]: r["n"] for r in rows}
+
+
+def test_regenerate_closes_a_task_started_while_the_lesson_is_rewritten(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    from app.learning import engine, selector
+    from app.pipeline.regenerate import regenerate
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    s1 = _skill(cid, "S1")
+    original = llm.structured
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_lesson(**kwargs):
+        if kwargs["schema"] is LessonDraft:
+            entered.set()
+            await release.wait()
+        return await original(**kwargs)
+
+    monkeypatch.setattr(llm, "structured", slow_lesson)
+
+    async def main():
+        running = asyncio.create_task(regenerate(cid, ["S1"], visuals=False, verify=False))
+        await entered.wait()
+        now = datetime.now(UTC)
+        task = selector.start_task(cid, s1, None, now)  # the learner starts the skill meanwhile (server process)
+        task = engine.begin_practice(task.id, now)
+        assert task.question is not None
+        release.set()
+        return task, await running
+
+    task, report = asyncio.run(main())
+    assert report.lessons_regenerated == ["S1"] and report.abandoned_tasks == 1
+    row = db.query_one("SELECT status, outcome, state_json FROM tasks WHERE id = ?", (task.id,))
+    assert row["status"] == "completed" and row["outcome"] == "abandoned"
+    assert db.loads(row["state_json"])["current"] is None
+    assert engine.active_task_row(cid) is None  # nothing left pointing at a deleted question
+    assert engine.get_task(task.id).question is None
+
+
+def test_retiring_questions_keeps_those_an_active_task_holds(tmp_path):
+    from app.pipeline.lessons import retire_questions
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    sid = _skill(cid, "S1")
+    held, current = [r["id"] for r in db.query("SELECT id FROM questions WHERE skill_id = ? ORDER BY rowid LIMIT 2", (sid,))]
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'lesson', 'active', ?, ?)",
+        (db.new_id(), cid, sid, db.dumps({"served": [held, current], "current": current}), db.now_iso()),
+    )
+    with db.connect() as conn:
+        assert retire_questions(conn, sid) == 2
+    rows = db.query("SELECT id, flagged, key FROM questions WHERE skill_id = ?", (sid,))
+    assert {r["id"] for r in rows} == {held, current} and all(r["flagged"] and r["key"].startswith("old-") for r in rows)
+
+
+@pytest.mark.parametrize("part", ["verify", "visuals"])
+def test_interrupted_regeneration_keeps_every_question_and_visual(tmp_path, monkeypatch, part):
+    from app.pipeline.regenerate import regenerate
+
+    hang_on = IndependentAnswer if part == "verify" else VisualizationPlan
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    before = _servable(cid)
+    visuals_before = {s["key"]: s["viz_json"] for s in db.query("SELECT key, viz_json FROM skills WHERE course_id = ?", (cid,))}
+    original = llm.structured
+    entered = asyncio.Event()
+    seen_while_verifying: list[dict[str, int]] = []
+
+    async def hanging(**kwargs):
+        if kwargs["schema"] is hang_on:
+            if not entered.is_set():
+                seen_while_verifying.append(_servable(cid))
+            entered.set()
+            await asyncio.Event().wait()
+        return await original(**kwargs)
+
+    monkeypatch.setattr(llm, "structured", hanging)
+
+    async def main():
+        running = asyncio.create_task(regenerate(cid, None, lessons=False, visuals=part == "visuals", verify=part == "verify"))
+        await entered.wait()
+        await asyncio.sleep(0.05)
+        seen_while_verifying.append(_servable(cid))
+        running.cancel()  # Ctrl-C of scripts/regenerate.py
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+    asyncio.run(main())
+    assert all(seen == before for seen in seen_while_verifying)  # nothing is held out of serving meanwhile
+    assert _servable(cid) == before
+    assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE flag_reason = 'verification: pending'")["n"] == 0
+    assert {s["key"]: s["viz_json"] for s in db.query("SELECT key, viz_json FROM skills WHERE course_id = ?", (cid,))} == visuals_before
+    job = jobs.get_job(cid)
+    assert job.state == "interrupted" and "interrupted" in job.log[-1]  # the app offers Resume
+    lesson_kps = len(db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (_skill(cid, "S1"),))["lesson_json"])["knowledge_points"])
+    from app.learning import engine
+
+    assert engine.prepare_start(_skill(cid, "S1"), "lesson")["playable"] == list(range(lesson_kps))
+
+    monkeypatch.undo()
+    assert_complete(cid, build(cid))  # resume finishes the run
+
+
+def test_failed_visual_replanning_keeps_the_old_visual(tmp_path, monkeypatch):
+    from app.pipeline.regenerate import regenerate
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    before = {s["key"]: s["viz_json"] for s in db.query("SELECT key, viz_json FROM skills WHERE course_id = ?", (cid,))}
+    fail_for(monkeypatch, "VisualizationPlan")
+    asyncio.run(regenerate(cid, None, lessons=False, verify=False))
+    after = {s["key"]: s["viz_json"] for s in db.query("SELECT key, viz_json FROM skills WHERE course_id = ?", (cid,))}
+    assert after == before and jobs.get_job(cid).state == "done"
+
+
+def test_questions_left_held_by_an_interrupted_run_are_released(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from app.pipeline.regenerate import regenerate
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    s1, s2 = _skill(cid, "S1"), _skill(cid, "S2")
+    old = (datetime.now(UTC) - timedelta(days=1)).isoformat(timespec="seconds")
+
+    def hold(sid: str, created: str) -> set[str]:
+        db.execute(
+            "UPDATE questions SET flagged = 1, flag_reason = 'verification: pending', verify_json = '{}', created_at = ? "
+            "WHERE skill_id = ? AND kind != 'free_response'",
+            (created, sid),
+        )
+        return {r["id"] for r in db.query("SELECT id FROM questions WHERE skill_id = ? AND kind != 'free_response'", (sid,))}
+
+    stale = hold(s1, old)  # left by an older regeneration (build-time questions)
+    fresh = hold(s2, db.now_iso())  # a top-up that may still be running in another process
+    assert jobs.mark_interrupted_jobs() == 0  # server start
+    rows = {r["id"]: r for r in db.query("SELECT id, flagged FROM questions WHERE skill_id IN (?, ?)", (s1, s2))}
+    assert not any(rows[q]["flagged"] for q in stale) and all(rows[q]["flagged"] for q in fresh)
+
+    hold(s1, old)
+    report = asyncio.run(regenerate(cid, ["S1"], lessons=False, visuals=False))
+    assert report.released_holds == len(stale)
+    assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND flag_reason = 'verification: pending'", (s1,))["n"] == 0
+
+
+def test_regenerate_script_refuses_while_the_app_server_runs(tmp_path):
+    """E4: the maintenance tool never writes while the app answers on its health URL (unless --force)."""
+    import http.server
+    import os
+    import socket
+    import subprocess
+    import sys
+    import threading
+
+    from app.config import settings
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+
+    class Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"fake_llm": true}')
+
+        def log_message(self, *args):
+            pass
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "regenerate.py"
+
+    def run(url: str, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(script), "--data-dir", str(settings.data_dir), "--course", cid, "--skills", "S1",
+             "--only", "verify", "--yes", "--no-backup", "--server-url", url, *extra],
+            capture_output=True, text=True, timeout=180, env={**os.environ, "UA_FAKE_LLM": "1"},
+        )
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/health"
+    try:
+        log_before = jobs.get_job(cid).log
+        refused = run(url)
+        assert refused.returncode == 1 and "app server is running" in refused.stdout, refused.stdout + refused.stderr
+        assert jobs.get_job(cid).log == log_before  # nothing written
+        forced = run(url, "--force")
+        assert forced.returncode == 0, forced.stdout + forced.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+    with socket.socket() as sock:  # a port nothing listens on
+        sock.bind(("127.0.0.1", 0))
+        free = sock.getsockname()[1]
+    stopped = run(f"http://127.0.0.1:{free}/api/health")
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    assert "Regeneration finished" in jobs.get_job(cid).log[-1] and jobs.get_job(cid).state == "done"

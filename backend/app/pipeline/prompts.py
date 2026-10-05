@@ -109,7 +109,11 @@ PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove
 - Every knowledge point has a free_response question in which the learner writes the short proof or justification
   of that knowledge point's statement: make it q2 (tier 2), with a model proof as the solution and a checklist of
   2–5 concrete criteria (e.g. "takes arbitrary $x, y$", "applies the definition of addition coordinatewise", "cites
-  commutativity in $\\mathbf{{F}}$"). A later free_response (q4) may prove a variant.
+  commutativity in $\\mathbf{{F}}$").
+- Wherever the knowledge point allows it, make q4 a SECOND free_response proof — a variant or a closely related
+  statement of the same knowledge point (not a rewording of q2), with its own model proof and checklist. It is
+  served when the first written proof needed a hint or the solution, or was self-graded partial/incorrect, so the
+  learner gets an independent second attempt.
 - The other questions check the ingredients machine-checkably: which law or hypothesis a step uses, true_false
   claims about a step (with the reason or a counterexample in the solution), a computed instance.
 

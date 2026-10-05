@@ -48,14 +48,19 @@ function choiceMarks(choices: string[], chosen: number | null, result: AnswerRes
 export function QuestionCard({ task, question, position, onAnswered, onContinue, onSuggestion, onEasier, onTaskReplaced }: QuestionCardProps) {
   const toast = useToast();
   const finePointer = useMediaQuery("(pointer: fine)");
+  // The server records this attempt's help and commitments (hints, a revealed solution, a free-response answer
+  // committed for comparison), so a reload or a resumed task starts from them rather than from a blank card.
+  const committed = question.kind === "free_response" && question.committed_response ? question.committed_response : null;
   const [choice, setChoice] = useState<number | null>(null);
-  const [response, setResponse] = useState("");
+  const [response, setResponse] = useState(committed ?? "");
   // Hints come from POST /hint (recorded server-side, so a reload can't erase them); texts by hint index.
   const [hintTexts, setHintTexts] = useState<string[]>(() => question.hints.slice(0, question.hints_used));
   const [hinting, setHinting] = useState(false);
   const [revealed, setRevealed] = useState<RevealResponse | null>(null);
   const [revealing, setRevealing] = useState(false);
   const [modelSolution, setModelSolution] = useState<RevealResponse | null>(null);
+  // Fetching the solution text for a reveal / comparison recorded before a reload (the question carries only flags).
+  const [restoring, setRestoring] = useState(() => Boolean(committed || question.revealed));
   const [checked, setChecked] = useState<boolean[]>(() => question.checklist.map(() => false));
   const [submitting, setSubmitting] = useState(false);
   const [easing, setEasing] = useState(false);
@@ -70,13 +75,38 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     if (card && card.getBoundingClientRect().top < 0) card.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  // Restore a reveal / comparison the server recorded for this attempt. Repeating the reveal changes nothing
+  // server-side (it is already recorded) and returns the solution text: a committed free response reopens in
+  // self-grading mode, a revealed solution shows again with its "won't count" note.
+  const wasRevealed = question.revealed;
+  useEffect(() => {
+    if (!committed && !wasRevealed) return;
+    let cancelled = false;
+    revealSolution(question.id, committed).then(
+      (solution) => {
+        if (cancelled) return;
+        if (committed) setModelSolution(solution);
+        if (wasRevealed) setRevealed(solution);
+        setRestoring(false);
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        toast.error(err);
+        setRestoring(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [question.id, committed, wasRevealed, toast]);
+
   const kind = question.kind;
   const isChoice = kind === "multiple_choice" || kind === "true_false";
   const choices = kind === "true_false" && question.choices.length !== 2 ? ["True", "False"] : question.choices;
   const isFree = kind === "free_response";
   const answered = result !== null;
   const grading = isFree && modelSolution !== null && !answered;
-  const canSubmit = !answered && !submitting && (isChoice ? choice !== null : response.trim().length > 0);
+  const canSubmit = !answered && !submitting && !restoring && (isChoice ? choice !== null : response.trim().length > 0);
   const hintsShown = hintTexts.length;
   const hintTotal = Math.max(question.hints.length, hintsShown);
   const shortFreeAnswer = isFree && committedLength(response) < MIN_COMMITTED_CHARS;
@@ -91,7 +121,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
         self_grade: selfGrade,
         hints_used: hintsShown,
         // Comparing a (near-)empty free response is the same as looking at the solution first (D1).
-        revealed_solution: revealed !== null || (isFree && shortFreeAnswer),
+        revealed_solution: revealed !== null || question.revealed || (isFree && shortFreeAnswer),
         seconds: Math.round(elapsed() * 10) / 10,
       });
       setResult(outcome);
@@ -125,7 +155,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   };
 
   const showSolution = async () => {
-    if (revealed || revealing) return;
+    if (revealed || revealing || restoring) return;
     setRevealing(true);
     try {
       setRevealed(await revealSolution(question.id));
@@ -136,7 +166,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     }
   };
 
-  const canHint = !answered && !grading && !hinting && hintsShown < question.hints.length;
+  const canHint = !answered && !grading && !hinting && !restoring && hintsShown < question.hints.length;
 
   const nextHint = async () => {
     if (!canHint) return;
@@ -311,8 +341,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
         {!answered && !grading && (
           <div className="question-card__actions">
             <button type="submit" className="btn btn--primary btn--lg" disabled={!canSubmit || busy}>
-              {submitting ? <Spinner size={16} label="Checking" /> : null}
-              {isFree ? "Compare with the model answer" : "Check answer"}
+              {submitting || (restoring && committed) ? <Spinner size={16} label={restoring ? "Restoring your answer" : "Checking"} /> : null}
+              {restoring && committed ? "Reopening your answer…" : isFree ? "Compare with the model answer" : "Check answer"}
             </button>
             <div className="question-card__tools">
               {question.hints.length > 0 && (
@@ -322,8 +352,14 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                   {hintsShown < question.hints.length && <kbd>H</kbd>}
                 </button>
               )}
-              <button type="button" className="btn btn--ghost btn--sm" onClick={() => void showSolution()} disabled={revealed !== null || revealing}>
-                {revealing ? <Spinner size={14} label="Loading solution" /> : <Icon name="eye" size={15} />} Show solution
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => void showSolution()}
+                disabled={revealed !== null || revealing || restoring}
+              >
+                {revealing || (restoring && question.revealed) ? <Spinner size={14} label="Loading solution" /> : <Icon name="eye" size={15} />}{" "}
+                {revealed ? "Solution shown" : "Show solution"}
               </button>
               {onEasier && (
                 <button type="button" className="btn btn--ghost btn--sm" onClick={() => void askEasier()} disabled={busy}>

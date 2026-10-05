@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
-import { getHealth } from "../api";
-import { useResource } from "../hooks/useResource";
+import { useHealth } from "../hooks/useHealth";
 import "./AppHeader.css";
 
 function Wordmark() {
@@ -21,7 +20,7 @@ function Wordmark() {
 }
 
 export function AppHeader() {
-  const health = useResource("health", getHealth);
+  const health = useHealth();
   const fake = health.data?.fake_llm;
   return (
     <header className="app-header">

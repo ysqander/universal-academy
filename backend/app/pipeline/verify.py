@@ -123,6 +123,21 @@ async def verify_skill(skill_id: str) -> list[str]:
     return keep_kps_servable(skill_id)
 
 
+async def reverify_skill(skill_id: str) -> list[str]:
+    """Re-check every machine-checkable question of the skill in place (regeneration after prompt fixes). Nothing is
+    taken out of serving meanwhile: each row keeps its current verdict and flag until verify_question writes the new
+    ones in a single UPDATE, so an interruption leaves every row with its old or its new verdict, and a failed call
+    keeps the old one. Learner flags and retired questions are left alone."""
+    rows = [
+        r
+        for r in db.query("SELECT * FROM questions WHERE skill_id = ?", (skill_id,))
+        if is_machine_checkable(r["kind"]) and not learner_flagged(r)
+    ]
+    if rows:
+        await asyncio.gather(*(verify_question(r) for r in rows))
+    return keep_kps_servable(skill_id)
+
+
 def keep_kps_servable(skill_id: str) -> list[str]:
     """Never leave a knowledge point with fewer than 2 unflagged questions: un-flag the most plausible verification
     rejects (status 'disagree_kept'). Questions flagged by the learner are never un-flagged."""

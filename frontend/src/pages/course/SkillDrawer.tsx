@@ -9,7 +9,7 @@ import { StatusChip } from "../../components/StatusChip";
 import { useToast } from "../../context/toast";
 import { formatDateTime, kindLabel, percent, relativeTime } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
-import type { CourseGraph, FoundationNode, SkillNode } from "../../types";
+import type { CourseGraph, FoundationNode, SkillNode, Task } from "../../types";
 import type { GraphSelection } from "./selection";
 import "./SkillDrawer.css";
 
@@ -25,6 +25,8 @@ interface SkillDrawerProps {
   onFoundationChange: (foundation: FoundationNode) => void;
   /** Key of the action currently starting ("<skillId>:lesson" / "<skillId>:review"). */
   pending: string | null;
+  /** The open (unfinished) task, if any: its skill's button resumes it. */
+  activeTask: Task | null;
 }
 
 /** Details of the selected node: a right-hand panel on desktop, a bottom sheet on phones. */
@@ -91,7 +93,7 @@ function Difficulty({ value }: { value: number }) {
   );
 }
 
-function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pending }: SkillDrawerProps & { skill: SkillNode }) {
+function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pending, activeTask }: SkillDrawerProps & { skill: SkillNode }) {
   const byId = useMemo(() => new Map(graph.skills.map((s) => [s.id, s])), [graph.skills]);
   const prerequisites = graph.edges.filter((e) => e.target === skill.id).flatMap((e) => byId.get(e.source) ?? []);
   const unlocks = graph.edges.filter((e) => e.source === skill.id).flatMap((e) => byId.get(e.target) ?? []);
@@ -100,6 +102,10 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
   const ready = skill.lesson_status === "ready";
   const missing = prerequisites.filter((p) => p.status !== "learned" && p.status !== "mastered");
   const sort = (list: SkillNode[]) => [...list].sort((a, b) => a.order_index - b.order_index);
+  // A lesson started with "Learn anyway" keeps the skill locked (the menu won't offer it) but stays resumable.
+  const resuming = activeTask !== null && activeTask.phase !== "done" && activeTask.type === "lesson" && activeTask.skill.id === skill.id;
+  const locked = skill.status === "locked" && !resuming;
+  const learnLabel = resuming || skill.status === "in_progress" ? "Continue lesson" : locked ? "Learn anyway" : "Learn this";
 
   return (
     <div className="skill-details">
@@ -133,12 +139,12 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
         ) : (
           <button
             type="button"
-            className={`btn ${skill.status === "locked" ? "" : "btn--primary"}`}
+            className={`btn ${locked ? "" : "btn--primary"}`}
             onClick={() => onLearn(skill)}
-            disabled={pending !== null || !ready}
+            disabled={pending !== null || (!ready && !resuming)}
           >
             {pending === `${skill.id}:lesson` ? <Spinner size={14} label="Starting" /> : <Icon name="lesson" size={16} />}
-            {skill.status === "locked" ? "Learn anyway" : skill.status === "in_progress" ? "Continue lesson" : "Learn this"}
+            {learnLabel}
           </button>
         )}
         {ready && (
@@ -158,10 +164,16 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
           again.
         </p>
       )}
-      {skill.status === "locked" && missing.length > 0 && ready && (
+      {locked && missing.length > 0 && ready && (
         <p className="skill-details__note">
           <Icon name="lock" size={14} /> Usually unlocked after {sort(missing).map((m) => m.key).join(", ")}. You can still start
           it — it will be harder without {missing.length === 1 ? "that skill" : "those skills"}.
+        </p>
+      )}
+      {(resuming || skill.status === "in_progress") && missing.length > 0 && (
+        <p className="skill-details__note">
+          <Icon name="lock" size={14} /> Started ahead of {sort(missing).map((m) => m.key).join(", ")} — you can carry on; it may be
+          harder without {missing.length === 1 ? "that skill" : "those skills"}.
         </p>
       )}
 

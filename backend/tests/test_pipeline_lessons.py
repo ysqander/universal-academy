@@ -80,6 +80,36 @@ def test_proof_lesson_needs_a_free_response_in_every_knowledge_point():
     assert all("free_response" in [q.kind for q in pool[:2]] for pool in pools)
 
 
+def test_proof_lessons_ask_for_and_keep_a_second_written_proof_per_knowledge_point(tmp_path):
+    """E1: a second free_response (q4) lets an assisted first proof be retried instead of waived."""
+    from app.pipeline.context import load_course
+    from app.pipeline.lessons import lesson_request
+    from app.pipeline.prompts import LESSON_INSTRUCTIONS
+
+    assert "make q4 a SECOND free_response proof" in LESSON_INSTRUCTIONS
+    _, pools, notes = validate_lesson(fake_draft("Write the lesson package for skill S2: Justify\nKind: proof"), proof=True)
+    for pool in pools:
+        kinds = [q.kind for q in pool]
+        assert kinds[1] == "free_response" and kinds[3] == "free_response" and kinds.count("free_response") == 2
+    assert not any("single free-response proof" in n for n in notes)
+
+    single = fake_draft("Write the lesson package for skill S2: Justify\nKind: proof")
+    kps = [
+        kp.model_copy(update={"questions": [q for q in kp.questions if q.key not in ("k1q6", "k2q6")]})
+        for kp in single.knowledge_points
+    ]
+    _, _, notes = validate_lesson(single.model_copy(update={"knowledge_points": kps}), proof=True)
+    assert sum("single free-response proof" in n for n in notes) == 2
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    s2 = db.query_one("SELECT * FROM skills WHERE course_id = ? AND key = 'S2'", (cid,))
+    assert "second free_response proof" in lesson_request(load_course(cid), s2)
+    rows = db.query("SELECT kp_index, kind FROM questions WHERE skill_id = ? ORDER BY rowid", (s2["id"],))
+    for kp in {r["kp_index"] for r in rows}:
+        assert [r["kind"] for r in rows if r["kp_index"] == kp].count("free_response") == 2
+
+
 def test_first_free_response_moves_to_second_position():
     draft = fake_draft()
     pool = draft.knowledge_points[1].questions  # [expression, numeric, mc, numeric, free_response]

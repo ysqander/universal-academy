@@ -60,10 +60,12 @@ def needs_visual(skill: dict[str, Any]) -> bool:
     return viz is None or "error" in viz
 
 
-async def ensure_visual(ctx: BuildContext, skill_id: str) -> bool:
-    """Plan and store the skill's visual unless one is stored. Returns False when planning failed."""
+async def ensure_visual(ctx: BuildContext, skill_id: str, *, force: bool = False) -> bool:
+    """Plan and store the skill's visual unless one is stored. Returns False when planning failed.
+    force=True re-plans a stored visual (regeneration); the stored one is replaced only by a successful new plan, so a
+    failed or interrupted run keeps the old visual."""
     skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
-    if skill is None or skill["lesson_status"] != "ready" or not needs_visual(skill):
+    if skill is None or skill["lesson_status"] != "ready" or not (force or needs_visual(skill)):
         return True
     figures = skill_figures(ctx.course, skill)
     lesson = db.loads(skill["lesson_json"], {})
@@ -91,6 +93,9 @@ async def ensure_visual(ctx: BuildContext, skill_id: str) -> bool:
         except Exception as e:  # noqa: BLE001 — retried once, then stored as 'none'
             error = e
             log.warning("visual %s attempt %d failed: %s", skill["key"], attempt + 1, e)
+    if not needs_visual(skill):  # forced re-plan failed: keep the visual that was there
+        ctx.tracker.log(f"Visual for {skill['key']} kept — re-planning failed: {error}", level=logging.WARNING)
+        return False
     ctx.tracker.log(f"Visual for {skill['key']} failed ({error}); lesson shown without a visual", level=logging.WARNING)
     db.execute(
         "UPDATE skills SET viz_json = ? WHERE id = ?",

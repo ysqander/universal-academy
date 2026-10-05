@@ -696,7 +696,7 @@ async def _crop_figures(pdf_path: Path, page_index: int, work_dir: Path, ordered
         fid = f"p{page_index}-f{n}"
         x0, y0, x1, y1 = fig.bbox
         clip = (x0 - FIGURE_PADDING_PT, y0 - FIGURE_PADDING_PT, x1 + FIGURE_PADDING_PT, y1 + FIGURE_PADDING_PT)
-        png = await asyncio.to_thread(pdf.render_clip_png, pdf_path, page_index, clip, FIGURE_ZOOM)
+        png = await asyncio.to_thread(pdf.render_clip_png, pdf_path, page_index, clip, FIGURE_ZOOM, fig.bbox)
         path = work_dir / "figures" / f"{fid}.png"
         await asyncio.to_thread(pdf.write_atomic, path, png)
         figures.append(

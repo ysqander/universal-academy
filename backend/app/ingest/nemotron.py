@@ -324,12 +324,19 @@ class _RateLimiter:
     async def __aenter__(self) -> None:
         self._bind()
         assert self._sem is not None and self._lock is not None
-        await self._sem.acquire()
-        async with self._lock:
-            wait = self._last_start + MIN_SPACING_S - time.monotonic()
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_start = time.monotonic()
+        # Semaphore first, then the spacing: the spacing is measured right before the request starts. A cancellation
+        # (the page budget's wait_for, shutdown) while waiting for the lock or sleeping must give the slot back —
+        # __aexit__ never runs when __aenter__ raises, so a leaked slot would stall every later request.
+        await self._sem.acquire()  # a cancelled acquire() holds nothing
+        try:
+            async with self._lock:
+                wait = self._last_start + MIN_SPACING_S - time.monotonic()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                self._last_start = time.monotonic()
+        except BaseException:
+            self._sem.release()
+            raise
 
     async def __aexit__(self, *exc: object) -> None:
         assert self._sem is not None

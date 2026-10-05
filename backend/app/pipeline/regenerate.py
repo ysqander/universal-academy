@@ -4,12 +4,16 @@
 
 - lessons: every selected lesson is rewritten; the new version replaces the old one only when it validates (a failed
   regeneration keeps the old lesson). Questions the learner already answered are retired (flagged, key 'old-…'), never
-  deleted, so attempt history and FSRS state stay valid; active tasks on those skills are abandoned first because
-  they point at the old questions. A regenerated lesson also gets a new visual and verification.
-- visuals: the visual plan is redone.
-- verify: machine-checkable questions are re-verified (learner flags and retired questions are left alone); they are
-  held out of serving while the verifier runs.
-Progress (status, FSRS cards, XP) is never touched. Runs in the caller's event loop; refuses while a build runs.
+  deleted, so attempt history and FSRS state stay valid. Active tasks on a regenerated skill are abandoned inside the
+  transaction that swaps its questions (also a task started while the new lesson was being written), so no task can
+  point at a deleted question; when the regeneration fails the old lesson and its tasks stay as they were.
+  A regenerated lesson also gets a new visual and verification.
+- visuals: the visual plan is redone; the stored one is replaced only by a successful new plan.
+- verify: machine-checkable questions are re-verified in place (learner flags and retired questions are left alone).
+  Nothing is held out of serving meanwhile: each question keeps its old verdict until the new one is written.
+Progress (status, FSRS cards, XP) is never touched. Runs in the caller's event loop; refuses while a build runs. An
+interrupted run (Ctrl-C, cancellation) leaves every lesson servable — each skill has its old or its new content —
+and marks the job 'interrupted', so the app offers Resume (which finishes missing visuals and verification).
 """
 
 from __future__ import annotations
@@ -17,15 +21,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
-from .. import db, llm
+from .. import llm
 from . import jobs
 from .context import BuildContext, load_course, skill_rows
 from .lessons import ensure_lesson, lesson_prefix
-from .questions import PENDING_REASON
+from .topup import release_stale_holds
 from .tracker import JobTracker
-from .verify import verify_skill
+from .verify import reverify_skill, verify_skill
 from .visuals import ensure_visual
 
 log = logging.getLogger("ua.pipeline.regenerate")
@@ -37,6 +40,7 @@ class RegenerateReport:
     lessons_regenerated: list[str] = field(default_factory=list)
     lessons_kept: list[str] = field(default_factory=list)  # regeneration failed; the old lesson stays
     abandoned_tasks: int = 0
+    released_holds: int = 0  # questions an earlier interrupted run / top-up had left out of serving
     cost_usd: float = 0.0
 
 
@@ -60,17 +64,16 @@ async def regenerate(
     usage = llm.Usage()
     token = llm.current_usage.set(usage)
     tracker = JobTracker.load(course_id)
-    previous_state = tracker.state if tracker.state not in ("running", "queued") else "done"
+    final_state = tracker.state if tracker.state not in ("running", "queued") else "done"
     tracker.state = "running"  # the UI shows progress; another process sees the course as building
     ctx = BuildContext(course=course, tracker=tracker, usage=usage)
     parts = [name for name, on in (("lessons", lessons), ("visuals", visuals), ("verification", verify)) if on]
     tracker.log(f"Regenerating {', '.join(parts)} for {len(selected)} skill{'s' * (len(selected) != 1)}")
     try:
         ids = [s["id"] for s in selected]
-        if lessons:
-            report.abandoned_tasks = _abandon_active_tasks(ids)
-        if visuals:
-            _execute_in("UPDATE skills SET viz_json = NULL WHERE id IN ({marks})", ids)
+        report.released_holds = release_stale_holds(ids)
+        if report.released_holds:
+            tracker.log(f"Released {report.released_holds} questions an earlier interrupted run had held back")
         prefix = lesson_prefix(course) if lessons else ""
 
         async def one(skill: dict) -> None:
@@ -79,72 +82,42 @@ async def regenerate(
                 regenerated = await ensure_lesson(ctx, skill["id"], prefix, force=True)
                 if regenerated:
                     report.lessons_regenerated.append(skill["key"])
-                    db.execute("UPDATE skills SET viz_json = NULL WHERE id = ?", (skill["id"],))
                 elif skill["lesson_status"] == "ready":
                     report.lessons_kept.append(skill["key"])
             if regenerated or visuals:
-                await ensure_visual(ctx, skill["id"])
-            if regenerated or verify:
-                if not regenerated:  # a regenerated lesson's questions are new and unverified anyway
-                    _hold_for_verification([skill["id"]])
-                for note in await verify_skill(skill["id"]):
-                    tracker.log(f"Verify {skill['key']}: {note}")
-                _release_unverified(skill["id"])
+                await ensure_visual(ctx, skill["id"], force=True)  # the old visual stays unless the new plan works
+            notes: list[str] = []
+            if regenerated:
+                notes = await verify_skill(skill["id"])  # the new questions are unverified
+            elif verify:
+                notes = await reverify_skill(skill["id"])
+            for note in notes:
+                tracker.log(f"Verify {skill['key']}: {note}")
+
+        async def guarded(skill: dict) -> None:
+            try:
+                await one(skill)
+            except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others (cancellation does)
+                log.exception("regeneration of skill %s crashed", skill["key"])
+                tracker.log(f"Skill {skill['key']}: unexpected error {e}", level=logging.ERROR)
 
         if selected:
-            await one(selected[0])  # the first lesson call writes the prompt cache for the others
-            await asyncio.gather(*(one(s) for s in selected[1:]))
+            await guarded(selected[0])  # the first lesson call writes the prompt cache for the others
+            await asyncio.gather(*(guarded(s) for s in selected[1:]))
         jobs.refresh_pipeline_counters(ctx)
         report.cost_usd = usage.cost_usd
         tracker.log(f"Regeneration finished · {jobs._cost_summary(usage)}")
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        final_state = "interrupted"  # → Resume in the app finishes what is missing
+        tracker.log(
+            "Regeneration interrupted — every lesson keeps its old or its new version; resume to finish visuals and "
+            f"verification · {jobs._cost_summary(usage)}",
+            level=logging.WARNING,
+        )
+        raise
     finally:
-        tracker.finish(previous_state, tracker.error)
+        report.abandoned_tasks = ctx.abandoned_tasks
+        tracker.finish(final_state, tracker.error)
         llm.current_usage.reset(token)
         jobs._active.discard(course_id)
     return report
-
-
-def _execute_in(sql: str, ids: list[str]) -> None:
-    if ids:
-        db.execute(sql.format(marks=",".join("?" * len(ids))), tuple(ids))
-
-
-def _abandon_active_tasks(skill_ids: list[str]) -> int:
-    """Active tasks on these skills point at questions that are about to be replaced."""
-    if not skill_ids:
-        return 0
-    from ..learning import engine
-
-    marks = ",".join("?" * len(skill_ids))
-    rows = db.query(f"SELECT id FROM tasks WHERE status = 'active' AND skill_id IN ({marks})", tuple(skill_ids))
-    now = datetime.now(UTC)
-    for row in rows:
-        try:
-            engine.abandon(row["id"], now)
-        except Exception:  # noqa: BLE001 — fall back to closing the task directly
-            log.exception("abandoning task %s failed; closing it directly", row["id"])
-            db.execute(
-                "UPDATE tasks SET status = 'completed', phase = 'done', outcome = 'abandoned', completed_at = ? "
-                "WHERE id = ?",
-                (db.now_iso(), row["id"]),
-            )
-    return len(rows)
-
-
-def _hold_for_verification(skill_ids: list[str]) -> None:
-    """Re-verify machine-checkable questions: out of serving until the verifier answers. Learner flags and retired
-    questions are left alone."""
-    _execute_in(
-        "UPDATE questions SET verify_json = '{{}}', flagged = 1, flag_reason = '" + PENDING_REASON + "' "
-        "WHERE skill_id IN ({marks}) AND kind != 'free_response' "
-        "AND NOT (flagged = 1 AND flag_reason NOT LIKE 'verification:%')",
-        skill_ids,
-    )
-
-
-def _release_unverified(skill_id: str) -> None:
-    """Questions whose verification call failed become servable unverified, as in the build."""
-    db.execute(
-        "UPDATE questions SET flagged = 0, flag_reason = '' WHERE skill_id = ? AND flag_reason = ? AND verify_json = '{}'",
-        (skill_id, PENDING_REASON),
-    )

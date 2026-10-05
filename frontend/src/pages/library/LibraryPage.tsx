@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { getHealth, listBooks, listCourses } from "../../api";
+import { listBooks, listCourses } from "../../api";
 import { Icon } from "../../components/Icon";
 import { ErrorState } from "../../components/StateMessage";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
+import { useHealth } from "../../hooks/useHealth";
 import { useResource } from "../../hooks/useResource";
 import { BookList } from "./BookList";
 import { CourseCard } from "./CourseCard";
@@ -13,7 +14,7 @@ const BUILDING_POLL_MS = 4000;
 
 export function LibraryPage() {
   useDocumentTitle("Library");
-  const health = useResource("health", getHealth);
+  const health = useHealth();
   // Poll only while some course is still building, so its card's progress stays current.
   const [anyBuilding, setAnyBuilding] = useState(false);
   const courses = useResource(

@@ -48,6 +48,34 @@ class PdfError(ValueError):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Stored paths: rows keep paths relative to settings.data_dir, so a moved or copied data dir keeps working
+# ---------------------------------------------------------------------------
+
+
+def stored_path(path: Path) -> str:
+    """The form a file path is stored in the DB: relative to the data dir when it lies inside it."""
+    path = Path(path)
+    try:
+        return path.resolve().relative_to(settings.data_dir.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def resolve_stored(value: str) -> Path:
+    """A stored path → a usable one: relative paths are resolved against the (current) data dir; absolute paths of
+    older rows are returned unchanged."""
+    path = Path(value)
+    return path if path.is_absolute() else settings.data_dir / path
+
+
+def book_pdf_path(book_id: str, stored: str) -> Path:
+    """A book's PDF, located by id (data/books/<id>/book.pdf) so a moved data dir keeps working; the recorded path is
+    only a fallback (books imported by older versions recorded an absolute path)."""
+    by_id = settings.books_dir / book_id / "book.pdf"
+    return by_id if by_id.exists() else resolve_stored(stored)
+
+
 @contextmanager
 def open_pdf(pdf_path: Path) -> Iterator[pymupdf.Document]:
     """Yield a cached, already-open document while holding MUPDF_LOCK. Do not close it."""
@@ -507,11 +535,52 @@ def render_page_zoom_png(pdf_path: Path, page_index: int, zoom: float) -> bytes:
         return doc[page_index].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).tobytes("png")
 
 
-def render_clip_png(pdf_path: Path, page_index: int, clip: Rect4, zoom: float) -> bytes:
+OWN_TEXT_SHARE = 0.9  # a text line this much inside a figure's bbox belongs to the figure (its label)
+
+
+def render_clip_png(pdf_path: Path, page_index: int, clip: Rect4, zoom: float, figure: Rect4 | None = None) -> bytes:
+    """Render a page region. With `figure` (the figure's bbox inside the clip), text lines that reach into the clip
+    but do not belong to the figure (a display equation right above it, the next paragraph) are removed from a
+    temporary copy of the page first, together with line art lying entirely inside them (fraction bars, radical
+    vinculums). The figure's own labels — lines mostly inside its bbox — are kept, and so is every stroke that merely
+    passes through such a text row (a vertex of the figure inside the equation's line band). Figure bboxes already
+    contain their labels in full (see _absorb_labels), so a line counts as the figure's own only when it lies
+    essentially inside the bbox."""
     with open_pdf(pdf_path) as doc:
         page = doc[page_index]
         rect = pymupdf.Rect(clip) & page.rect
-        return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=rect, alpha=False).tobytes("png")
+        matrix = pymupdf.Matrix(zoom, zoom)
+        if figure is not None:
+            fig = pymupdf.Rect(figure)
+            foreign = [
+                ln for ln in _text_lines(page) if ln.rect.intersects(rect) and inside_fraction(ln.rect, fig) < OWN_TEXT_SHARE
+            ]
+            if foreign:
+                try:  # whole rows: a bar between two pieces of one equation is covered too
+                    return _render_without(doc, page_index, [r.rect for r in _text_rows(foreign)], rect, matrix)
+                except Exception as e:  # noqa: BLE001 — an unusual page: the plain crop is still useful
+                    log.warning("could not mask the text around a figure on page %d: %s", page_index, e)
+        return page.get_pixmap(matrix=matrix, clip=rect, alpha=False).tobytes("png")
+
+
+def _render_without(
+    doc: pymupdf.Document, page_index: int, rects: Sequence[pymupdf.Rect], clip: pymupdf.Rect, matrix: pymupdf.Matrix
+) -> bytes:
+    """Render `clip` of a copy of the page with the text in `rects` (and line art covered by them) redacted."""
+    tmp = pymupdf.open()
+    try:
+        tmp.insert_pdf(doc, from_page=page_index, to_page=page_index)
+        copy = tmp[0]
+        for r in rects:
+            copy.add_redact_annot(r + (-0.5, -0.5, 0.5, 0.5), fill=False)  # no fill: never paint over the figure
+        copy.apply_redactions(
+            images=pymupdf.PDF_REDACT_IMAGE_NONE,
+            graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+            text=pymupdf.PDF_REDACT_TEXT_REMOVE,
+        )
+        return copy.get_pixmap(matrix=matrix, clip=clip, alpha=False).tobytes("png")
+    finally:
+        tmp.close()
 
 
 def page_size(pdf_path: Path, page_index: int) -> tuple[float, float]:

@@ -98,3 +98,38 @@ export function layoutGraph(skills: SkillNode[], edges: SkillEdge[], foundations
   ]);
   return { skills: positioned, foundations: placed, laneLabel, bounds };
 }
+
+export interface Viewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+const FIT_PADDING = 24;
+/** Below this zoom node titles stop being readable; tall graphs are then shown from the top instead. */
+export const READABLE_ZOOM = 0.72;
+/** The initial fit never goes below this (titles ≈ 8 px): a graph wider than the pane — any real chapter on a phone —
+ * opens on its first skill and is panned sideways, instead of shrinking to an unreadable overview. */
+export const MIN_FIT_ZOOM = 0.6;
+
+/**
+ * Initial viewport for a `width` × `height` pane: fit the whole graph when that keeps it readable, otherwise zoom to
+ * fit the width (between MIN_FIT_ZOOM and READABLE_ZOOM), anchor the top, where the learner starts, and centre
+ * `focus` (the first skill) when the graph is still wider than the pane — never scrolling past the graph's edges.
+ */
+export function initialViewport(width: number, height: number, bounds: Bounds, focus: Bounds): Viewport {
+  const { x: bx, y: by, width: bw, height: bh } = bounds;
+  const innerW = width - 2 * FIT_PADDING;
+  const innerH = height - 2 * FIT_PADDING;
+  const fitAll = Math.min(innerW / bw, innerH / bh);
+  const fitWidth = innerW / bw;
+  const zoom = Math.min(1, fitAll >= READABLE_ZOOM ? fitAll : Math.max(fitAll, MIN_FIT_ZOOM, Math.min(READABLE_ZOOM, fitWidth)));
+  let x = (width - bw * zoom) / 2 - bx * zoom;
+  if (bw * zoom > innerW) {
+    const leftEdge = FIT_PADDING - bx * zoom;
+    const rightEdge = width - FIT_PADDING - (bx + bw) * zoom;
+    x = Math.min(leftEdge, Math.max(rightEdge, width / 2 - (focus.x + focus.width / 2) * zoom));
+  }
+  const y = bh * zoom <= innerH ? (height - bh * zoom) / 2 - by * zoom : FIT_PADDING - by * zoom;
+  return { x, y, zoom };
+}

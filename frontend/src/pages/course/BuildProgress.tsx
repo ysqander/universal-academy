@@ -95,9 +95,16 @@ export function BuildProgress({ courseId, initialJob, onChange, failedLessons = 
   }
 
   const active = isJobActive(status);
-  const doneCount = status.stages.filter((s) => s.status === "done" || s.status === "skipped").length;
-  const current = status.stages.find((s) => s.status === "running") ?? status.stages.find((s) => s.status === "failed");
   const stopped = status.state === "failed" || status.state === "interrupted";
+  const doneCount = status.stages.filter((s) => s.status === "done" || s.status === "skipped").length;
+  // The stage being worked on (or where a stopped build halted — the one resuming starts with) names the step;
+  // its position in the list is the stage number, not the count of finished stages.
+  const findStage = (wanted: JobStage["status"]) => status.stages.findIndex((s) => s.status === wanted);
+  let currentIndex = findStage("running");
+  if (currentIndex < 0) currentIndex = findStage("failed");
+  if (currentIndex < 0 && stopped) currentIndex = findStage("pending");
+  const current = currentIndex >= 0 ? status.stages[currentIndex] : undefined;
+  const stageNumber = Math.min(current ? currentIndex + 1 : Math.max(doneCount + (active ? 1 : 0), 1), status.stages.length);
   // A finished build whose failed lessons can be retried (the course is usable meanwhile).
   const retryLessons = status.state === "done" && failedLessons > 0;
   const lessonsWord = failedLessons === 1 ? "lesson" : "lessons";
@@ -125,7 +132,7 @@ export function BuildProgress({ courseId, initialJob, onChange, failedLessons = 
               `You can study everything else meanwhile. Retrying writes only the missing ${lessonsWord}.`
             ) : (
               <>
-                Stage {Math.min(doneCount + (active ? 1 : 0), status.stages.length)} of {status.stages.length}
+                Stage {stageNumber} of {status.stages.length}
                 {current ? ` · ${current.label}` : ""}
                 {active ? " · the map appears as soon as the chapter is mapped; lessons fill in as they are written." : ""}
                 {stopped ? " · resuming skips everything already finished." : ""}

@@ -72,10 +72,8 @@ def _book(row: dict[str, Any]) -> Book:
 
 
 def _book_pdf(row: dict[str, Any]) -> Path:
-    """The stored copy, located by id (data/books/<id>/book.pdf), so a moved data dir keeps working; the
-    absolute path recorded at import is only a fallback."""
-    by_id = settings.books_dir / row["id"] / "book.pdf"
-    return by_id if by_id.exists() else Path(row["pdf_path"])
+    """The stored copy, located by id (data/books/<id>/book.pdf), so a moved data dir keeps working."""
+    return pdf.book_pdf_path(row["id"], row["pdf_path"])
 
 
 def _current_outline(row: dict[str, Any]) -> list[OutlineNode]:
@@ -269,7 +267,7 @@ async def _import(source: Path, sha: str, filename: str, *, move: bool) -> Book:
                     meta.title,
                     meta.author,
                     filename,
-                    str(target),
+                    pdf.stored_path(target),  # relative to the data dir
                     meta.page_count,
                     db.dumps([n.model_dump() for n in outline]),
                     outline_source,

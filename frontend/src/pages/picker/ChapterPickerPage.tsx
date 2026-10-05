@@ -6,6 +6,7 @@ import { Spinner } from "../../components/Spinner";
 import { ErrorState, LoadingState } from "../../components/StateMessage";
 import { useToast } from "../../context/toast";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
+import { DEFAULT_MAX_COURSE_PAGES, useHealth } from "../../hooks/useHealth";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useResource } from "../../hooks/useResource";
 import { buildEstimate, pageRangeLabel, plural } from "../../lib/format";
@@ -24,8 +25,6 @@ import { OutlineTree } from "./OutlineTree";
 import { ThumbnailStrip } from "./ThumbnailStrip";
 import "./ChapterPickerPage.css";
 
-/** Server limit (UA_MAX_COURSE_PAGES, default 80): larger selections are rejected by POST /api/courses. */
-const MAX_COURSE_PAGES = 80;
 /** Above this a course still builds, but one chapter usually works better. */
 const LARGE_SELECTION = 40;
 
@@ -115,7 +114,9 @@ function Picker({ book }: { book: Book }) {
 
   const { range, sections, manualError } = useMemo(() => resolvePick(pick, flat, book.page_count), [pick, flat, book.page_count]);
   const pageCount = range ? range.end - range.start + 1 : 0;
-  const tooLarge = pageCount > MAX_COURSE_PAGES;
+  // Server limit (UA_MAX_COURSE_PAGES, reported by /api/health): larger selections are rejected by POST /api/courses.
+  const maxPages = useHealth().data?.max_course_pages ?? DEFAULT_MAX_COURSE_PAGES;
+  const tooLarge = pageCount > maxPages;
 
   const defaultTitle = useMemo(() => {
     if (sections.length === 1) return prettyTitle(sections[0].title);
@@ -334,7 +335,7 @@ function Picker({ book }: { book: Book }) {
             <div className="callout callout--danger" role="alert">
               <Icon name="warning" size={18} />
               <span>
-                That's {pageCount} pages — a course can have at most {MAX_COURSE_PAGES}. Choose a single chapter or a few sections.
+                That's {pageCount} pages — a course can have at most {maxPages}. Choose a single chapter or a few sections.
               </span>
             </div>
           ) : range && pageCount > LARGE_SELECTION ? (
@@ -378,7 +379,7 @@ function Picker({ book }: { book: Book }) {
             <span className="picker__bar-title">{summaryTitle}</span>
             <span className="picker__bar-meta">
               {rangeLabel(labelOf, range)} · {plural(pageCount, "page")}
-              {tooLarge ? ` · max ${MAX_COURSE_PAGES}` : ""}
+              {tooLarge ? ` · max ${maxPages}` : ""}
             </span>
           </div>
           <button

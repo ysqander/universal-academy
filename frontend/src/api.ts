@@ -41,7 +41,12 @@ export const isApiError = (err: unknown, status?: number): err is ApiError =>
 
 export const isAbortError = (err: unknown): boolean => err instanceof DOMException && err.name === "AbortError";
 
-const UNREACHABLE = "Can't reach the Universal Academy server. Is the backend running on port 8000?";
+/** No answer at all: the network request failed, or the dev proxy found no backend behind it. No port is assumed —
+ * the app is served by the same server it talks to, on whatever port that runs. */
+const unreachable = (): string => {
+  const host = typeof window !== "undefined" ? window.location.host : "";
+  return `Can't reach the Universal Academy server${host ? ` at ${host}` : ""}. Check that it is still running, then try again.`;
+};
 
 type ValidationIssue = { loc?: (string | number)[]; msg?: string };
 
@@ -64,7 +69,9 @@ function fallbackMessage(status: number): string {
   if (status === 409) return "That isn't possible right now.";
   if (status === 413) return "The file is too large.";
   if (status === 422) return "The request was rejected as invalid.";
-  if (status >= 500) return status === 502 || status === 503 || status === 504 ? UNREACHABLE : `Server error (${status}).`;
+  // A real 502/503/504 response came from a server that is reachable: it is busy or failing, not gone.
+  if (status === 502 || status === 503 || status === 504) return `The server couldn't handle this right now (${status}). Try again in a moment.`;
+  if (status >= 500) return `Server error (${status}).`;
   return `Request failed (${status}).`;
 }
 
@@ -75,7 +82,10 @@ function errorFromBody(status: number, bodyText: string): ApiError {
   } catch {
     // Non-JSON error bodies (e.g. a proxy error page) fall through to a status-based message.
   }
-  if (!message && status === 500 && !bodyText.trim()) message = UNREACHABLE; // Vite proxy: backend down
+  // Vite dev proxy with no backend behind it (location.host is then the dev server, so it isn't named).
+  if (!message && status === 500 && !bodyText.trim()) {
+    message = "Can't reach the Universal Academy backend behind the dev server. Check that it is running (and UA_API_TARGET, if set).";
+  }
   return new ApiError(status, message ?? fallbackMessage(status));
 }
 
@@ -90,7 +100,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     });
   } catch (err) {
     if (isAbortError(err)) throw err;
-    throw new ApiError(0, UNREACHABLE);
+    throw new ApiError(0, unreachable());
   }
   const text = await response.text();
   if (!response.ok) throw errorFromBody(response.status, text);
@@ -146,7 +156,7 @@ export function uploadBook(file: File, onProgress: (fraction: number) => void): 
         reject(errorFromBody(xhr.status, xhr.responseText));
       }
     };
-    xhr.onerror = () => reject(new ApiError(0, UNREACHABLE));
+    xhr.onerror = () => reject(new ApiError(0, unreachable()));
     xhr.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
     const form = new FormData();
     form.append("file", file, file.name);
@@ -177,7 +187,23 @@ export const setFoundationKnown = (courseId: string, key: string, known: boolean
 export const getNext = (courseId: string, signal?: AbortSignal) =>
   get<NextTaskResponse>(`/api/courses/${seg(courseId)}/next`, signal);
 export const continueLearning = (courseId: string) => post<Task>(`/api/courses/${seg(courseId)}/continue`);
-export const startTask = (courseId: string, body: StartTaskRequest) => post<Task>(`/api/courses/${seg(courseId)}/tasks`, body);
+// selector.start_task: 409 "S3 is locked — learn S1 (…) first." for a lesson on a skill whose prerequisites are open.
+const LOCKED_CONFLICT = /\bis locked\b/;
+
+/**
+ * Start (or resume) a chosen task. A lesson the learner picked explicitly (drawer, menu) is theirs to take: when the
+ * server still answers 409 "locked" — e.g. resuming a lesson started earlier with "Learn anyway" — retry once with
+ * `force` (a no-op for unlocked skills), so the button never silently fails.
+ */
+export async function startTask(courseId: string, body: StartTaskRequest): Promise<Task> {
+  const path = `/api/courses/${seg(courseId)}/tasks`;
+  try {
+    return await post<Task>(path, body);
+  } catch (err) {
+    if (body.force || body.type === "review" || !(isApiError(err, 409) && LOCKED_CONFLICT.test(err.message))) throw err;
+    return post<Task>(path, { ...body, force: true });
+  }
+}
 export const getTask = (taskId: string, signal?: AbortSignal) => get<Task>(`/api/tasks/${seg(taskId)}`, signal);
 export const startPractice = (taskId: string) => post<Task>(`/api/tasks/${seg(taskId)}/practice`);
 export const submitAnswer = (taskId: string, body: AnswerSubmit) => post<AnswerResult>(`/api/tasks/${seg(taskId)}/answer`, body);

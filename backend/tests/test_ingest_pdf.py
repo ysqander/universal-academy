@@ -440,3 +440,51 @@ def test_wide_picture_block_keeps_separate_figures(axler_pdf: Path) -> None:
     assert [c.bbox for c in scan.candidates] == [c.bbox for c in plain]
     left = min(scan.candidates[1:], key=lambda c: c.bbox[0])
     assert left.caption == "The ellipsoid E(2f_1, f_2) in R^2"
+
+
+def make_equation_over_figure(path: Path) -> Path:
+    """A display equation with a drawn fraction bar right above a triangle whose apex lies inside the equation's
+    line band (horizontally clear of it) — the layout of Axler p.195 (PDF index 208)."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=375, height=636)
+    page.insert_text((40, 340), "Body text of the paragraph that introduces the identity below.", fontsize=10)
+    page.insert_text((150, 380), "a2 + b2 = 1", fontsize=11)  # the numerator 1 ends the line, above the bar
+    page.insert_text((201, 386), "2", fontsize=8)  # the denominator
+    page.insert_text((212, 380), "c2 + 2d2.", fontsize=11)
+    page.draw_line((199.5, 377), (205.5, 377), color=(0, 0, 0), width=0.5)  # the fraction bar
+    shape = page.new_shape()
+    shape.draw_polyline([(300, 376), (150, 560), (320, 560), (300, 376)])
+    shape.finish(color=(0.8, 0.1, 0.1), width=1)
+    shape.commit()
+    page.insert_text((205, 470), "a", fontsize=10)  # labels inside the figure
+    page.insert_text((316, 470), "b", fontsize=10)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _dark_pixels(png: bytes, clip: tuple[float, float, float, float], region: tuple[float, float, float, float], zoom: float) -> int:
+    pix = pymupdf.Pixmap(png)
+    x0, y0 = int((region[0] - clip[0]) * zoom), int((region[1] - clip[1]) * zoom)
+    x1, y1 = int((region[2] - clip[0]) * zoom), int((region[3] - clip[1]) * zoom)
+    return sum(1 for y in range(max(0, y0), min(pix.height, y1)) for x in range(max(0, x0), min(pix.width, x1)) if min(pix.pixel(x, y)) < 200)
+
+
+def test_figure_crop_masks_a_neighbouring_equation_and_its_fraction_bar(tmp_path: Path) -> None:
+    path = make_equation_over_figure(tmp_path / "eq.pdf")
+    [cand] = pdf.figure_candidates(path, 0).candidates
+    figure = cand.bbox
+    assert 368 < figure[1] < 389  # the bbox starts inside the equation's line band (the apex lies there)
+    clip = (figure[0] - 4, figure[1] - 4, figure[2] + 4, figure[3] + 4)
+    equation = (clip[0], clip[1], 270.0, 390.0)  # the equation and its fraction bar — left of the apex at x=300
+    plain = pdf.render_clip_png(path, 0, clip, 3.0)
+    masked = pdf.render_clip_png(path, 0, clip, 3.0, figure)
+    assert _dark_pixels(plain, clip, equation, 3.0) > 0  # without the mask the crop shows half the equation
+    assert _dark_pixels(masked, clip, equation, 3.0) == 0  # glyphs and the fraction bar are gone
+    apex = (290.0, 374.0, 310.0, 392.0)
+    assert _dark_pixels(masked, clip, apex, 3.0) > 0  # the figure's strokes inside the band survive
+    for label in ((203.0, 460.0, 212.0, 472.0), (314.0, 460.0, 322.0, 472.0)):
+        assert _dark_pixels(masked, clip, label, 3.0) > 0  # its own labels are kept
+    # a crop with nothing foreign in it is rendered exactly as before
+    lone = (150.0, 400.0, 330.0, 560.0)
+    assert pdf.render_clip_png(path, 0, lone, 2.0, lone) == pdf.render_clip_png(path, 0, lone, 2.0)

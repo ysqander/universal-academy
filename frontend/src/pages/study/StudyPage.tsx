@@ -49,7 +49,6 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [session, setSession] = useState<SessionInfo | null>(null);
-  const [xp, setXp] = useState<{ taskId: string; earned: number }>({ taskId: "", earned: 0 });
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   // The last answer finished the task while its feedback is still on screen (task is replaced on "See results").
@@ -144,9 +143,6 @@ export default function StudyPage({ courseId }: { courseId: string }) {
     if (result.task.phase === "done") {
       setFinishedId(result.task.id);
       setConfirmEnd(false);
-    }
-    if (result.xp_awarded > 0) {
-      setXp((prev) => ({ taskId: result.task.id, earned: (prev.taskId === result.task.id ? prev.earned : 0) + result.xp_awarded }));
     }
   }, []);
 
@@ -265,7 +261,9 @@ export default function StudyPage({ courseId }: { courseId: string }) {
       <CompletionScreen
         key={task.id}
         task={task}
-        xpEarned={xp.taskId === task.id ? xp.earned : 0}
+        // The server's figure for the finished task: includes re-scoring after a flag, the lesson bonus, and 0 for a
+        // voided or abandoned task (a local sum of answer XP would go stale).
+        xpEarned={task.xp_value}
         onSession={onSession}
         onContinue={() => void startNext("continue", () => continueLearning(courseId))}
         onStart={(option: TaskOption) =>

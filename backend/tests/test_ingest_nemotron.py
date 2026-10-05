@@ -245,3 +245,32 @@ def test_page_budget_bounds_a_hanging_call(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(nm.NemotronError, match="no answer") as info:
         asyncio.run(nm.parse_layout(png_of(10, 10)))
     assert info.value.unreachable
+
+
+def test_cancelled_wait_for_spacing_gives_the_limiter_slot_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page budget that runs out while a request waits for its turn inside the limiter must not leak the slot."""
+    monkeypatch.setattr(nm, "MIN_SPACING_S", 1.0)
+    limiter = nm._RateLimiter()
+
+    async def main() -> None:
+        await limiter.__aenter__()  # one request in flight; the next one has to wait ~1 s for the spacing
+        waiting = asyncio.create_task(limiter.__aenter__())
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        assert limiter._sem._value == nm.MAX_IN_FLIGHT - 1  # only the held slot is taken
+        # the same through wait_for, as parse_layout's page budget does it
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(limiter.__aenter__(), timeout=0.05)
+        assert limiter._sem._value == nm.MAX_IN_FLIGHT - 1
+        await limiter.__aexit__(None, None, None)
+        assert limiter._sem._value == nm.MAX_IN_FLIGHT
+        monkeypatch.setattr(nm, "MIN_SPACING_S", 0.0)
+        for _ in range(nm.MAX_IN_FLIGHT):  # every slot is still usable, without waiting for anything
+            await asyncio.wait_for(limiter.__aenter__(), timeout=0.5)
+        assert limiter._sem._value == 0
+        for _ in range(nm.MAX_IN_FLIGHT):
+            await limiter.__aexit__(None, None, None)
+
+    asyncio.run(main())

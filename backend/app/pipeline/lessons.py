@@ -42,7 +42,8 @@ _PROOF_VERBS = re.compile(r"^\s*(prove|justify|show)\b", re.IGNORECASE)
 
 
 def is_proof_skill(skill: dict[str, Any]) -> bool:
-    """Proof / justify skills (D4): every knowledge point is practised with a free-response proof."""
+    """Proof / justify skills (E1): every knowledge point is practised with a free-response proof (q2), and where
+    natural a second one (q4) for when the first was assisted."""
     return skill.get("kind") == "proof" or bool(_PROOF_VERBS.match(skill.get("objective") or ""))
 
 
@@ -91,7 +92,10 @@ async def ensure_lesson(ctx: BuildContext, skill_id: str, prefix: str, *, force:
             continue
         lesson, figure_ids, figure_notes = resolve_figures(lesson, skill, course_figures(ctx.course))
         notes += figure_notes
-        persist_lesson(skill_id, lesson, pools, figure_ids=figure_ids)
+        abandoned = persist_lesson(skill_id, lesson, pools, figure_ids=figure_ids)
+        if abandoned:
+            ctx.abandoned_tasks += abandoned
+            notes.append(f"abandoned {abandoned} active task{'s' * (abandoned != 1)} started on the previous version")
         for note in notes:
             ctx.tracker.log(f"Lesson {skill['key']}: {note}", level=logging.WARNING)
         n_questions = sum(len(p) for p in pools)
@@ -126,11 +130,14 @@ def validate_lesson(
             raise InvalidLesson(f"knowledge point {i + 1} has only {len(kept)} valid questions")
         if sum(1 for q in kept if is_machine_checkable(q.kind)) < 2:
             notes.append(f"KP {i + 1} has fewer than 2 machine-checkable questions")
-        if proof and not any(q.kind == "free_response" for q in kept):
+        written = sum(1 for q in kept if q.kind == "free_response")
+        if proof and not written:
             message = f"knowledge point {i + 1} of a proof skill has no free-response proof question"
             if strict:
                 raise InvalidLesson(message)
             notes.append(message)
+        elif proof and written == 1:  # an assisted first proof then waives the written requirement for this KP
+            notes.append(f"KP {i + 1} has a single free-response proof (no second attempt if the first is assisted)")
         pools.append(first_free_response_second(_unique_keys(kept, i, used_keys)))
     share = choice_share(pools)
     if strict and share > MAX_CHOICE_SHARE_HARD:
@@ -168,11 +175,15 @@ def next_question_key(kp_index: int, used: set[str]) -> str:
 
 def persist_lesson(
     skill_id: str, lesson: dict[str, Any], pools: list[list[QuestionDraft]], *, figure_ids: list[str] | None = None
-) -> None:
+) -> int:
     """Questions first, then lesson_status='ready' — in one transaction. Questions of an earlier version of the lesson
     are deleted, except those the learner already answered: they are retired (flagged, renamed key) so the attempt
-    history stays valid."""
+    history stays valid. Active tasks on the skill (started on the old version — possibly while the new one was being
+    written, from another process) are abandoned in the same transaction, so no task can point at a deleted question.
+    Returns the number of tasks abandoned."""
     with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")  # the task check and the question swap are one step, also for other processes
+        abandoned = abandon_active_tasks(conn, skill_id)
         retire_questions(conn, skill_id)
         for kp_index, pool in enumerate(pools):
             insert_questions(conn, skill_id, kp_index, pool)
@@ -185,13 +196,36 @@ def persist_lesson(
                 "UPDATE skills SET lesson_json = ?, lesson_status = 'ready', figure_ids_json = ? WHERE id = ?",
                 (db.dumps(lesson), db.dumps(figure_ids), skill_id),
             )
+    return abandoned
+
+
+def abandon_active_tasks(conn, skill_id: str) -> int:
+    """Close the skill's active tasks as abandoned (no XP), like the engine's abandon. Returns how many."""
+    return conn.execute(
+        "UPDATE tasks SET status = 'completed', phase = 'done', outcome = 'abandoned', xp_awarded = 0, completed_at = ?, "
+        "state_json = CASE WHEN json_valid(state_json) THEN json_set(state_json, '$.current', NULL) ELSE state_json END "
+        "WHERE skill_id = ? AND status = 'active'",
+        (db.now_iso(), skill_id),
+    ).rowcount
+
+
+# questions an active task has served or is showing (safety net: never delete what a task may still answer)
+_VALID_STATE = "CASE WHEN json_valid(t.state_json) THEN t.state_json ELSE '{}' END"
+_IN_ACTIVE_TASKS = (
+    f"SELECT j.value FROM tasks t, json_each({_VALID_STATE}, '$.served') j WHERE t.status = 'active' AND t.skill_id = ? "
+    "AND j.value IS NOT NULL "  # NOT IN (…, NULL) would match nothing
+    f"UNION SELECT json_extract({_VALID_STATE}, '$.current') FROM tasks t WHERE t.status = 'active' AND t.skill_id = ? "
+    f"AND json_extract({_VALID_STATE}, '$.current') IS NOT NULL"
+)
 
 
 def retire_questions(conn, skill_id: str) -> int:
-    """Delete the skill's questions; ones with attempts are kept as flagged history. Returns how many were retired."""
+    """Delete the skill's questions; ones with attempts — or held by an active task — are kept as flagged history.
+    Returns how many were retired."""
     conn.execute(
-        "DELETE FROM questions WHERE skill_id = ? AND id NOT IN (SELECT question_id FROM attempts WHERE skill_id = ?)",
-        (skill_id, skill_id),
+        "DELETE FROM questions WHERE skill_id = ? AND id NOT IN (SELECT question_id FROM attempts WHERE skill_id = ?) "
+        f"AND id NOT IN ({_IN_ACTIVE_TASKS})",
+        (skill_id, skill_id, skill_id, skill_id),
     )
     rows = conn.execute("SELECT id, key FROM questions WHERE skill_id = ?", (skill_id,)).fetchall()
     for row in rows:
@@ -323,8 +357,9 @@ def lesson_request(course: CourseInfo, skill: dict[str, Any]) -> str:
         lines += [
             "",
             (
-                "This is a PROOF skill: every knowledge point needs a free_response proof question as its q2 (see "
-                "PROOF SKILLS in the instructions)."
+                "This is a PROOF skill: every knowledge point needs a free_response proof question as its q2 and, "
+                "wherever natural, a second free_response proof of a variant as its q4 (see PROOF SKILLS in the "
+                "instructions)."
             ),
         ]
     if exercise_pages:

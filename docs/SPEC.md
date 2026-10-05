@@ -36,7 +36,7 @@ data/courses/<course_id>/figures/<figure_id>.png   # cropped figures (2x scale, 
 ### 3.1 Book import
 - `POST /api/books` (multipart `file`) or `POST /api/books/import-path {path}` (local file path; copied into data/).
 - Extract metadata title/author (fallback: filename), page count, page labels (`page.get_label()` → fallback str(i+1)).
-- Outline: `doc.get_toc()` → nested `OutlineNode` tree. end_page of a node = (start of next node at same or higher level) − 1, clamped to the parent's end; the last top-level node ends at the last page. Ids `n0..nN` in TOC order.
+- Outline: `doc.get_toc()` → nested `OutlineNode` tree. end_page of a node = (nearest later start at the same or higher level, in page order) − 1, or that start page itself when the next section begins below the top of its page (TOC destination y; if unknown, the shared page is included); clamped into the parent's range; the last top-level node ends at the last page. Ids `n0..nN` in TOC order. Titles are prettified at import (R^n → Rⁿ, x^2 → x²).
 - No outline → `outline_source="detected"`: send the text layer of the first ~25 pages to the LLM to detect the table of contents (chapters/sections with printed page numbers), then map printed numbers → PDF indexes via page labels (or by detecting the offset where printed number "1" appears). If no text layer, `outline_source="none"` and the UI offers manual page ranges.
 - `has_text_layer`: any of the first 30 pages yields >200 chars of text.
 
@@ -50,7 +50,9 @@ Per page, in PDF points:
 ### 3.3 Page transcription (OpenAI vision, set-of-mark)
 - Input: page render at 200 dpi with candidate boxes drawn in red and labelled M1..Mk; the PyMuPDF text layer as a hint ("may have broken math; trust the image"); Nemotron's blocks (type + text) as a second hint when available.
 - Output: `PageTranscription` (markdown with `[[figure:M2]]` placeholders, figures, rejected_marks, items, uncertain).
-- Figures accepted by the model are cropped (bbox + 4pt padding, rendered at 3× zoom) → `figures` rows with id `p{page}-f{n}`; placeholders rewritten to `[[figure:p21-f1]]`.
+- Figures accepted by the model are cropped (bbox + 4pt padding, rendered at 3× zoom) → `figures` rows (stored as `<course_id>-p21-f1`, exposed by the API as the local id `p21-f1`); placeholders rewritten to `[[figure:p21-f1]]`.
+- Escape glitch guard: the vision model occasionally emits LaTeX backslashes as JSON control escapes (destroying `\mathbf{R}`, `\{0,1\}`). `normalize_math` repairs what it can; any formula still lost triggers one retry with an explicit escaping reminder, and anything still unreadable is kept visible as `⟨?⟩` and listed in `uncertain` — content is never silently deleted.
+- Nemotron is optional and never fails a page: malformed responses fall back to no layout blocks; after 3 consecutive failed pages it is switched off for the rest of the run (circuit breaker).
 - Pages are processed concurrently (UA_LLM_CONCURRENCY). Each page result is persisted immediately → re-runs skip finished pages.
 
 ## 4. Build pipeline (background job)
@@ -156,7 +158,9 @@ A lesson = intro (why it matters, the idea, notation, visual) + 2-3 **knowledge 
 - **KP pass**: 2 *independent* correct answers **in a row** (no hints, no solution reveal). Then the next KP starts. All KPs passed → lesson **passed**: status learned, FSRS card created (`review_card(Rating.Good)`), XP = est_minutes (clamped 3-20) + 2 bonus if no wrong answers.
 - A hint-assisted or revealed correct answer resets the streak to 0 but isn't "wrong". A wrong answer resets the streak.
 - **KP fail**: the KP's pool is exhausted (max 5 questions incl. any easier-step swaps) without 2 in a row → lesson **halted**: outcome failed, 0 XP, `cooldown_until = now + 2h` (it returns later — the selector re-offers it), `kp_failures[kp] += 1`. On the **second failure at the same KP** → remediation: the skill's direct prerequisites with the highest encompassing weights (top 2) are made due now (remedial reviews) and the result carries `suggestion="review_prerequisite"`.
-- After 2 consecutive wrong answers the result carries `suggestion="easier_step"`; `POST /easier` re-shows the worked example and swaps in an unseen question from the current or previous KP with the lowest tier.
+- **Proof KPs**: if a KP's pool contains a free-response question, passing it also requires one independent, self-graded "correct" written answer; that question is served no later than the KP's 2nd question.
+- Easier step: available only after ≥ 1 wrong answer in the current KP (else 409); after 2 consecutive wrong answers the result also suggests it. `POST /easier` swaps in an unseen, strictly lower-tier question; a correct answer on it neither advances nor breaks the 2-in-a-row streak.
+- Integrity: hints are recorded server-side (`POST /api/questions/{qid}/hint`, `QuestionPublic.hints_used`); revealing the solution before answering makes the attempt assisted, except a free-response *comparison* after a committed answer (`RevealRequest.response`). Answers equal in value but not simplified (e.g. retyping the question's expression) get a 422 "simplify" message and are not counted.
 - Questions are served in pool order, never repeating a question within a task; on a later retry of the lesson prefer questions never seen before.
 
 ### 6.4 Review task (spaced repetition)
@@ -195,7 +199,11 @@ Markdown everywhere through one `<Markdown>` component (react-markdown + remark-
 
 `OPENAI_API_KEY` (required), `NVIDIA_API_KEY` (optional), `UA_MODEL_VISION` (gpt-6-luna), `UA_MODEL_GRAPH`/`UA_MODEL_LESSON`/`UA_MODEL_VIZ` (gpt-6.1-sol), `UA_MODEL_VERIFY` (gpt-6-luna), `UA_EFFORT_*` per role, `UA_MODEL_VISION`, `UA_MODEL_GRAPH`, `UA_MODEL_LESSON`, `UA_MODEL_VIZ`, `UA_MODEL_VERIFY`, `UA_PARSE_ENGINE` (auto|openai|nemotron), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR`, `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work).
 
-## 9. Testing
+## 9. Maintenance
+
+`backend/scripts/regenerate.py --data-dir ../data --course <id> [--skills S1,S4] [--only lessons,visuals,verify] [--dry-run]` rewrites a course's lessons/visuals/verification with the current prompts while keeping learner progress (answered questions are retired, not deleted; a DB backup is written first). `backend/scripts/try_parse.py <pdf> <page>…` shows how a page is transcribed.
+
+## 10. Testing
 
 - `backend/tests/`: pytest, offline by default (`UA_FAKE_LLM=1`, small synthetic PDF + the Axler PDF when present for outline/figure tests). Graph validation, grading, scheduler/FIRe-lite, selector, API smoke (TestClient), full pipeline with the fake LLM.
 - `backend/scripts/e2e_real.py`: real build of Axler §1A (pages 15-24) against the live APIs.

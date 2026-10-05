@@ -371,6 +371,8 @@ export interface NextTaskResponse {
 export interface StartTaskRequest {
   skill_id: string;
   type?: TaskType | null;
+  replace_active?: boolean; // another task is active: 409 unless true (then it is abandoned)
+  force?: boolean; // learn a locked skill anyway
 }
 
 export type SelfGrade = "correct" | "partial" | "incorrect";
@@ -399,9 +401,19 @@ export interface AnswerResult {
   suggestion_text: string | null;
 }
 
+// free_response: send the committed answer so the reveal counts as a comparison, not as assistance.
+export interface RevealRequest {
+  response?: string | null;
+}
+
 export interface RevealResponse {
   solution: string;
   correct_answer: string;
+}
+
+export interface HintResponse {
+  hint: string;
+  hints_used: number;
 }
 
 export interface Health {

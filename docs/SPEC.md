@@ -125,14 +125,15 @@ Prefer the book's own figure when one fits. Never 3D. Interactivity only when mo
 | POST `/api/foundations/{cid}/{key}` | `FoundationKnownRequest` → `FoundationNode` |
 | GET `/api/courses/{cid}/next` | → `NextTaskResponse` (active task + ranked menu; no side effects) |
 | POST `/api/courses/{cid}/continue` | → `Task` (resume active task or start the top option; 409 if nothing to do) |
-| POST `/api/courses/{cid}/tasks` | `StartTaskRequest` → `Task` (manual override: learn/review a chosen skill) |
+| POST `/api/courses/{cid}/tasks` | `StartTaskRequest` → `Task` (manual override: learn/review a chosen skill; 409 if another task is active unless `replace_active`; locked skills need `force`) |
 | GET `/api/tasks/{tid}` | → `Task` |
 | GET `/api/settings` / PUT `/api/settings` | `{daily_goal}` |
 | POST `/api/tasks/{tid}/practice` | → `Task` (lesson read → practice phase, first question served) |
 | POST `/api/tasks/{tid}/answer` | `AnswerSubmit` → `AnswerResult` |
 | POST `/api/tasks/{tid}/easier` | → `Task` (swap current question for an unseen lower-tier one) |
 | POST `/api/tasks/{tid}/abandon` | → `Task` |
-| POST `/api/questions/{qid}/reveal` | → `RevealResponse` (marks the current attempt as revealed) |
+| POST `/api/questions/{qid}/hint` | → `HintResponse` (next hint; recorded server-side for the current attempt) |
+| POST `/api/questions/{qid}/reveal` | `RevealRequest` → `RevealResponse` (marks the current attempt as revealed, unless it is a free-response comparison after a committed answer) |
 | POST `/api/questions/{qid}/flag` | `FlagRequest` → `Task` (question excluded; attempts on it voided; replacement served) |
 
 Errors: JSON `{"detail": "..."}` with proper status codes. All times UTC ISO strings.

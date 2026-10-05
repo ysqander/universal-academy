@@ -348,6 +348,8 @@ class NextTaskResponse(BaseModel):
 class StartTaskRequest(BaseModel):
     skill_id: str
     type: TaskType | None = None  # None -> lesson if not learned yet, else review
+    replace_active: bool = False  # another task is active: 409 unless True (then it is abandoned)
+    force: bool = False  # learn a locked skill anyway (learner override of prerequisite gating)
 
 
 SelfGrade = Literal["correct", "partial", "incorrect"]
@@ -377,9 +379,23 @@ class AnswerResult(BaseModel):
     suggestion_text: str | None = None
 
 
+class RevealRequest(BaseModel):
+    """free_response: the learner's committed answer. When present (non-trivial), the reveal is a comparison for
+    self-grading and does not count as assistance; otherwise the current attempt is marked as revealed."""
+
+    response: str | None = None
+
+
 class RevealResponse(BaseModel):
     solution: str
     correct_answer: str
+
+
+class HintResponse(BaseModel):
+    """POST /api/questions/{qid}/hint — records server-side that the next hint was shown for the current attempt."""
+
+    hint: str
+    hints_used: int
 
 
 class FlagRequest(BaseModel):

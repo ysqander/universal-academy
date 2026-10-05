@@ -64,8 +64,10 @@ if (FRONTEND_DIST / "assets").exists():
 def spa(full_path: str):
     if full_path.startswith("api/"):
         return JSONResponse(status_code=404, content={"detail": "Not found"})
-    candidate = FRONTEND_DIST / full_path
-    if full_path and candidate.is_file():
+    dist = FRONTEND_DIST.resolve()
+    candidate = (dist / full_path).resolve()
+    # Only ever serve files that live inside frontend/dist (blocks ../ and absolute-path tricks).
+    if full_path and candidate.is_relative_to(dist) and candidate.is_file():
         return FileResponse(candidate)
     index = FRONTEND_DIST / "index.html"
     if index.exists():

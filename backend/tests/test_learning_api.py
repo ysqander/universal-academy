@@ -82,7 +82,7 @@ def test_manual_start_flag_easier_and_abandon(client: TestClient) -> None:
     assert task["question"]["id"] != flagged_q
     assert db.query_one("SELECT flagged, flag_reason FROM questions WHERE id = ?", (flagged_q,)) == {
         "flagged": 1,
-        "flag_reason": "the answer key is wrong",
+        "flag_reason": "learner: the answer key is wrong",
     }
 
     done = client.post(f"/api/tasks/{task['id']}/abandon").json()

@@ -296,6 +296,8 @@ def build_task(task: dict[str, Any]) -> Task:
     if task["status"] == "active" and st.get("current"):
         qrow = db.query_one("SELECT * FROM questions WHERE id = ?", (st["current"],))
         question = views.question_public(qrow) if qrow else None
+        if question is not None:
+            question.hints_used = min(len(question.hints), int(st.get("hints") or 0))
     if task["status"] == "completed":
         xp_value = task["xp_awarded"]
     elif task["type"] == "lesson":
@@ -962,7 +964,10 @@ def flag(question_id: str, reason: str, now: datetime) -> Task:
         task = _task_serving(question_id, q["skill_id"])
         if task is None:
             raise Conflict("This question hasn't been served in a task yet.")
-        db.execute("UPDATE questions SET flagged = 1, flag_reason = ? WHERE id = ?", ((reason or "").strip()[:500], question_id))
+        db.execute(
+            "UPDATE questions SET flagged = 1, flag_reason = ? WHERE id = ?",
+            (f"learner: {(reason or '').strip()}"[:500], question_id),
+        )
         db.execute("UPDATE attempts SET status = 'voided' WHERE task_id = ? AND question_id = ?", (task["id"], question_id))
         log.info("question %s flagged by learner (task %s): %s", q["key"], task["id"], reason)
         st = db.loads(task["state_json"], {})

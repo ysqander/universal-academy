@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from . import db
 from .api import books, courses, study
 from .config import PROJECT_ROOT, settings
+from .learning import grading
 from .pipeline import jobs
 from .schemas import Health
 
@@ -24,7 +25,8 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    jobs.mark_interrupted_jobs()  # builds of a previous process that never recorded their end
+    jobs.mark_interrupted_jobs()
+    grading.warm_up()  # start the grading worker now so the first answer isn't slow  # builds of a previous process that never recorded their end
     try:
         yield
     finally:

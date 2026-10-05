@@ -236,6 +236,7 @@ class QuestionPublic(BaseModel):
     checklist: list[str]  # free_response self-assessment criteria (shown after submission)
     source_exercise: str | None = None
     flagged: bool = False
+    hints_used: int = 0  # hints already shown for the current attempt (server-recorded; survives reloads)
 
 
 class KnowledgePoint(BaseModel):

@@ -51,7 +51,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const [choice, setChoice] = useState<number | null>(null);
   const [response, setResponse] = useState("");
   // Hints come from POST /hint (recorded server-side, so a reload can't erase them); texts by hint index.
-  const [hintTexts, setHintTexts] = useState<string[]>([]);
+  const [hintTexts, setHintTexts] = useState<string[]>(() => question.hints.slice(0, question.hints_used));
   const [hinting, setHinting] = useState(false);
   const [revealed, setRevealed] = useState<RevealResponse | null>(null);
   const [revealing, setRevealing] = useState(false);

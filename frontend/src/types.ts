@@ -267,6 +267,7 @@ export interface QuestionPublic {
   checklist: string[];
   source_exercise: string | null;
   flagged: boolean;
+  hints_used: number; // hints already shown for this attempt (server-recorded)
 }
 
 export interface SkillRef {

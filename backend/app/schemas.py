@@ -369,6 +369,7 @@ class AnswerResult(BaseModel):
     independent: bool  # counted toward passing (no hints, no reveal)
     feedback: str  # short message, e.g. "Equivalent to the expected answer." / "Close: check the sign of the imaginary part."
     correct_answer: str  # answer_display
+    correct_choice: int | None = None  # multiple_choice / true_false: index of the right option
     solution: str
     task: Task  # updated task (next question, progress, phase/outcome)
     xp_awarded: int = 0

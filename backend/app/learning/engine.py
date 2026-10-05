@@ -693,6 +693,7 @@ def submit_answer(task_id: str, sub: AnswerSubmit, now: datetime) -> AnswerResul
             independent=graded.independent,
             feedback=graded.feedback,
             correct_answer=_answer_display(q),
+            correct_choice=q["correct_choice"] if q["kind"] in ("multiple_choice", "true_false") else None,
             solution=q["solution"],
             task=build_task(_task_row(task_id)),
             xp_awarded=finish.xp,

@@ -34,7 +34,9 @@ const GRADES: { grade: SelfGrade; label: string; hint: string }[] = [
 function choiceMarks(choices: string[], chosen: number | null, result: AnswerResult | null): ChoiceMark[] {
   if (!result || chosen === null) return [];
   const answer = result.correct_answer.trim();
-  const correctIndex = result.correct ? chosen : choices.findIndex((c) => c.trim() === answer);
+  const correctIndex = result.correct
+    ? chosen
+    : (result.correct_choice ?? choices.findIndex((c) => c.trim() === answer));
   return choices.map((_, i) => (i === correctIndex ? "correct" : i === chosen && !result.correct ? "incorrect" : null));
 }
 

@@ -391,6 +391,7 @@ export interface AnswerResult {
   independent: boolean;
   feedback: string;
   correct_answer: string;
+  correct_choice: number | null;
   solution: string;
   task: Task;
   xp_awarded: number;

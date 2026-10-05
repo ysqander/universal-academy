@@ -2,7 +2,8 @@
 
 respond() dispatches on the schema class name. Lesson generation v2: the planner splits a skill whose title joins
 several abilities with " and " (like "Multiply complex numbers and use their powers") into 3 narrower skills and keeps
-any other; the writer returns a teaching sequence with checks of several kinds (expression, true_false_set,
+any other (its specs name earlier siblings the way real planners do, "a (S2a): …", which plan validation rewrites to
+"S2a: …"); the writer returns a teaching sequence with checks of several kinds (expression, true_false_set,
 reflect), a faded example and a visual; the reviewer reports one blocking issue on a first draft and none on a
 revised one. The content is a small, realistic course on complex numbers and
 F^n (Axler §1A style). Every generated question carries an invisible Markdown marker
@@ -622,13 +623,19 @@ def _plan(text: str, _prefix: str) -> TeachingPlan:
     kind = _field(text, "Kind", "computation").split(" ")[0]
     allowed = "Splitting: NOT allowed" not in text
     if allowed and " and " in title:
+
+        def sibling(local: str, ability: str) -> list[str]:  # a real planner's style: local id + future key
+            return [f"{local} ({key}{local}): {ability}", "Expand $(x+y)(z+w)$ for real numbers"]
+
         skills = [
             _spec("a", "Multiply two complex numbers", "Compute the product of two complex numbers written as $a+bi$.",
                   "computation", prereqs, pages),
             _spec("b", "Compute powers of a complex number", "Compute a positive-integer power of a complex number by repeated multiplication.",
-                  "computation", [("a", 1.0)], pages, out_of_scope=["Finding roots"]),
+                  "computation", [("a", 1.0)], pages, out_of_scope=["Finding roots"],
+                  assumed_prerequisites=sibling("a", "multiply two complex numbers in the form $a+bi$.")),
             _spec("c", "Check a proposed root", "Decide whether a given complex number is a square or cube root of another by computing its power.",
-                  "procedure", [("b", 0.75)], pages, out_of_scope=["Finding roots from scratch"]),
+                  "procedure", [("b", 0.75)], pages, out_of_scope=["Finding roots from scratch"],
+                  assumed_prerequisites=sibling("b", "compute positive-integer powers of complex numbers.")),
         ]
         return TeachingPlan(
             split_test=f"Yes: multiplying, computing powers and checking roots need different reasoning ({title}).",

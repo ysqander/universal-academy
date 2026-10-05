@@ -37,6 +37,7 @@ from ..llm_schemas import (
     TeachingPlan,
     TeachingSpec,
 )
+from ..views import lesson_version
 from .context import (
     BuildContext,
     CourseInfo,
@@ -59,7 +60,7 @@ from .lessons import (
 )
 from .prompts_v2 import PLANNER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, REVISION_NOTE, WRITER_INSTRUCTIONS
 from .questions import InvalidQuestion, clean_question, insert_questions
-from .textutil import clean_source_refs
+from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
 from .verify import verify_skill
 from .visuals import FINALIZE_TIMEOUT, finalize_plan
 
@@ -69,6 +70,7 @@ MAX_SPLIT = 5
 LOCAL_IDS = "abcde"
 MIN_BLOCKS, MAX_BLOCKS = 3, 14
 CHECK_BLOCKS = {"check", "faded_example"}
+FADED_CHECK_KINDS = {"numeric", "expression", "true_false_set", "multiple_choice", "true_false"}  # machine-checked
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
 V2_VIZ = {"format": "none"}  # skills.viz_json of a v2 lesson: its visuals live in the blocks
 _GOAL_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*your goal\s*:?\s*(?:\*\*)?\s*:?\s*", re.IGNORECASE)
@@ -183,11 +185,19 @@ def plan_request(course: CourseInfo, skill: dict[str, Any], *, allow_split: bool
         lines += ["", "The current lesson (which the learner found overloaded) practises these knowledge points:"]
         lines += [f"- {kp.get('title', '')}: {kp.get('explanation', '')}" for kp in current["knowledge_points"]]
     feedback = db.query(
-        "SELECT block_index, note FROM block_feedback WHERE skill_id = ? AND note != '' ORDER BY created_at", (skill["id"],)
+        "SELECT block_index, note, lesson_hash FROM block_feedback WHERE skill_id = ? AND note != '' "
+        "ORDER BY created_at, rowid",
+        (skill["id"],),
     )
-    if feedback:
+    version = lesson_version(skill["lesson_json"])
+    current = [f for f in feedback if f["lesson_hash"] == version]
+    earlier = [f for f in feedback if f["lesson_hash"] != version]  # block numbers of another version mean nothing
+    if current:
         lines += ["", "Learner feedback on the current lesson (\"This step isn't clear\"):"]
-        lines += [f"- block {f['block_index'] + 1}: {f['note']}" for f in feedback]
+        lines += [f"- block {f['block_index'] + 1}: {f['note']}" for f in current]
+    if earlier:
+        lines += ["", "Learner feedback on an earlier version of this lesson (\"This step isn't clear\"):"]
+        lines += [f"- {f['note']}" for f in earlier]
     lines += ["", "Direct prerequisites (in-chapter):"]
     lines += _skill_lines(prereqs, {p["key"]: p["weight"] for p in prereqs}) or ["(none)"]
     lines += [
@@ -348,7 +358,14 @@ def validate_plan(plan: TeachingPlan, graph: PlanGraph, *, allow_split: bool = T
                 notes.append(f"the plan did not map dependent {dep}; it now needs every new skill")
             dependents.append(DependentLink(dependent_key=dep, needs=mapped[dep]))
     validated = plan.model_copy(update={"decision": decision, "skills": cleaned, "dependents": dependents})
-    return validated, notes
+    # "Builds on" chips: the planner's local ids of siblings ("a (S2a): …", "b: …") become the final keys
+    final = new_keys(graph.key, validated, graph.keys - {graph.key}) if decision == "split" else {}
+    local_keys = {old: final[new] for old, new in remap.items() if new in final}
+    skills = [
+        s.model_copy(update={"assumed_prerequisites": normalize_sibling_refs(s.assumed_prerequisites, local_keys)})
+        for s in validated.skills
+    ]
+    return validated.model_copy(update={"skills": skills}), notes
 
 
 def describe_plan(plan: TeachingPlan, key: str) -> list[str]:
@@ -732,9 +749,10 @@ async def validate_v2(
     draft: LessonV2Draft, spec: TeachingSpec, figures: list[FigureInfo], *, proof: bool = False, strict: bool = True
 ) -> tuple[dict[str, Any], list[list[QuestionDraft]], list[str]]:
     """Validate a draft: inline checks (rules of their kind), block visuals (finalized like v1 visual plans), and the
-    knowledge points + questions with the v1 machinery (proof rule, choice cap, refs). strict=True raises
-    InvalidLesson on the first problem; strict=False repairs what it can (a check block without a valid check
-    becomes an explain/demonstrate block) and reports notes. Returns (lesson_json without plan/review, question pools
+    knowledge points + questions with the v1 machinery (proof rule, choice cap, refs). A faded_example's check must be
+    machine-checked (never 'reflect'). strict=True raises InvalidLesson on the first problem; strict=False repairs what
+    it can (a check block without a valid check becomes an explain/demonstrate block, a faded_example with a reflect
+    check a check block) and reports notes. Returns (lesson_json without plan/review, question pools
     in serving order, notes)."""
     notes: list[str] = []
     if len(draft.blocks) > MAX_BLOCKS:
@@ -756,6 +774,17 @@ async def validate_v2(
                 raise InvalidLesson(f"{where}: a {kind} block needs a valid check")
             kind = "demonstrate" if kind == "faded_example" else "explain"
             notes.append(f"{where}: {block.kind} block without a valid check shown as {kind}")
+        elif kind == "faded_example" and check is not None and check["kind"] not in FADED_CHECK_KINDS:
+            # the learner must carry out the missing step and get it graded — "think it through, then reveal" is not
+            # a partially completed example (complete example → faded example → independent practice)
+            if strict:
+                raise InvalidLesson(
+                    f"{where}: a faded_example's check must be machine-checked — the learner enters the result of the "
+                    f"missing step (numeric / expression, or true_false_set / multiple_choice for a decision), not "
+                    f"'{check['kind']}'; put an explanation question in its own check block"
+                )
+            kind = "check"
+            notes.append(f"{where}: faded_example with a '{check['kind']}' check shown as a check block")
         visual = None
         if block.visual is not None:
             viz, warnings = await asyncio.wait_for(
@@ -907,6 +936,11 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
     key = skill["key"]
     result = V2Result(key=key, skill_id=skill_id)
     course, tracker = ctx.course, ctx.tracker
+    # a spec stored before plan validation rewrote sibling local ids ("a (S2a): …") is regenerated with the keys
+    course_keys = [r["key"] for r in db.query("SELECT key FROM skills WHERE course_id = ?", (skill["course_id"],))]
+    assumed = normalize_sibling_refs(spec.assumed_prerequisites, sibling_keys(key, course_keys))
+    if assumed != list(spec.assumed_prerequisites):
+        spec = spec.model_copy(update={"assumed_prerequisites": assumed})
     figures = spec_figures(course, skill, spec)
     proof = is_proof_skill({"kind": spec.kind, "objective": spec.objective})
     try:

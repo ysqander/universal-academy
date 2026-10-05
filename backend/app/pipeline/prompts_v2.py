@@ -44,7 +44,11 @@ STRUCTURE DEPENDS ON THE KIND OF SKILL (do not hard-code example-before-formula)
 - checking supplied answers (a different task from constructing them): state what is being checked and what counts
   as "works" before any candidate appears; work one candidate fully; only then a comparison table (suggestion |
   what we get | matches?); then the point (e.g. getting the real part right is not enough — the imaginary part,
-  including its sign, must match too). Finding the candidates belongs to a later lesson."""
+  including its sign, must match too). At least one supplied candidate in the main path (a table row or the faded
+  example) is actually computed and matches the target in exactly one coordinate — e.g. the right real part with
+  the imaginary part of the wrong sign — and the lesson says explicitly why it fails (one matching coordinate is
+  not enough: every coordinate must match). Never make this point only with an invented result, and use numbers
+  that differ from the practice questions. Finding the candidates belongs to a later lesson."""
 
 REPRESENTATION_RULE = """\
 REPRESENTATIONS: every visual must finish the sentence "This representation helps the learner notice ___" and say
@@ -91,8 +95,9 @@ become a real number?")
 REFERENCE_CHECKING = r""""We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below. We are not finding
 solutions from scratch yet — we are checking whether these suggestions work. A suggestion works only if squaring it
 gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
-(suggestion | what we get when we square it | matches?), then the point: getting the real part right is not enough —
-the imaginary part, including its sign, must match too."""
+(suggestion | what we get when we square it | matches?) — one row is a real near miss: $2-i$ squares to
+$4-4i+i^2=3-4i$, the same real part as $3+4i$ but the imaginary part has the wrong sign, so $2-i$ does not work — then
+the point: getting the real part right is not enough — the imaginary part, including its sign, must match too."""
 
 QUESTION_RULES = f"""\
 PRACTICE QUESTIONS (knowledge_points[].questions)
@@ -177,6 +182,8 @@ FOR EACH SKILL (TeachingSpec)
 - kind: concept / definition / procedure / computation / distinction / interpretation / proof.
 - assumed_prerequisites: exactly which abilities the lesson treats as already learned — in-chapter skills by key
   ("S1: add complex numbers") and outside knowledge ("expanding $(x+y)(z+w)$"). The lesson will not re-teach them.
+  Name an earlier sibling of a split by its future key only ("S2a: multiply two complex numbers"), never by its
+  local id ("a", "a (S2a)") — these lines are shown to the learner. Local ids belong in prerequisites and dependents.
 - prerequisites: direct in-chapter prerequisites with encompassing weights (0.25 / 0.5 / 0.75 / 1 — how much of the
   prerequisite every problem of this skill exercises). Use existing keys from the course map and/or earlier
   siblings' local ids. Each of the original node's prerequisites must appear in at least one new skill (normally the
@@ -189,11 +196,15 @@ FOR EACH SKILL (TeachingSpec)
   success check and the practice do not use (an identity, a general law) goes to out_of_scope (the lesson may mention
   it as optional depth). The generalization that connects the concrete case to the book's own general statement IS
   part of the objective (for a procedure: the book's formula as "a record of the steps we just performed"; for a
-  definition: the definition itself). If more than about 10 bridges are truly needed, ask whether the objective is
+  definition: the definition itself). A bridge that makes a non-routine move (squaring and adding two equations,
+  substituting, introducing a helper quantity) states its purpose in the same sentence: "we want X, so we do Y" (e.g.
+  "to get the sum $a^2+b^2$, which with the known difference gives each square, square both equations and add").
+  If more than about 10 bridges are truly needed, ask whether the objective is
   two skills (e.g. "each term of the first bracket multiplies each term of the second, giving
   four products"; "$(3i)(2i)$ has two factors of $i$, so it contains $i^2$"; "replacing $i^2$ by $-1$ turns that
   product into a real number"; "the real terms and the $i$ terms are collected separately").
-- success_check: what would demonstrate the objective without requiring a new method.
+- success_check: what would demonstrate the objective without requiring a new method. When the objective is to decide
+  whether a supplied answer works, it includes a candidate that matches the target in exactly one coordinate.
 - representations: 0–2, each finishing "This representation helps the learner notice ___" and saying how it is
   read; format 'none' is valid and often right (an annotated sequence of equations may be best). A representation
   comes after the question it answers is established.
@@ -227,7 +238,10 @@ what the step does ("First, account for all four products"), not a topic name.
 - check: the learner responds before continuing (`check` required). Its body is the short lead-in; it never states
   the answer — the check's explanation does, after the learner has responded.
 - faded_example: a NEW worked example (not the running one) with the last step(s) left for the learner; the body
-  shows the completed steps and stops where the learner takes over; `check` asks for the missing step.
+  shows the completed steps and stops where the learner takes over; `check` asks for the RESULT of the missing step
+  and is machine-checked — numeric or expression (or true_false_set / multiple_choice when the last step is a
+  decision), never 'reflect': the learner carries out the step and gets it graded. An explanation question goes in
+  its own check block.
 - generalize: connect the concrete case to the general statement or formula.
 - summary: the method or result in one or two lines.
 
@@ -237,6 +251,12 @@ RULES FOR THE SEQUENCE
 - Keep ONE running example from the starting point through the demonstration and generalization.
 - Explain consequential transitions where they happen: "because $i^2=-1$" sits next to the substitution, not in a
   later remark.
+- Motivate every non-obvious move BEFORE making it: say what we are trying to find or isolate and why this move gets
+  it ("we already know $a^2-b^2=3$; if we also knew $a^2+b^2$, adding and subtracting would give $a^2$ and $b^2$ — so
+  square both coordinate equations and add them"). A move shown as a bare trick is a missing bridge.
+- In a first encounter show every algebra line the learner needs with only the stated prerequisites; never jump from
+  an expanded form straight to a factored one (write $a^4-2a^2b^2+b^4+4a^2b^2=a^4+2a^2b^2+b^4=(a^2+b^2)^2$, not
+  $\\dots=(a^2+b^2)^2$ directly).
 - Introduce notation before relying on it: say what new letters stand for ("where $a,b,c,d$ are real numbers"); do
   not import the source's letters ($\\alpha$, $\\beta$, $r$, $s$, $w$, $z$) without need.
 - A table, grid or diagram appears only after the question it answers is established; say what every row, column
@@ -269,7 +289,7 @@ INLINE CHECKS (`check` of check / faded_example blocks; formative — graded by 
 - kind numeric / expression / multiple_choice / true_false / true_false_set / reflect, same answer conventions as
   practice questions (expression answers in SymPy syntax with i, and the prompt says the form to enter). 'reflect' =
   the learner thinks or says the answer, then reveals: answer "", choices [], correct_choice null, answer_display =
-  a model answer in one or two sentences.
+  a model answer in one or two sentences. A faded_example's check is never 'reflect'.
 - explanation: the reasoning in one to three sentences, shown after the learner responds. The next block may build
   on the answer (the learner has seen the explanation by then).
 - {COUNT_QUESTION_RULE}
@@ -320,6 +340,12 @@ Look specifically for:
 - a table, grid or set of candidates shown before its question and the role of its entries are established, or
   entries left unexplained;
 - a transition whose reason is not given where it happens ("because $i^2=-1$");
+- a non-routine move whose purpose is not stated before it is made (e.g. "square both equations and add" without
+  saying which quantity that produces and why we want it), or an algebra step that skips the intermediate line
+  (expanded form → factored square) → issue (minor; blocking when it is the procedure's key step);
+- a faded example whose check is a 'reflect' question instead of the graded missing step;
+- a lesson on checking supplied answers whose failing candidates fail in every coordinate, or whose "one coordinate
+  is not enough" point rests only on an invented value (no computed candidate matching in exactly one coordinate);
 - notation used before it is introduced, or letters imported from the book without need;
 - the running example abandoned, or several new ideas introduced at once;
 - inline checks that cannot be answered from what was shown before them, or no check before the practice;

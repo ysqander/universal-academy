@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
+import { stripStockVerdict } from "../../lib/feedback";
 import type { AnswerResult, Task } from "../../types";
 
 export type SuggestionAction = "easier" | "reread" | "map";
@@ -69,8 +70,10 @@ export function FeedbackPanel({ result, answerShown = false, before, onContinue,
   const continueRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const tone = toneOf(result);
+  // "Not quite." under the title "Not quite" only repeats the verdict: show what the grader adds to it, if anything.
+  const feedback = stripStockVerdict(result.feedback);
   // The server's feedback already explains "with help" answers; don't say it twice.
-  const toneNote = tone.note && !(result.correct && !result.independent && result.feedback.trim()) ? tone.note : null;
+  const toneNote = tone.note && !(result.correct && !result.independent && feedback) ? tone.note : null;
   const note = progressNote(before, result.task);
   const suggestion = result.suggestion ? SUGGESTION_ACTIONS[result.suggestion] : undefined;
   const taskOngoing = result.task.phase !== "done";
@@ -94,7 +97,7 @@ export function FeedbackPanel({ result, answerShown = false, before, onContinue,
         </div>
       </header>
 
-      {result.feedback && <Markdown className="feedback__text">{result.feedback}</Markdown>}
+      {feedback && <Markdown className="feedback__text">{feedback}</Markdown>}
       {toneNote && <p className="feedback__note">{toneNote}</p>}
 
       {showAnswer && (

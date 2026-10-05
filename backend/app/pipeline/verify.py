@@ -1,6 +1,10 @@
 """Verify stage: every machine-checkable question is re-solved by a second model that sees only the prompt and the
 choices; disagreements and reported defects are flagged (kept out of serving and scoring).
 
+A true_false_set disagreement is re-solved once, statement by statement against the stated definitions (role
+"graph"): a single misread statement of the first solver must not flag a correct question. When that careful second
+solve agrees with the key the question stays servable (status 'agree_on_recheck', both solves recorded, logged).
+
 Flags are shared with the learner: a question the learner reported (any flag whose reason does not start with
 'verification:') is never un-flagged or re-verified here — verification only manages its own flags."""
 
@@ -14,7 +18,7 @@ from typing import Any
 from .. import db, llm
 from ..learning.grading import check_answer
 from ..llm_schemas import IndependentAnswer
-from .prompts import VERIFY_INSTRUCTIONS
+from .prompts import VERIFY_INSTRUCTIONS, VERIFY_STATEMENTS_RECHECK
 from .questions import is_machine_checkable
 
 log = logging.getLogger("ua.pipeline.verify")
@@ -22,6 +26,7 @@ log = logging.getLogger("ua.pipeline.verify")
 MIN_CONFIDENCE = 0.5
 MIN_UNFLAGGED_PER_KP = 2
 VERIFICATION_PREFIX = "verification:"
+RECHECK_KINDS = {"true_false_set"}  # a disagreement on these is re-solved once before the question is flagged
 _NO_PROBLEM = {"", "none", "none.", "n/a", "no", "no problems", "no problems.", "-"}
 
 
@@ -30,6 +35,7 @@ class Verdict:
     flagged: bool
     reason: str
     record: dict[str, Any]
+    note: str = ""  # for the job log (e.g. a disagreement the careful re-check overruled)
 
 
 def learner_flagged(row: dict[str, Any]) -> bool:
@@ -88,8 +94,42 @@ def _describe(row: dict[str, Any], independent: IndependentAnswer) -> str:
     return repr(independent.answer)
 
 
+async def recheck(row: dict[str, Any], first: Verdict) -> Verdict:
+    """Second, careful solve of a disagreement (true_false_set): statement by statement against the stated
+    definitions, by the stronger 'graph' model. Agreement with the key keeps the question servable; a failed call
+    keeps the first verdict."""
+    try:
+        second = await llm.structured(
+            role="graph",
+            instructions=VERIFY_STATEMENTS_RECHECK,
+            text=verify_request(row),
+            schema=IndependentAnswer,
+            max_output_tokens=32000,
+            label=f"verify {row['key']} (re-check)",
+            stream=True,
+        )
+    except Exception as e:  # noqa: BLE001 — the first verdict stands
+        log.warning("re-check of question %s failed: %s", row["id"], e)
+        return first
+    verdict = judge(row, second)
+    record = {**first.record, "status": verdict.record["status"], "recheck": second.model_dump()}
+    first_answer = _describe(row, IndependentAnswer.model_validate(first.record["independent"]))
+    if not verdict.flagged:
+        note = (
+            f"{row['key']}: the independent solver answered {first_answer}, a careful re-check agreed with the key "
+            f"{row['answer']!r} — kept"
+        )
+        log.info("verification: %s", note)
+        return Verdict(False, "", {**record, "status": "agree_on_recheck"}, note)
+    if verdict.record["status"] == "disagree":
+        reason = f"{first.reason}; a careful re-check answered {_describe(row, second)}"
+        return Verdict(True, reason, {**record, "status": "disagree"})
+    return Verdict(True, verdict.reason, record)  # the re-check agreed but reported a defect or was unsure
+
+
 async def verify_question(row: dict[str, Any]) -> Verdict | None:
-    """Independent solve (retried once). None when the call failed — the question stays unverified."""
+    """Independent solve (retried once; a true_false_set disagreement is re-checked once). None when the call failed
+    — the question stays unverified."""
     for attempt in range(2):
         try:
             independent = await llm.structured(
@@ -105,6 +145,8 @@ async def verify_question(row: dict[str, Any]) -> Verdict | None:
             log.warning("verification of question %s failed (attempt %d): %s", row["id"], attempt + 1, e)
             continue
         verdict = judge(row, independent)
+        if verdict.record["status"] == "disagree" and row["kind"] in RECHECK_KINDS:
+            verdict = await recheck(row, verdict)
         # The CASE reads the current row, so a learner flag set while the call was in flight is kept as well.
         db.execute(
             "UPDATE questions SET verify_json = ?, "
@@ -121,9 +163,12 @@ async def verify_skill(skill_id: str) -> list[str]:
     """Verify the skill's pending questions concurrently, then keep every knowledge point servable.
     Returns log notes (questions kept despite disagreement)."""
     rows = [r for r in db.query("SELECT * FROM questions WHERE skill_id = ?", (skill_id,)) if needs_verification(r)]
-    if rows:
-        await asyncio.gather(*(verify_question(r) for r in rows))
-    return keep_kps_servable(skill_id)
+    verdicts = await asyncio.gather(*(verify_question(r) for r in rows)) if rows else []
+    return _verdict_notes(verdicts) + keep_kps_servable(skill_id)
+
+
+def _verdict_notes(verdicts: list[Verdict | None]) -> list[str]:
+    return [v.note for v in verdicts if v is not None and v.note]
 
 
 async def reverify_skill(skill_id: str) -> list[str]:
@@ -136,9 +181,8 @@ async def reverify_skill(skill_id: str) -> list[str]:
         for r in db.query("SELECT * FROM questions WHERE skill_id = ?", (skill_id,))
         if is_machine_checkable(r["kind"]) and not learner_flagged(r)
     ]
-    if rows:
-        await asyncio.gather(*(verify_question(r) for r in rows))
-    return keep_kps_servable(skill_id)
+    verdicts = await asyncio.gather(*(verify_question(r) for r in rows)) if rows else []
+    return _verdict_notes(verdicts) + keep_kps_servable(skill_id)
 
 
 def keep_kps_servable(skill_id: str) -> list[str]:

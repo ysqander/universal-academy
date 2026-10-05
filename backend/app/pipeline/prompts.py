@@ -245,6 +245,21 @@ You independently check an auto-generated practice question. Solve it yourself, 
   only complete or much longer argument while the other options are one-line slogans); "" if there is none.
 """
 
+# Second solve of a true_false_set question whose first independent solve disagreed with the key (verify.py): a
+# careful statement-by-statement check against the stated definitions, so one misread statement does not flag a
+# correct question.
+VERIFY_STATEMENTS_RECHECK = VERIFY_INSTRUCTIONS + """
+THIS IS A CAREFUL SECOND CHECK of a true_false_set question. Decide every statement on its own, one at a time:
+- Name the definition (or result) the statement depends on and apply it exactly as stated — e.g. $\\mathbf{R}^n$ is
+  the set of lists of n REAL numbers, so a list with a non-real entry is not in it; $\\mathbf{C}^n$ contains every
+  list of n complex numbers (real ones included); the length of a list is part of what the list is; a list is
+  ordered, a set is not.
+- Recompute every number, product and coordinate the statement involves; check every part of the statement and
+  every case it covers. It is true only if it holds exactly as written; otherwise it is false. Do not reinterpret
+  the wording to make it true or false.
+- Only after deciding each statement separately, write one letter per statement, in order.
+"""
+
 TOPUP_INSTRUCTIONS = f"""\
 You write additional practice questions for one knowledge point of a lesson in a Math-Academy-style course generated
 from a textbook. The user message gives the skill, the knowledge point (explanation and worked example), the source

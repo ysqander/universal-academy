@@ -137,6 +137,7 @@ function Sequence({ lesson, kind, preview = false, footer, fingerprint }: Lesson
                     else blockRefs.current.delete(block.index);
                   }}
                   skillId={lesson.skill_id}
+                  version={lesson.version ?? ""}
                   block={block}
                   outcome={flow.answered[block.index] ?? null}
                   skipped={Boolean(flow.skipped[block.index])}

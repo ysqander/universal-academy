@@ -98,8 +98,8 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
         answer = _strip_math(q.answer)
         if not answer:
             raise InvalidQuestion(f"{q.kind} question without an answer")
-        if q.kind == "expression" and _ANY_ORDER.search(q.prompt) and _is_tuple(answer):
-            answer = "{" + answer[1:-1].strip() + "}"  # "in any order": the grader compares a set without order
+        if q.kind == "expression" and _is_tuple(answer) and answers_in_any_order(q.prompt):
+            answer = "{" + answer[1:-1].strip() + "}"  # "enter them in any order": the grader compares a set
         tolerance = abs(q.tolerance) if q.tolerance is not None and q.kind == "numeric" else None
         if not check_answer(
             q.kind,
@@ -124,7 +124,35 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
     return q.model_copy(update=update)
 
 
-_ANY_ORDER = re.compile(r"\b(?:either|any)\s+order\b", re.IGNORECASE)
+# "Enter both roots in any order": the order of the ANSWERS does not matter, so a tuple key becomes a set. Only a
+# sentence that is about entering the answers counts — "you may multiply the factors in either order. Give the pair
+# (Re, Im)" or "lists are ordered: the entries cannot be entered in any order" keep their ordered tuple.
+_ANSWERS = r"(?:roots?|solutions?|answers?|values|zeros|eigenvalues|numbers|them)"
+_ENTER = r"(?:enter(?:ed)?|give|given|list(?:ed)?|write|written|type[d]?|input|report|state)"
+_ANY_ORDER = r"(?:in\s+)?(?:either|any)\s+order"
+_IRRELEVANT = r"(?:does\s*n[o’']t|is\s+not|isn[’']t)\s+(?:matter|important|relevant)"
+_UNORDERED_ENTRY = (
+    # "Enter both roots, separated by a comma, in any order" / "Give the solutions (order does not matter)"
+    re.compile(rf"\b{_ENTER}\b[^.;:!?]*?\b{_ANSWERS}\b[^.;:!?]*?(?:\b{_ANY_ORDER}|\border\s+{_IRRELEVANT})\b", re.IGNORECASE),
+    # "The roots may be entered in any order"
+    re.compile(rf"\b{_ANSWERS}\b[^.;:!?]*?\b(?:may|can)\s+be\s+{_ENTER}\s+{_ANY_ORDER}\b", re.IGNORECASE),
+    # "The order of the roots does not matter" / "the order of your answers is not important"
+    re.compile(rf"\border\s+of\s+(?:the|your)\s+(?:\w+\s+)?{_ANSWERS}\s+{_IRRELEVANT}", re.IGNORECASE),
+)
+_NEGATED_ORDER = re.compile(
+    rf"\b(?:not|never|cannot|can[’']t|don[’']t|doesn[’']t|mustn[’']t|no)\b(?:\W+\w+){{0,6}}?\W+{_ANY_ORDER}\b", re.IGNORECASE
+)
+
+
+def answers_in_any_order(prompt: str) -> bool:
+    """The prompt says the order of the answers (roots, solutions, values) does not matter — not merely that some
+    operation may be done "in either order", and not a negated "cannot be entered in any order"."""
+    for sentence in re.split(r"(?<=[.;!?])\s+|\n+", prompt or ""):
+        for i, pattern in enumerate(_UNORDERED_ENTRY):
+            m = pattern.search(sentence)
+            if m and (i == 2 or not _NEGATED_ORDER.search(sentence[: m.end()])):  # negation: in any order only
+                return True
+    return False
 
 
 def _is_tuple(answer: str) -> bool:

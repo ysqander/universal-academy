@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type Ref } from "react";
-import { sendBlockFeedback } from "../../api";
+import { isApiError, sendBlockFeedback } from "../../api";
 import { useToast } from "../../context/toast";
 import type { CheckOutcome } from "../../lib/lessonFlow";
 import type { TeachingBlockView } from "../../types";
@@ -8,9 +8,12 @@ import { Markdown } from "../Markdown";
 import { Spinner } from "../Spinner";
 import { VisualizationView } from "../VisualizationView";
 import { InlineCheck } from "./InlineCheck";
+import { StaleLessonNotice } from "./StaleLessonNotice";
 
 interface TeachingBlockProps {
   skillId: string;
+  /** Lesson.version, sent with checks and "isn't clear" notes (409 when the lesson changed since). */
+  version: string;
   block: TeachingBlockView;
   outcome: CheckOutcome | null;
   skipped: boolean;
@@ -31,7 +34,7 @@ function checkState(block: TeachingBlockView, outcome: CheckOutcome | null, skip
 }
 
 /** One step of a v2 teaching sequence: optional heading, text, visual and inline check, plus "This step isn't clear". */
-export function TeachingBlock({ skillId, block, outcome, skipped, onAnswered, fresh, ref }: TeachingBlockProps) {
+export function TeachingBlock({ skillId, version, block, outcome, skipped, onAnswered, fresh, ref }: TeachingBlockProps) {
   const headingId = useId();
   const viz = block.visualization;
   const showViz = Boolean(viz && (viz.format !== "none" || viz.figure));
@@ -45,7 +48,7 @@ export function TeachingBlock({ skillId, block, outcome, skipped, onAnswered, fr
       aria-labelledby={block.heading ? headingId : undefined}
       aria-label={block.heading ? undefined : `Step ${block.index + 1}`}
     >
-      <UnclearControl skillId={skillId} blockIndex={block.index} />
+      <UnclearControl skillId={skillId} version={version} blockIndex={block.index} />
       <div className="teach-block__content">
         {block.kind === "faded_example" && (
           <p className="teach-block__label">
@@ -63,6 +66,7 @@ export function TeachingBlock({ skillId, block, outcome, skipped, onAnswered, fr
         {block.check && (
           <InlineCheck
             skillId={skillId}
+            version={version}
             blockIndex={block.index}
             check={block.check}
             outcome={outcome}
@@ -75,10 +79,11 @@ export function TeachingBlock({ skillId, block, outcome, skipped, onAnswered, fr
   );
 }
 
-type UnclearState = "idle" | "open" | "sending" | "sent";
+/** "stale": the server answered 409 — the lesson changed since this page loaded it, so the note can't be filed here. */
+type UnclearState = "idle" | "open" | "sending" | "sent" | "stale";
 
 /** "This step isn't clear": an icon in the block's margin (label on hover / focus), a text link on phones. */
-function UnclearControl({ skillId, blockIndex }: { skillId: string; blockIndex: number }) {
+function UnclearControl({ skillId, version, blockIndex }: { skillId: string; version: string; blockIndex: number }) {
   const toast = useToast();
   const formId = useId();
   const inputId = useId();
@@ -86,7 +91,7 @@ function UnclearControl({ skillId, blockIndex }: { skillId: string; blockIndex: 
   const [note, setNote] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const open = state === "open" || state === "sending";
+  const open = state === "open" || state === "sending" || state === "stale";
 
   useEffect(() => {
     if (state === "open") inputRef.current?.focus({ preventScroll: true });
@@ -102,10 +107,14 @@ function UnclearControl({ skillId, blockIndex }: { skillId: string; blockIndex: 
     if (state !== "open") return;
     setState("sending");
     try {
-      await sendBlockFeedback(skillId, blockIndex, { kind: "unclear", note: note.trim() });
+      await sendBlockFeedback(skillId, blockIndex, { kind: "unclear", note: note.trim(), ...(version ? { version } : {}) });
       setState("sent");
       toast.show("Thanks — noted for this step", "success");
     } catch (err) {
+      if (isApiError(err, 409)) {
+        setState("stale");
+        return;
+      }
       toast.error(err);
       setState("open");
     }
@@ -149,15 +158,18 @@ function UnclearControl({ skillId, blockIndex }: { skillId: string; blockIndex: 
             maxLength={300}
             placeholder="e.g. where did the minus sign come from?"
             autoComplete="off"
-            disabled={state === "sending"}
+            disabled={state === "sending" || state === "stale"}
           />
+          {state === "stale" && <StaleLessonNotice />}
           <div className="unclear-form__actions">
             <button type="button" className="btn btn--ghost btn--sm" onClick={close}>
               Cancel
             </button>
-            <button type="submit" className="btn btn--primary btn--sm" disabled={state === "sending"}>
-              {state === "sending" && <Spinner size={14} label="Sending" />} Send
-            </button>
+            {state !== "stale" && (
+              <button type="submit" className="btn btn--primary btn--sm" disabled={state === "sending"}>
+                {state === "sending" && <Spinner size={14} label="Sending" />} Send
+              </button>
+            )}
           </div>
         </form>
       )}

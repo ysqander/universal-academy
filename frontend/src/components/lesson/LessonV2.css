@@ -540,6 +540,44 @@
   border-left: 3px solid var(--tone);
 }
 
+/* Focused after answering (keyboard users keep their place): a ring only for keyboard focus. */
+.inline-check__result:focus {
+  outline: none;
+}
+
+.inline-check__result:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+/* 409 on a check or note: the lesson was regenerated since the page loaded it. */
+.stale-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: var(--warning-bg);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.stale-notice > svg {
+  flex: none;
+  color: var(--warning);
+}
+
+.stale-notice__text {
+  flex: 1 1 14em;
+  min-width: 0;
+}
+
+.stale-notice__reload {
+  flex: none;
+}
+
 .inline-check__verdict {
   display: inline-flex;
   align-items: center;

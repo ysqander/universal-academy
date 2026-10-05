@@ -340,7 +340,8 @@ def _pipeline_counts(course_id: str) -> dict[str, int]:
     questions = db.query_one(
         "SELECT COUNT(*) AS total, COALESCE(SUM(q.verify_json != '{}'), 0) AS verified, "
         "COALESCE(SUM(q.flagged), 0) AS flagged, "
-        "COALESCE(SUM(json_extract(q.verify_json, '$.status') = 'agree'), 0) AS agree, "
+        "COALESCE(SUM(json_extract(q.verify_json, '$.status') IN ('agree', 'agree_on_recheck')), 0) AS agree, "
+        "COALESCE(SUM(json_extract(q.verify_json, '$.status') = 'agree_on_recheck'), 0) AS rechecked, "
         "COALESCE(SUM(json_extract(q.verify_json, '$.status') = 'disagree_kept'), 0) AS kept "
         "FROM questions q JOIN skills s ON s.id = q.skill_id "
         "WHERE s.course_id = ? AND q.kind != 'free_response' "
@@ -358,6 +359,7 @@ def _pipeline_counts(course_id: str) -> dict[str, int]:
         "verified": questions["verified"],
         "flagged": questions["flagged"],
         "agree": questions["agree"],
+        "rechecked": questions["rechecked"],
         "kept": questions["kept"],
     }
 
@@ -405,6 +407,8 @@ def _close_pipeline_stages(ctx: BuildContext, *, report: bool) -> None:
     tracker.update("visuals", status="done", message=visuals_msg, save=False)
     unchecked = c["questions"] - c["verified"]
     verify_msg = f"{c['agree']}/{c['questions']} agree · {c['flagged']} flagged"
+    if c["rechecked"]:
+        verify_msg += f" · {c['rechecked']} agreed on a careful re-check"
     if c["kept"]:
         verify_msg += f" · {c['kept']} kept despite disagreement"
     if unchecked:

@@ -104,7 +104,14 @@
   font-family: var(--font-serif);
   font-size: var(--text-md);
   line-height: 1.45;
+  /* Long formulas scroll sideways. overflow-x alone turns overflow-y into auto too, and KaTeX pokes out of the line
+     box (a √ by ~1px, an inline fraction's invisible struts by more): that drew a vertical scrollbar wherever
+     scrollbars always show. The padding gives the glyphs room (the negative margin keeps the layout); overflow-y:
+     hidden then only cuts invisible struts. */
   overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 4px;
+  margin-block: -4px;
 }
 
 .choices--boolean .choice__text {
@@ -299,7 +306,11 @@
   font-family: var(--font-serif);
   font-size: var(--text-md);
   line-height: 1.45;
+  /* As .choice__text: sideways scrolling for long statements, never a vertical scrollbar for a tall glyph (√). */
   overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 4px;
+  margin-block: -4px;
 }
 
 .tfset__toggle {

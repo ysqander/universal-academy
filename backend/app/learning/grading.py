@@ -36,6 +36,16 @@ A linear combination of lists ('(-5, 5, 2) + 4(1, 5, -4)') is read componentwise
 own expression gets the same "simplify" message; any other arithmetic on lists asks for the resulting list.
 An irreducible radical typed in its textbook form (∛4, \\sqrt[4]{8}) counts as reduced even though SymPy rewrites it
 onto a smaller base (2^(2/3), 2^(3/4)).
+
+Radicals (policy): a root left in a denominator counts as reduced — 1/√2, i/√2, 3/√6 are accepted for √2/2, √2/2·i,
+√6/2. Rationalising the denominator is a presentation convention the course text (Axler) does not insist on (it writes
+factors like 1/√2 itself); asking for it again would only cost the learner a retry. A root that can still be
+simplified is not reduced, and when that is the only thing left to do the message names it instead of the generic one:
+a fraction or decimal inside a root (√(1/2), √1.5 -> "no fraction inside a root"), roots of the same index in one term
+(√3/√2, √2·√3 -> "combine roots in the same term into one"), a factor that comes out of the root (√8, ∛16 -> "take
+factors out of a root"). Sets and lists get the same message per component ("Same values — … in each component").
+Typing: '√½' is √(1/2) and '2½' is 5/2 (a vulgar fraction is one number), and 'sqrt2' / 'sqrt 2' is sqrt(2) like √2
+('1/sqrt2 i' is i/√2, not 1/√(2i)).
 """
 
 from __future__ import annotations
@@ -258,6 +268,24 @@ def _replace_subscripts(s: str) -> str:
     return re.sub("[" + "".join(_SUBSCRIPT_DIGITS) + "]+", lambda m: "_" + "".join(_SUBSCRIPT_DIGITS[c] for c in m.group(0)), s)
 
 
+_VULGAR_FRACTION = "[\u00bc-\u00be\u2150-\u215e]"  # ¼ ½ ¾ ⅐ … ⅞
+
+
+def _replace_vulgar_fractions(s: str) -> str:
+    """½ -> (1/2) so that √½ is √(1/2), not √1/2; a mixed number 2½ -> (5/2), not 21/2 (before NFKC)."""
+
+    def frac(ch: str) -> tuple[int, int]:
+        num, den = unicodedata.normalize("NFKC", ch).split("\u2044")
+        return int(num), int(den)
+
+    def mixed(m: re.Match[str]) -> str:
+        num, den = frac(m.group(2))
+        return f"({int(m.group(1)) * den + num}/{den})"
+
+    s = re.sub(r"(?<![\d.])(\d{1,6}) ?(" + _VULGAR_FRACTION + ")", mixed, s)
+    return re.sub(_VULGAR_FRACTION, lambda m: "({}/{})".format(*frac(m.group(0))), s)
+
+
 def _replace_sqrt_sign(s: str) -> str:
     """√3 -> ' sqrt(3)' (the leading space keeps 'i√3' from becoming the identifier 'isqrt'); ∛ likewise."""
     s = re.sub(r"∛\s*([0-9.]+|[A-Za-z]\w*)", r" cbrt(\1)", s).replace("∛", " cbrt")
@@ -395,6 +423,9 @@ def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
     return _TOKEN.sub(repl, s)
 
 
+_BARE_ROOT_NUMBER = re.compile(r"(?<![A-Za-z_])(sqrt|cbrt) ?(\d+\.?\d*|\.\d+)(?![\d.(])")
+
+
 def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     """Learner / answer-key text -> plain SymPy-ish syntax (may still contain [], set placeholders and commas).
 
@@ -409,6 +440,7 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     greek_seen: set[str] = set()
     s = _replace_superscripts(s)
     s = _replace_subscripts(s)
+    s = _replace_vulgar_fractions(s)
     s = unicodedata.normalize("NFKC", s)
     for src, dst in _UNICODE_OPS.items():
         s = s.replace(src, dst)
@@ -437,6 +469,7 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     s = re.sub(r"\blambda\b", "lamda", s)
     keep = ALL_GREEK if keep_greek is None else frozenset(keep_greek) | greek_seen
     s = _split_identifiers(s, keep)
+    s = _BARE_ROOT_NUMBER.sub(r"\1(\2)", s)  # 'sqrt2 i' / 'sqrt 2 i' -> sqrt(2) i, like √2 i (not sqrt(2i))
     s = _star_unknown_calls(s)
     s = re.sub(r"\s+", " ", s).strip()
     if not s:
@@ -912,8 +945,18 @@ def _terms(node: sp.Basic) -> list[sp.Basic]:
     return [node]
 
 
-def _literal_factor(f: sp.Basic) -> bool:
-    """An irreducible real non-number factor: pi, e, an irreducible radical sqrt(2) / 2^(1/3), e^2, log(2) ..."""
+# A root that is fine except that it can still be simplified (see _unsimplified_feedback); each names the step left.
+ROOT_FRACTION = "no fraction inside a root (√(1/2) = √2/2)"
+ROOT_COMBINE = "combine roots in the same term into one (√3/√2 = √6/2)"
+ROOT_FACTOR = "take factors out of a root (√8 = 2√2)"
+_ROOT_DEFECTS = (ROOT_FRACTION, ROOT_COMBINE, ROOT_FACTOR)
+
+
+def _literal_factor(f: sp.Basic, defects: list[str] | None = None) -> bool:
+    """An irreducible real non-number factor: pi, e, an irreducible radical sqrt(2) / 2^(1/3), e^2, log(2) ...
+
+    defects (lenient mode, for the feedback only): a root that is irrational but not reduced — a fraction or decimal
+    inside it (sqrt(1/2)), or a factor that comes out of it (sqrt(8)) — is accepted and its defect appended."""
     if f in (sp.pi, sp.E):
         return True
     if isinstance(f, sp.Pow):
@@ -933,9 +976,16 @@ def _literal_factor(f: sp.Basic) -> bool:
         if base.is_Integer and base > 1 and 0 < exp < 1:
             coeff, rest = value.as_coeff_Mul()
             parts = rest.args if isinstance(rest, sp.Mul) else (rest,)
-            return coeff == 1 and all(
+            same_index = all(
                 isinstance(p, sp.Pow) and p.base.is_Integer and p.exp.is_Rational and p.exp.q == exp.q for p in parts
             )
+            if same_index and coeff != 1 and defects is not None:
+                defects.append(ROOT_FACTOR)  # sqrt(8) = 2*sqrt(2), ∛16 = 2∛2
+                return True
+            return coeff == 1 and same_index
+        if defects is not None and base % 1 != 0 and 0 < abs(exp) < 1 and not value.is_Rational:
+            defects.append(ROOT_FRACTION)  # sqrt(1/2), sqrt(3/2), sqrt(1.5): irrational, but not reduced
+            return True
         return False
     if isinstance(f, sp.exp):
         return _literal_factor(sp.Pow(sp.E, f.args[0], evaluate=False))
@@ -948,8 +998,11 @@ def _literal_factor(f: sp.Basic) -> bool:
     return False
 
 
-def _term_info(term: sp.Basic, *, allow_den: bool = True) -> tuple[bool, tuple[str, ...], int | None] | None:
-    """-> (imaginary?, irrational-part key, integer coefficient) for a reduced term, None if not reduced."""
+def _term_info(
+    term: sp.Basic, *, allow_den: bool = True, defects: list[str] | None = None
+) -> tuple[bool, tuple[str, ...], int | None] | None:
+    """-> (imaginary?, irrational-part key, integer coefficient) for a reduced term, None if not reduced.
+    defects: lenient about roots that can still be simplified (see _literal_factor); each one is appended."""
     num: list[sp.Basic] = []
     den: list[sp.Basic] = []
     _collect(term, num, den)
@@ -965,7 +1018,7 @@ def _term_info(term: sp.Basic, *, allow_den: bool = True) -> tuple[bool, tuple[s
             if f == -1 and not below:
                 continue
             (den_nums if below else nums).append(_number_sign(f)[1])
-        elif not f.has(sp.I) and _literal_factor(f):
+        elif not f.has(sp.I) and _literal_factor(f, defects):
             keys.append(("1/" if below else "") + sp.srepr(_ev(f)))
             exp = _ev(f.exp) if isinstance(f, sp.Pow) else None
             if exp is not None and exp.is_Rational and not exp.is_integer:
@@ -983,15 +1036,20 @@ def _term_info(term: sp.Basic, *, allow_den: bool = True) -> tuple[bool, tuple[s
     if nums and den_nums and nums[0].is_Integer and math.gcd(int(nums[0]), int(den_nums[0])) != 1:
         return None
     # radicals that combine (sqrt(2)*sqrt(3), sqrt(2)/sqrt(3)) or repeated factors (pi*pi) are not reduced
-    if len(set(keys)) != len(keys) or len(set(root_exps)) != len(root_exps):
+    if len(set(keys)) != len(keys):
         return None
+    if len(set(root_exps)) != len(root_exps):
+        if defects is None:
+            return None
+        defects.append(ROOT_COMBINE)
     coefficient = int(nums[0]) if nums and nums[0].is_Integer else (1 if not nums else None)
     return i_count == 1, tuple(sorted(keys)), coefficient
 
 
-def _is_reduced_number(raw: sp.Basic, *, real_only: bool = False) -> bool:
+def _is_reduced_number(raw: sp.Basic, *, real_only: bool = False, defects: list[str] | None = None) -> bool:
     """A constant typed in reduced form: at most one term of each kind (rational / each irrational part, real or
-    imaginary), integer fractions in lowest terms, no arithmetic left to do. '(p + q i)/n' is also accepted."""
+    imaginary), integer fractions in lowest terms, no arithmetic left to do. '(p + q i)/n' is also accepted.
+    defects: reduced except for roots that can still be simplified, which are appended (see _term_info)."""
     if raw.free_symbols:
         return False
     if isinstance(raw, sp.Mul) and len(raw.args) == 2 and sp.S.NegativeOne in raw.args and all(a.is_Number for a in raw.args):
@@ -1007,14 +1065,14 @@ def _is_reduced_number(raw: sp.Basic, *, real_only: bool = False) -> bool:
         rest_num = [f for f in num if not isinstance(f, sp.Add) and f != -1]
         if len(adds) != 1 or rest_num or len(den) != 1 or not den[0].is_Integer or abs(int(den[0])) <= 1:
             return False
-        infos = [_term_info(t, allow_den=False) for t in _terms(adds[0])]
+        infos = [_term_info(t, allow_den=False, defects=defects) for t in _terms(adds[0])]
         if any(i is None for i in infos) or not _distinct_terms(infos, real_only):  # type: ignore[arg-type]
             return False
         coefficients = [i[2] for i in infos if i is not None]
         if any(c is None for c in coefficients):
             return False
         return math.gcd(*[int(c) for c in coefficients if c is not None], abs(int(den[0]))) == 1
-    infos = [_term_info(t) for t in _terms(raw)]
+    infos = [_term_info(t, defects=defects) for t in _terms(raw)]
     if any(i is None for i in infos):
         return False
     return _distinct_terms(infos, real_only)  # type: ignore[arg-type]
@@ -1044,8 +1102,13 @@ def _unsimplified_feedback(expected: Node, got: Node) -> str | None:
         return None
     if all(g.raw is not None and _is_reduced_number(g.raw) for _, g in pairs):
         return None
-    complex_key = any((v := _numeric(e.expr)) is not None and abs(v.imag) > 1e-12 for e in e_scalars if e.expr is not None)
     many = len(e_scalars) > 1
+    defects: list[str] = []
+    if all(g.raw is not None and _is_reduced_number(g.raw, defects=defects) for _, g in pairs) and defects:
+        # reduced but for its roots (√(1/2) + √(1/2)i is already a + bi): name what is left to do
+        steps = "; ".join(d for d in _ROOT_DEFECTS if d in defects)
+        return f"Same values — now simplify the roots in each component: {steps}." if many else f"Same value — now simplify the roots: {steps}."
+    complex_key = any((v := _numeric(e.expr)) is not None and abs(v.imag) > 1e-12 for e in e_scalars if e.expr is not None)
     if complex_key:
         return "Same values — now simplify each component to the form a + bi." if many else "Same value — now simplify it to the form a + bi."
     if many:

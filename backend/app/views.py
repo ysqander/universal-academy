@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from . import db
-from .pipeline.textutil import bare_latex, clean_source_refs, lesson_text, mentions_caption, placeholder_ids
+from .pipeline.textutil import (
+    bare_latex,
+    clean_source_refs,
+    lesson_text,
+    mentions_caption,
+    normalize_sibling_refs,
+    placeholder_ids,
+    sibling_keys,
+)
 from .schemas import (
     Figure,
     InlineCheckPublic,
@@ -123,6 +132,12 @@ def visualization_view(viz: dict[str, Any] | None, course_id: str, labels: list[
     )
 
 
+def lesson_version(lesson_json: str | None) -> str:
+    """Version of a stored lesson: sha1 of skills.lesson_json (the same value block feedback stores as lesson_hash).
+    Lesson.version carries it to the browser; inline checks and block feedback send it back (409 when it changed)."""
+    return hashlib.sha1((lesson_json or "").encode("utf-8")).hexdigest()
+
+
 def lesson_view(skill_id: str) -> Lesson | None:
     skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
     if not skill or skill["lesson_status"] != "ready" or not skill["lesson_json"]:
@@ -154,11 +169,14 @@ def lesson_view(skill_id: str) -> Lesson | None:
     v2_fields: dict[str, Any] = {}
     if v2:  # planned teaching sequence (lesson generation v2): blocks with inline checks — never their answers
         plan = data.get("plan") or {}
+        # plans stored before validation rewrote the planner's sibling ids show "a (S2a): …" → "S2a: …"
+        course_keys = [r["key"] for r in db.query("SELECT key FROM skills WHERE course_id = ?", (course_id,))]
+        assumed = normalize_sibling_refs(plan.get("assumed_prerequisites") or [], sibling_keys(skill["key"], course_keys))
         v2_fields = {
             "format": "v2",
             "goal_line": data.get("goal_line", ""),
             "blocks": [block_view(i, b, course_id, labels) for i, b in enumerate(data.get("blocks") or [])],
-            "assumed": list(plan.get("assumed_prerequisites") or []),
+            "assumed": assumed,
             "out_of_scope": list(plan.get("out_of_scope") or []),
             "deeper": data.get("deeper", ""),
         }
@@ -167,6 +185,7 @@ def lesson_view(skill_id: str) -> Lesson | None:
         skill_key=skill["key"],
         title=skill["title"],
         objective=skill["objective"],
+        version=lesson_version(skill["lesson_json"]),
         **v2_fields,
         why_it_matters=data.get("why_it_matters", ""),
         idea=data.get("idea", ""),

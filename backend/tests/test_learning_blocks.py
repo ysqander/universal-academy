@@ -20,7 +20,7 @@ from test_learning_fixtures import (  # noqa: F401
     wrong,
 )
 
-from app import db
+from app import db, views
 from app.api import study
 from app.learning import engine
 from app.llm_schemas import InlineCheck, TeachingBlock
@@ -306,6 +306,52 @@ def test_block_feedback_is_stored_with_the_lesson_version(client: TestClient) ->
     hashes = [f["lesson_hash"] for f in client.get(f"/api/skills/{sid}/feedback").json()]
     assert len(set(hashes)) == 2 and hashes[-1] != hashes[0]
     assert not db.query("SELECT 1 FROM attempts") and not db.query("SELECT 1 FROM tasks")
+
+
+def _stored_version(sid: str) -> str:
+    return hashlib.sha1(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (sid,))["lesson_json"].encode()).hexdigest()
+
+
+def test_requests_from_an_outdated_lesson_are_409_and_change_nothing(client: TestClient) -> None:
+    """QA: blocks are named by position, so a page showing a regenerated lesson's old blocks must not be graded
+    against (or leave feedback on) whatever block now has that index."""
+    fx = build_course()
+    sid = set_v2(fx)
+    old = _stored_version(sid)
+    assert views.lesson_view(sid).version == old  # what the page sends back
+    for version in (old, old[:12], old[:8].upper(), None, ""):  # the full hash, a prefix of it, or no version at all
+        out = post_check(client, sid, 2, response="-6", version=version)
+        assert out.status_code == 200 and out.json()["correct"] is True, (version, out.text)
+    assert client.post(f"/api/skills/{sid}/blocks/2/feedback", json={"version": old[:12]}).status_code == 204
+    assert [r["lesson_hash"] for r in db.query("SELECT lesson_hash FROM block_feedback")] == [old]  # the full hash
+    db.execute("DELETE FROM block_feedback")
+
+    # the lesson is regenerated: block 2 is now a reflect check, and there are fewer blocks
+    lesson = v2_lesson()
+    lesson["blocks"] = [BLOCKS[0], BLOCKS[1], BLOCKS[8], BLOCKS[3]]
+    db.execute("UPDATE skills SET lesson_json = ? WHERE id = ?", (db.dumps(lesson), sid))
+    new = _stored_version(sid)
+    assert new != old and views.lesson_view(sid).version == new
+    stale = [
+        post_check(client, sid, 2, response="-6", version=old),  # would be "graded" against the reflect check
+        post_check(client, sid, 2, version=old[:12]),
+        post_check(client, sid, 7, response="FTT", version=old),  # no longer exists: still 409, not 404
+        post_check(client, sid, 2, response="-6", version=new[:4]),  # too short to name a version
+        client.post(f"/api/skills/{sid}/blocks/2/feedback", json={"note": "where did -6 come from?", "version": old}),
+        client.post(f"/api/skills/{sid}/blocks/9/feedback", json={"version": old[:12]}),
+    ]
+    for res in stale:
+        assert res.status_code == 409 and res.json()["detail"] == "This lesson was updated — reload to see the new version."
+    assert not db.query("SELECT 1 FROM block_feedback")
+    nothing_recorded()
+
+    out = post_check(client, sid, 2, version=new[:12])
+    assert out.status_code == 200 and out.json()["correct"] is None  # the reflect check the reloaded page shows
+    assert post_check(client, sid, 3, response="1+7i", version=new).json()["correct"] is True
+    assert client.post(f"/api/skills/{sid}/blocks/2/feedback", json={"note": "?", "version": new[:12]}).status_code == 204
+    assert client.post(f"/api/skills/{sid}/blocks/1/feedback", json={}).status_code == 204  # older client: accepted
+    assert [r["lesson_hash"] for r in db.query("SELECT lesson_hash FROM block_feedback ORDER BY created_at, rowid")] == [new, new]
+    assert client.post("/api/skills/nope/blocks/0/feedback", json={"version": old}).status_code == 404  # 404 before 409
 
 
 def test_feedback_works_on_blocks_without_a_check(client: TestClient) -> None:

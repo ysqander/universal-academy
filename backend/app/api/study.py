@@ -107,13 +107,14 @@ def flag_question(qid: str, body: FlagRequest) -> Task:
 
 @router.post("/api/skills/{sid}/blocks/{index}/check", response_model=BlockCheckResult)
 def check_block(sid: str, index: int, body: BlockCheckRequest) -> BlockCheckResult:
-    """Answer a v2 lesson's inline check (formative: graded, never recorded)."""
+    """Answer a v2 lesson's inline check (formative: graded, never recorded). 409 when body.version is not the
+    stored lesson's version (the lesson was regenerated since the page loaded)."""
     return _run(lambda: blocks.check_block(sid, index, body))
 
 
 @router.post("/api/skills/{sid}/blocks/{index}/feedback", status_code=204, response_class=Response)
 def block_feedback(sid: str, index: int, body: BlockFeedbackRequest | None = None) -> Response:
-    """'This step isn't clear' for one teaching block."""
+    """'This step isn't clear' for one teaching block (409, nothing stored, when body.version is outdated)."""
     _run(lambda: blocks.record_feedback(sid, index, body or BlockFeedbackRequest(), _now()))
     return Response(status_code=204)
 

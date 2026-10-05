@@ -7,16 +7,20 @@ Inline checks are formative. They are graded on the server with the learner-faci
 an unsimplified but correct value gets the same "now simplify it" request as a practice question), and nothing is
 recorded: no attempt, no XP, no effect on the lesson's practice, streaks or the FSRS card. The answer and its
 explanation are returned only after a readable response; every error message is free of the answer key.
+
+Blocks are named by position, so both endpoints take the Lesson.version the learner is looking at (views.lesson_version
+of the stored lesson_json, the value views.lesson_view sends). When the lesson was regenerated since the page loaded,
+the request is refused with 409 STALE_LESSON instead of grading (or recording feedback on) a different block. A request
+without a version is accepted (older clients).
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import datetime
 from typing import Any
 
-from .. import db
+from .. import db, views
 from ..schemas import BlockCheckRequest, BlockCheckResult, BlockFeedbackRequest
 from . import engine, grading, scheduler
 
@@ -26,6 +30,8 @@ GRADED_KINDS = ("numeric", "expression", "multiple_choice", "true_false", "true_
 CHECK_KINDS = (*GRADED_KINDS, "reflect")
 REFLECT_FEEDBACK = "Compare with the explanation."
 MAX_NOTE_CHARS = 2000
+STALE_LESSON = "This lesson was updated — reload to see the new version."
+MIN_VERSION_CHARS = 8  # a shorter prefix of the hash is too likely to match a different version
 
 
 def _lesson(skill_id: str) -> tuple[dict[str, Any], list[Any]]:
@@ -38,8 +44,25 @@ def _lesson(skill_id: str) -> tuple[dict[str, Any], list[Any]]:
     return skill, blocks if isinstance(blocks, list) else []
 
 
-def _block(skill_id: str, index: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def lesson_hash(lesson_json: str | None) -> str:
+    """Which version of a lesson the learner saw: views.lesson_version (sha1 of the stored lesson_json), i.e.
+    Lesson.version and block_feedback.lesson_hash — one helper, so the two can never drift apart."""
+    return views.lesson_version(lesson_json)
+
+
+def same_version(version: str, lesson_json: str | None) -> bool:
+    """Does a client's Lesson.version name this stored lesson? The full hash or a prefix of it (MIN_VERSION_CHARS+)."""
+    sent = version.strip().lower()
+    return len(sent) >= MIN_VERSION_CHARS and lesson_hash(lesson_json).startswith(sent)
+
+
+def _block(skill_id: str, index: int, version: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(skill row, block at index). version: the Lesson.version the request was made from (None/'' = not sent);
+    a different one is a Conflict even when the index no longer exists (the page shows an older lesson)."""
     skill, blocks = _lesson(skill_id)
+    if (version or "").strip() and not same_version(version or "", skill["lesson_json"]):
+        log.info("block request for skill %s on an outdated lesson version", skill["key"])
+        raise engine.Conflict(STALE_LESSON)
     if not 0 <= index < len(blocks) or not isinstance(blocks[index], dict):
         raise engine.NotFound("This lesson has no such step.")
     return skill, blocks[index]
@@ -104,7 +127,7 @@ def _grade(check: dict[str, Any], body: BlockCheckRequest) -> grading.GradeResul
 
 def check_block(skill_id: str, index: int, body: BlockCheckRequest) -> BlockCheckResult:
     """Grade a response to a block's inline check. Called WITHOUT engine.lock (grading has its own time budget)."""
-    skill, block = _block(skill_id, index)
+    skill, block = _block(skill_id, index, body.version)
     check = _check_of(block)
     explanation = str(check.get("explanation") or "")
     if check["kind"] == "reflect":
@@ -118,14 +141,11 @@ def check_block(skill_id: str, index: int, body: BlockCheckRequest) -> BlockChec
     )
 
 
-def lesson_hash(lesson_json: str | None) -> str:
-    """Which version of a lesson the learner saw (sha1 of the stored lesson_json)."""
-    return hashlib.sha1((lesson_json or "").encode("utf-8")).hexdigest()
-
-
 def record_feedback(skill_id: str, index: int, body: BlockFeedbackRequest, now: datetime) -> None:
-    """Store "This step isn't clear" for one teaching block, tagged with the lesson version."""
-    skill, _ = _block(skill_id, index)
+    """Store "This step isn't clear" for one teaching block, tagged with the lesson version the learner saw: the
+    stored lesson's full hash, which is the client's version by construction (a stale version is a Conflict and
+    nothing is stored); without a version, the lesson stored when the request arrives."""
+    skill, _ = _block(skill_id, index, body.version)
     note = (body.note or "").replace("\x00", "").strip()[:MAX_NOTE_CHARS]
     db.execute(
         "INSERT INTO block_feedback(id, skill_id, block_index, kind, note, lesson_hash, created_at) VALUES (?,?,?,?,?,?,?)",

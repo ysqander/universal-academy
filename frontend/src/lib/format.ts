@@ -63,7 +63,7 @@ const KIND_LABEL: Record<string, string> = {
 export const kindLabel = (kind: string): string =>
   KIND_LABEL[kind] ?? (kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Skill");
 
-/** Build-time estimate shown before starting a course (~15 s and ~$0.10 per page). */
+/** Build-time estimate shown before starting a course (~45 s and ~$0.10 per page, measured on Axler ch. 1). */
 export function buildEstimate(pages: number): { minutes: number; dollars: number } {
-  return { minutes: Math.max(1, Math.round((pages * 15) / 60)), dollars: Math.round(pages * 0.1 * 100) / 100 };
+  return { minutes: Math.max(1, Math.round((pages * 45) / 60)), dollars: Math.round(pages * 0.1 * 100) / 100 };
 }

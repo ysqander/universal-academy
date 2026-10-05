@@ -353,7 +353,7 @@ function Picker({ book }: { book: Book }) {
               <Icon name="clock" size={16} />
               <span>
                 Roughly <strong>{estimate.minutes} min</strong> and <strong>${estimate.dollars.toFixed(2)}</strong> to build
-                <span className="muted"> (about 15 s and $0.10 per page)</span>
+                <span className="muted"> (about 45 s and $0.10 per page; you can start studying before it finishes)</span>
               </span>
             </p>
           )}

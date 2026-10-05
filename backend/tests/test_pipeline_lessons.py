@@ -82,9 +82,9 @@ def test_proof_lesson_needs_a_free_response_in_every_knowledge_point():
 
 def test_first_free_response_moves_to_second_position():
     draft = fake_draft()
-    pool = draft.knowledge_points[1].questions  # [expression, numeric, mc, tf, free_response]
+    pool = draft.knowledge_points[1].questions  # [expression, numeric, mc, numeric, free_response]
     ordered = first_free_response_second(pool)
-    assert [q.kind for q in ordered] == ["expression", "free_response", "numeric", "multiple_choice", "true_false"]
+    assert [q.kind for q in ordered] == ["expression", "free_response", "numeric", "multiple_choice", "numeric"]
     assert first_free_response_second(ordered) == ordered
 
 
@@ -99,11 +99,23 @@ def test_length_cue_and_multiple_choice_share_are_reported():
     balanced = mc("k1q2", ["$(1,2)$", "$(2,1)$", "$(1,-2)$"], 0)
     assert length_cue(cued) and not length_cue(balanced)
     notes = format_warnings([[cued, balanced, mc("k1q3", ["short", "a much longer option here", "mid"], 1)]])
-    assert any("3 of 3 questions are multiple choice" in n for n in notes)
+    assert any("3 of 3 questions are multiple choice or true/false" in n for n in notes)
     assert any("much longer than the distractors in k1q1" in n for n in notes)
     assert any("the correct option is the longest in" in n for n in notes)
     _, _, notes = validate_lesson(fake_draft())
     assert not any("multiple choice" in n for n in notes)  # the fake lesson is balanced
+
+
+def test_mostly_choice_based_lesson_is_rejected_when_strict():
+    draft = fake_draft()
+    for kp in draft.knowledge_points:
+        for q in kp.questions:
+            q.kind, q.choices, q.correct_choice, q.answer, q.tolerance, q.checklist = (
+                "true_false", ["True", "False"], 0, "", None, [])
+    with pytest.raises(InvalidLesson, match="multiple choice or true/false"):
+        validate_lesson(draft)
+    _, pools, notes = validate_lesson(draft, strict=False)  # last attempt: kept, with a warning
+    assert pools and any("multiple choice or true/false" in n for n in notes)
 
 
 # ---------------------------------------------------------------------------

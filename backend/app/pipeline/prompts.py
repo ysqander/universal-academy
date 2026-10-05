@@ -118,8 +118,11 @@ QUESTIONS
 - Assess the stated objective, using only this lesson and its prerequisites.
 - Make the learner produce the answer. Computations → numeric or expression (typed answers). Conceptual claims →
   true_false whose solution gives the reason or a counterexample. multiple_choice only when choosing among options
-  IS the skill (which hypothesis is missing, which step is invalid, which object fits a definition). At most 40% of
-  the lesson's questions are multiple_choice — at most one per knowledge point is a good default.
+  IS the skill (which hypothesis is missing, which step is invalid, which object fits a definition). Choice-based
+  questions (multiple_choice and true_false together) are guessable: at most 40% of the lesson's questions, and at
+  most one of each per knowledge point. Even conceptual knowledge points can usually be checked with typed answers:
+  ask for a concrete instance (compute the element, give the length, the coordinate, the missing value, the count),
+  and use free_response for "explain why".
 - Machine-checkable whenever possible — at least 3 of the 4 questions of a knowledge point (2 of 4 for proof
   skills):
   - numeric: answer is a plain number in SymPy syntax ("-3.5", "2/3", "sqrt(2)"); tolerance (e.g. 0.001) only
@@ -215,7 +218,7 @@ passage and the questions that already exist.
 - Self-contained; assess the stated objective; only use this lesson and its prerequisites.
 - Machine-checkable whenever possible; make the learner produce the answer: computations → numeric/expression,
   conceptual claims → true_false (reason or counterexample in the solution), multiple_choice only when choosing is
-  the skill. numeric: a plain number in SymPy syntax. expression: SymPy syntax with ** for powers, * for products, i
+  the skill; choice-based questions (multiple_choice + true_false) at most 40% — prefer typed answers. numeric: a plain number in SymPy syntax. expression: SymPy syntax with ** for powers, * for products, i
   for the imaginary unit, tuples "(1, -2, 3)" for lists, and the prompt states the form to enter. multiple_choice:
   3–5 choices with misconception-based distractors, correct_choice = 0-based index; all options of similar length
   and detail (the correct one must not be the longest or only detailed one; argument options are all complete

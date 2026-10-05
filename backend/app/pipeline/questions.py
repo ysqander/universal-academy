@@ -16,7 +16,14 @@ MACHINE_CHECKABLE = {"multiple_choice", "true_false", "numeric", "expression"}
 TRUE_FALSE = ["True", "False"]
 MAX_CHOICES = 6
 MAX_CHECKLIST = 5
-MAX_MC_SHARE = 0.4  # at most ~40% of a lesson's questions may be multiple choice
+MAX_MC_SHARE = 0.4  # target: at most ~40% of a lesson's questions are choice-based (multiple choice + true/false)
+MAX_CHOICE_SHARE_HARD = 0.5  # above this a lesson draft is rejected and regenerated (guessable practice)
+CHOICE_KINDS = {"multiple_choice", "true_false"}
+
+
+def choice_share(pools: list[list[QuestionDraft]]) -> float:
+    questions = [q for pool in pools for q in pool]
+    return sum(1 for q in questions if q.kind in CHOICE_KINDS) / len(questions) if questions else 0.0
 LENGTH_CUE_RATIO = 1.4  # the correct option is this much longer than every distractor …
 LENGTH_CUE_CHARS = 25  # … and at least this many characters longer: answerable without solving
 PENDING_REASON = "verification: pending"
@@ -139,11 +146,12 @@ def format_warnings(pools: list[list[QuestionDraft]]) -> list[str]:
     """Lesson-level checks of the answer formats: share of multiple choice, options that give the answer away."""
     questions = [q for pool in pools for q in pool]
     mc = [q for q in questions if q.kind == "multiple_choice"]
+    choice = [q for q in questions if q.kind in CHOICE_KINDS]
     notes = []
-    if questions and len(mc) / len(questions) > MAX_MC_SHARE:
+    if questions and len(choice) / len(questions) > MAX_MC_SHARE:
         notes.append(
-            f"{len(mc)} of {len(questions)} questions are multiple choice (target ≤ {MAX_MC_SHARE:.0%}); "
-            "prefer typed numeric/expression answers and true/false claims"
+            f"{len(choice)} of {len(questions)} questions are multiple choice or true/false "
+            f"(target ≤ {MAX_MC_SHARE:.0%}); prefer typed numeric/expression answers"
         )
     cued = [q.key for q in mc if length_cue(q)]
     if cued:

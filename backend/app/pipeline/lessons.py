@@ -24,6 +24,8 @@ from .prompts import LESSON_INSTRUCTIONS
 from .questions import (
     clean_questions,
     first_free_response_second,
+    MAX_CHOICE_SHARE_HARD,
+    choice_share,
     format_warnings,
     insert_questions,
     is_machine_checkable,
@@ -130,6 +132,12 @@ def validate_lesson(
                 raise InvalidLesson(message)
             notes.append(message)
         pools.append(first_free_response_second(_unique_keys(kept, i, used_keys)))
+    share = choice_share(pools)
+    if strict and share > MAX_CHOICE_SHARE_HARD:
+        raise InvalidLesson(
+            f"{share:.0%} of the questions are multiple choice or true/false (at most 40%); replace most of them with "
+            "typed numeric/expression questions (concrete instances) or free_response explanations"
+        )
     notes += format_warnings(pools)
     lesson = draft.model_dump()
     lesson["knowledge_points"] = [{k: v for k, v in kp.model_dump().items() if k != "questions"} for kp in kps]

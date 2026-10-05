@@ -213,6 +213,16 @@ CREATE TABLE IF NOT EXISTS xp_log (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS block_feedback (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    block_index INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'unclear',
+    note TEXT NOT NULL DEFAULT '',
+    lesson_hash TEXT NOT NULL DEFAULT '',          -- which version of the lesson the learner saw
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

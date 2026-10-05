@@ -218,7 +218,7 @@ class VisualizationFrame(BaseModel):
     note: str = ""
 
 
-QuestionKindT = Literal["multiple_choice", "true_false", "numeric", "expression", "free_response"]
+QuestionKindT = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression", "free_response"]
 
 
 class QuestionPublic(BaseModel):
@@ -249,11 +249,34 @@ class KnowledgePoint(BaseModel):
     question_count: int
 
 
+class InlineCheckPublic(BaseModel):
+    """An inline check inside a v2 teaching sequence (formative: answered via POST .../blocks/{i}/check, never scored)."""
+
+    kind: Literal["numeric", "expression", "multiple_choice", "true_false", "true_false_set", "reflect"]
+    prompt: str
+    choices: list[str]
+
+
+class TeachingBlockView(BaseModel):
+    index: int  # 0-based position in the sequence (used by the check/feedback endpoints)
+    kind: Literal["setup", "explain", "demonstrate", "check", "faded_example", "generalize", "summary"]
+    heading: str | None = None
+    body: str
+    visualization: Visualization | None = None
+    check: InlineCheckPublic | None = None
+
+
 class Lesson(BaseModel):
     skill_id: str
     skill_key: str
     title: str
     objective: str
+    format: Literal["v1", "v2"] = "v1"  # v2 = planned teaching sequence (blocks) instead of the fixed sections
+    goal_line: str = ""  # v2
+    blocks: list[TeachingBlockView] = Field(default_factory=list)  # v2
+    assumed: list[str] = Field(default_factory=list)  # v2: prerequisites the lesson treats as learned
+    out_of_scope: list[str] = Field(default_factory=list)  # v2: shown as "Not in this lesson"
+    deeper: str = ""  # v2: optional "Go deeper" (never needed for the objective)
     why_it_matters: str
     idea: str
     notation: list[NotationItem]
@@ -405,6 +428,27 @@ class HintResponse(BaseModel):
 
 class FlagRequest(BaseModel):
     reason: str = ""
+
+
+class BlockCheckRequest(BaseModel):
+    """POST /api/skills/{sid}/blocks/{index}/check — answer an inline check (formative; nothing is recorded)."""
+
+    response: str | None = None  # numeric / expression / true_false_set ('TFT')
+    choice: int | None = None  # multiple_choice / true_false
+
+
+class BlockCheckResult(BaseModel):
+    correct: bool | None  # None for 'reflect' checks (self-assessed)
+    feedback: str
+    answer_display: str
+    explanation: str
+
+
+class BlockFeedbackRequest(BaseModel):
+    """POST /api/skills/{sid}/blocks/{index}/feedback — "This step isn't clear"."""
+
+    kind: Literal["unclear"] = "unclear"
+    note: str = ""
 
 
 class FoundationKnownRequest(BaseModel):

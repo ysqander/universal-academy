@@ -89,6 +89,18 @@ Rules:
 - Preserve the author's notation and definitions; cite printed item numbers (1.3) and pages.
 - Lessons: Why it matters → The idea → Worked example → Your turn (tier ramp 1→3) → Connection; short main path; depth behind "Show the missing steps". Questions must be self-contained, assess the stated objective, use only taught or prerequisite material; prefer machine-checkable forms; adapt book exercises when suitable (cite them).
 
+### 4.2b Lesson generation v2 (experimental — see [lesson-v2.md](lesson-v2.md))
+Planner (`TeachingPlan`, may split a node) → writer (`LessonV2Draft`: ordered teaching blocks with inline checks and
+faded examples, then practice knowledge points) → missing-bridge reviewer (`LessonReview`) → one revision. Stored as
+`lesson_json.format = "v2"`; the API returns `Lesson.format/blocks/goal_line/assumed/out_of_scope/deeper`. Applied per
+skill with `backend/scripts/replan.py --data-dir ../data --course <id> --skill S2 [--dry-run] [--no-split]`; a split
+replaces the node by narrower skills (keys S2a, S2b, …), rewires edges, recomputes order/reduction and unlocks, and is
+only allowed while the original skill has no answered attempts and no FSRS card.
+
+Question format rule (all generators): never ask "how many of these are true / belong to …" — use `true_false_set`
+(the learner marks each statement true or false; answer = one letter per statement, e.g. "FTT"; feedback names the
+statements that were marked wrong). With ≥ 3 statements it does not count toward the choice-question cap.
+
 ### 4.3 Visualization planner (its own step)
 Asks first "what will the learner likely misunderstand, and which representation makes *that* clearer?", then picks one format:
 
@@ -136,6 +148,8 @@ Prefer the book's own figure when one fits. Never 3D. Interactivity only when mo
 | POST `/api/tasks/{tid}/abandon` | → `Task` |
 | POST `/api/questions/{qid}/hint` | → `HintResponse` (next hint; recorded server-side for the current attempt) |
 | POST `/api/questions/{qid}/reveal` | `RevealRequest` → `RevealResponse` (marks the current attempt as revealed, unless it is a free-response comparison after a committed answer) |
+| POST `/api/skills/{sid}/blocks/{i}/check` | `BlockCheckRequest` → `BlockCheckResult` (v2 inline check; formative, not recorded) |
+| POST `/api/skills/{sid}/blocks/{i}/feedback` | `BlockFeedbackRequest` → 204 ("This step isn't clear") |
 | POST `/api/questions/{qid}/flag` | `FlagRequest` → `Task` (question excluded; attempts on it voided; replacement served) |
 
 Errors: JSON `{"detail": "..."}` with proper status codes. All times UTC ISO strings.

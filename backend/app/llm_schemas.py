@@ -125,7 +125,7 @@ class KnowledgeGraphDraft(BaseModel):
 # Stage 3 — lesson package per skill
 # ---------------------------------------------------------------------------
 
-QuestionKind = Literal["multiple_choice", "true_false", "numeric", "expression", "free_response"]
+QuestionKind = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression", "free_response"]
 
 
 class NotationItem(BaseModel):
@@ -152,13 +152,16 @@ class QuestionDraft(BaseModel):
     kind: QuestionKind
     prompt: str = Field(description="Markdown + LaTeX. Must be fully self-contained.")
     choices: list[str] = Field(
-        description="multiple_choice: 3-5 options (Markdown + LaTeX). true_false: exactly ['True', 'False']. Otherwise []."
+        description=(
+            "multiple_choice: 3-5 options (Markdown + LaTeX). true_false: exactly ['True', 'False']. "
+            "true_false_set: the 2-5 statements the learner marks true or false one by one. Otherwise []."
+        )
     )
     correct_choice: int | None = Field(description="0-based index of the correct choice for multiple_choice/true_false; else null.")
     answer: str = Field(
         description=(
             "Machine-checkable answer. numeric: a plain number ('-3.5', '2/3'). expression: SymPy syntax using i for the "
-            "imaginary unit, e.g. '-7+22*i', 'sqrt(2)/2', or a tuple '(1, -2, 3)'. Other kinds: ''."
+            "imaginary unit, e.g. '-7+22*i', 'sqrt(2)/2', or a tuple '(1, -2, 3)'. true_false_set: one letter per statement in order, T or F, e.g. 'FTT'. Other kinds: ''."
         )
     )
     answer_display: str = Field(description="The correct answer formatted for display (Markdown + LaTeX).")
@@ -298,6 +301,148 @@ class VisualizationPlan(BaseModel):
 
 class IndependentAnswer(BaseModel):
     choice: int | None = Field(description="0-based index for multiple_choice/true_false, else null.")
-    answer: str = Field(description="For numeric/expression: the answer in SymPy syntax (i = imaginary unit); else ''.")
+    answer: str = Field(
+        description=(
+            "numeric/expression: the answer in SymPy syntax (i = imaginary unit). true_false_set: one letter per "
+            "statement in order, T or F (e.g. 'FTT'). Otherwise ''."
+        )
+    )
     confidence: float = Field(description="0-1")
     problems: str = Field(description="Any defect in the question itself (ambiguous, unsolvable, multiple correct choices); '' if none.")
+
+
+# ---------------------------------------------------------------------------
+# Lesson generation v2 (experimental): planner -> writer -> missing-bridge reviewer -> revision
+# Principle: reduce the number of new ideas the learner handles at once; never reduce the reasoning connecting them.
+# ---------------------------------------------------------------------------
+
+RepresentationFormat = Literal[
+    "none", "worked_equations", "annotated_equation_steps", "comparison_table", "grid_table", "diagram_2d",
+    "function_plot", "book_figure", "examples_and_non_examples",
+]
+
+
+class RepresentationChoice(BaseModel):
+    format: RepresentationFormat
+    helps_notice: str = Field(
+        description="Finish the sentence: 'This representation helps the learner notice ___, which is hard to see in the text alone.'"
+    )
+    how_to_read: str = Field(description="How the learner should read it (what rows/columns/arrows mean).")
+
+
+class PlannedPrereq(BaseModel):
+    key: str = Field(
+        description="An existing in-chapter skill key (e.g. 'S1') or the local id of an earlier sibling in this plan ('a', 'b', ...)."
+    )
+    weight: float = Field(description="Encompassing weight 0-1 (as in the knowledge graph).")
+
+
+class TeachingSpec(BaseModel):
+    local_id: str = Field(description="'a', 'b', 'c', ... in learning order (just 'a' when the skill is kept).")
+    title: str = Field(description="Short ability name, e.g. 'Multiply two complex numbers'.")
+    objective: str = Field(description="One coherent, testable ability (verb first). No 'and' joining different methods.")
+    kind: SkillKind
+    assumed_prerequisites: list[str] = Field(
+        description="Exactly which abilities are treated as already learned (name in-chapter skills by key, e.g. 'S1: add complex numbers')."
+    )
+    prerequisites: list[PlannedPrereq] = Field(description="Direct in-chapter prerequisites (existing keys and/or earlier siblings).")
+    out_of_scope: list[str] = Field(description="Related ideas that must NOT be introduced in this lesson.")
+    starting_point: str = Field(description="The concrete problem or question that gives the explanation its purpose.")
+    reasoning_sequence: list[str] = Field(
+        description="The necessary bridges, in order, from the starting point to the conclusion (one short sentence each)."
+    )
+    success_check: str = Field(description="What would demonstrate the objective without requiring a new method.")
+    representations: list[RepresentationChoice] = Field(description="0-2 representations; 'none' is a valid choice.")
+    practice_steps: list[str] = Field(description="1-3 knowledge-point titles for the practice part, in increasing difficulty.")
+    source_pages: list[int]
+    source_refs: list[str] = Field(description="Item numbers only, e.g. '1.1', 'Example 1.2', 'Exercise 1A.7'.")
+    difficulty: int
+    est_minutes: int
+    misconceptions: list[str]
+
+
+class DependentLink(BaseModel):
+    dependent_key: str = Field(description="Key of a skill that depended on the original skill.")
+    needs: list[str] = Field(description="Local ids of the new skills it actually needs (at least one).")
+
+
+class TeachingPlan(BaseModel):
+    split_test: str = Field(
+        description=(
+            "Answer: could someone succeed at one substantial part of this objective and fail another because they "
+            "require different reasoning? Name the parts."
+        )
+    )
+    decision: Literal["keep", "split"]
+    rationale: str
+    skills: list[TeachingSpec] = Field(description="1 spec when kept; 2-5 narrower skills in learning order when split.")
+    dependents: list[DependentLink] = Field(
+        description="When split: for EVERY skill that depended on the original, which new skills it needs. [] when kept."
+    )
+
+
+InlineCheckKind = Literal["numeric", "expression", "multiple_choice", "true_false", "true_false_set", "reflect"]
+
+
+class InlineCheck(BaseModel):
+    kind: InlineCheckKind = Field(description="'reflect' = think/say it yourself, then reveal (not machine-checked).")
+    prompt: str = Field(description="A small question about the step just taught (Markdown + LaTeX).")
+    choices: list[str] = Field(description="multiple_choice options / true_false ['True','False'] / true_false_set statements; else [].")
+    correct_choice: int | None
+    answer: str = Field(description="Same conventions as QuestionDraft.answer; '' for reflect.")
+    answer_display: str
+    explanation: str = Field(description="Shown after the learner responds: the reasoning, in one to three sentences.")
+
+
+TeachingBlockKind = Literal["setup", "explain", "demonstrate", "check", "faded_example", "generalize", "summary"]
+
+
+class TeachingBlock(BaseModel):
+    kind: TeachingBlockKind = Field(
+        description=(
+            "setup = establish the question/problem; explain = one relationship or idea; demonstrate = carry out a step "
+            "on the running example; check = learner responds before continuing; faded_example = a worked example with "
+            "the last step(s) left for the learner (use `check` for the missing step); generalize = connect the concrete "
+            "case to the general statement/formula; summary = the method or result in one or two lines."
+        )
+    )
+    job: str = Field(description="One line: what this block establishes for the learner (used for review, not shown).")
+    heading: str | None = Field(description="Optional short heading, e.g. 'First, account for all four products'.")
+    body: str = Field(description="Markdown + LaTeX. Explain consequential transitions where they happen.")
+    visual: VisualizationPlan | None = Field(description="Only when a representation planned for this block earns its place.")
+    check: InlineCheck | None = Field(description="Required for kind check and faded_example; otherwise null.")
+
+
+class LessonV2Draft(BaseModel):
+    title: str
+    objective: str
+    goal_line: str = Field(description="'Your goal:' one sentence in learner language with a concrete example.")
+    blocks: list[TeachingBlock] = Field(description="The ordered teaching sequence (typically 5-10 blocks, 1-3 checks).")
+    notation: list[NotationItem] = Field(description="Only symbols actually used in this lesson, each introduced in the text before use.")
+    knowledge_points: list[KnowledgePointDraft] = Field(
+        description="Practice after the teaching sequence: 1-3 knowledge points (short reminder + a fresh worked example + 4 questions)."
+    )
+    common_mistakes: list[str]
+    connection: str = Field(description="1-2 sentences: what this enables next.")
+    deeper: str = Field(
+        description="Optional 'Go deeper': an alternative explanation or deeper derivation; never reasoning needed for the objective. '' if none."
+    )
+    source_refs: list[str]
+
+
+class BridgeIssue(BaseModel):
+    location: str = Field(description="Block number (1-based) and heading, or the exercise key.")
+    inference_required: str = Field(description="What the learner is being asked to infer.")
+    why_insufficient: str = Field(description="Why the current explanation does not establish it.")
+    repair: str = Field(description="The smallest adequate repair.")
+    severity: Literal["blocking", "minor"]
+
+
+class LessonReview(BaseModel):
+    issues: list[BridgeIssue]
+    untaught_method_exercises: list[str] = Field(description="Exercise keys that need a method the lesson did not teach, with the reason.")
+    out_of_scope_violations: list[str]
+    optional_content_needed: list[str] = Field(description="Reasoning needed for the objective that sits only in 'deeper'.")
+    math_errors: list[str]
+    split_recommended: bool
+    split_reason: str

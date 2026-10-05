@@ -252,7 +252,7 @@ export interface WorkedExample {
   takeaway: string;
 }
 
-export type QuestionKind = "multiple_choice" | "true_false" | "numeric" | "expression" | "free_response";
+export type QuestionKind = "multiple_choice" | "true_false" | "true_false_set" | "numeric" | "expression" | "free_response";
 
 export interface QuestionPublic {
   id: string;
@@ -287,11 +287,51 @@ export interface KnowledgePoint {
   question_count: number;
 }
 
+export interface InlineCheckPublic {
+  kind: "numeric" | "expression" | "multiple_choice" | "true_false" | "true_false_set" | "reflect";
+  prompt: string;
+  choices: string[];
+}
+
+export type TeachingBlockKind = "setup" | "explain" | "demonstrate" | "check" | "faded_example" | "generalize" | "summary";
+
+export interface TeachingBlockView {
+  index: number;
+  kind: TeachingBlockKind;
+  heading: string | null;
+  body: string;
+  visualization: Visualization | null;
+  check: InlineCheckPublic | null;
+}
+
+export interface BlockCheckRequest {
+  response?: string | null; // numeric / expression / true_false_set ("TFT")
+  choice?: number | null; // multiple_choice / true_false
+}
+
+export interface BlockCheckResult {
+  correct: boolean | null; // null for "reflect"
+  feedback: string;
+  answer_display: string;
+  explanation: string;
+}
+
+export interface BlockFeedbackRequest {
+  kind?: "unclear";
+  note?: string;
+}
+
 export interface Lesson {
   skill_id: string;
   skill_key: string;
   title: string;
   objective: string;
+  format: "v1" | "v2"; // v2 = planned teaching sequence (blocks)
+  goal_line: string;
+  blocks: TeachingBlockView[];
+  assumed: string[];
+  out_of_scope: string[];
+  deeper: string;
   why_it_matters: string;
   idea: string;
   notation: NotationItem[];

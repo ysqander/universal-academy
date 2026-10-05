@@ -1,0 +1,101 @@
+# Lesson generation v2 — design (experimental)
+
+Source: the learner's review of the first iteration (lesson S2 "Multiply complex numbers and use their powers" was
+dense, mixed several skills, and put needed reasoning in optional sections). Principle at the top of every prompt:
+
+> **Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects them.**
+> A summary tells you what someone who understands the subject should remember. A lesson helps you become that person.
+
+## What went wrong in v1
+
+1. **One lesson, several skills.** Multiplication, powers, checking roots and finding square roots were taught together.
+   Connected ≠ teach together; mastery scores become uninformative.
+2. **Formula before a concrete case.** `(a+bi)(c+di) = (ac−bd)+(ad+bc)i` appeared before any worked numerical product
+   showing where the four products come from and why one becomes negative. Describing a procedure ≠ demonstrating it.
+3. **Representations before their question.** A table of "four candidates with a²−b²=3" appeared before the problem and the
+   role of the candidates were established.
+4. **"Show the missing steps" held essential reasoning.** Rule: if an explanation is necessary for the objective, it
+   belongs in the main path (or an explicit prerequisite). Optional depth = alternative explanation / deeper
+   derivation / reminder only.
+5. Fixed headings ("Why this matters", "The idea", "See it") do not by themselves produce a teaching sequence.
+
+## Pipeline (per skill)
+
+1. **Planner** (`TeachingPlan`) — teaching spec per node: objective, assumed prerequisites, out of scope, starting
+   example/question, reasoning sequence (bridges), success check, representation choice ("helps the learner notice
+   ___", how to read it), practice steps. Split test: *could someone succeed at one substantial part of this objective
+   and fail another because they require different reasoning?* → may return `split` with 2–5 narrower skills (each a
+   meaningful ability — "Multiply two complex numbers", not "multiply the first two terms") and, for every dependent of
+   the original node, which new skills it needs. Checking a supplied answer and constructing an answer are different
+   learning tasks.
+2. **Writer** (`LessonV2Draft`) — an ordered teaching sequence of blocks, each with a job (setup / explain /
+   demonstrate / check / faded example / generalize / summary), not filled-in headings. Rules: keep one running
+   example; explain consequential transitions where they happen ("because i² = −1" next to the substitution);
+   introduce notation before relying on it (say a, b, c, d are real; don't import the source's α, β, r, s, w, z
+   without need); make the learner think before the final exercises (1–3 inline checks; complete example → partially
+   completed example → independent problem); include one explanation question ("why did the bottom-right entry
+   become real?"). Structure depends on the kind of skill — do not hard-code example-before-formula:
+   - procedure / computation: concrete case → steps → generalize to the formula ("the formula is a record of the steps")
+     → faded example → independent practice;
+   - definition: the question the definition answers → the definition (quoted faithfully) → examples and non-examples →
+     check;
+   - distinction: the two confusable ideas side by side on the same object → contrasting examples → check;
+   - proof: the statement and why it is plausible (small case) → the strategy → the proof with every step justified →
+     check of one step's justification;
+   - interpretation: the picture ↔ algebra correspondence, read explicitly.
+   Every visual must finish "This representation helps the learner notice ___" and say how it is read; "no additional
+   visual" is valid; an annotated equation sequence may be best.
+3. **Reviewer** (`LessonReview`) — reviews the lesson as a first explanation for a learner who knows only the stated
+   prerequisites. For each equation transition, new symbol, example, table and exercise: is its meaning and required
+   reasoning already established? Reports *location → what the learner must infer → why the explanation is
+   insufficient → the smallest adequate repair*; flags exercises needing untaught methods, tables with unexplained
+   candidates, essential reasoning only in optional sections, out-of-scope content, math errors; recommends a split
+   when a repair would add another substantial objective. No "clarity scores".
+4. **Revision** — the writer revises once with the review; the final review is stored with the lesson.
+5. Questions are verified as before; the learner can mark any block "This step isn't clear" (stored per block).
+
+## Reference example (approved by the learner) — procedure skill
+
+### Multiply two complex numbers
+
+**Your goal:** Calculate a product such as $(2+3i)(1+2i)$, and explain why multiplying two terms containing $i$ can
+produce a real number.
+
+**What changes when we multiply complex numbers?** You already know how to multiply brackets: each term in the first
+bracket multiplies each term in the second. We do the same thing here. The extra step is to use $i^2=-1$.
+Let's work out $(2+3i)(1+2i)$.
+
+**First, account for all four products.** A small multiplication grid helps us avoid missing a term:
+
+| $\times$ | $1$ | $2i$ |
+|---|---:|---:|
+| $2$ | $2$ | $4i$ |
+| $3i$ | $3i$ | $6i^2$ |
+
+Adding the four entries gives $2+4i+3i+6i^2$. Notice the bottom-right entry: $(3i)(2i)=3\cdot2\cdot i\cdot i=6i^2$.
+There are **two factors of $i$**, so the result contains $i^2$, not just $i$.
+
+**Next, use the fact that $i^2=-1$.** *Quick check: what does $6i^2$ become?* (after the learner responds)
+$6i^2=6(-1)=-6$, so the expression is $2+4i+3i-6$.
+
+**Finally, collect the two kinds of terms.**
+$\underbrace{2-6}_{\text{real terms}}+\underbrace{4i+3i}_{\text{terms containing }i}=\boxed{-4+7i}$.
+That is the whole method: **expand, replace $i^2$, collect terms.**
+
+**Where does the general formula come from?** Replace the particular numbers with real numbers $a,b,c,d$:
+$(a+bi)(c+di)=ac+ad\,i+bc\,i+bd\,i^2$. The last term becomes $-bd$, just as $6i^2$ became $-6$:
+$\boxed{(a+bi)(c+di)=(ac-bd)+(ad+bc)i}$. The formula is a record of the steps we just performed — not a separate trick.
+
+**Your turn — with one step left to complete.** $(1+2i)(3+i)=3+i+6i+2i^2$. Replace $2i^2$, then combine the terms.
+(After that, a fresh product to solve independently, and the explanation question "Why did the bottom-right entry
+become a real number?")
+
+*Not included:* roots, fourth powers, exponent rules, a second example needing a new method.
+
+## Reference structure — checking supplied answers (a different task from constructing them)
+
+"We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below. We are not finding
+solutions from scratch yet — we are checking whether these suggestions work. A suggestion works only if squaring it
+gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
+(suggestion | what we get when we square it | matches?), then the point: *getting the real part right is not enough —
+the imaginary part, including its sign, must match too.* Finding the candidates belongs to a later lesson.

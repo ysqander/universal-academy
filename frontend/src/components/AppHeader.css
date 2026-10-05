@@ -1,0 +1,126 @@
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-header__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: var(--page-max);
+  height: var(--header-h);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.wordmark:hover {
+  color: var(--ink);
+}
+
+.wordmark__mark {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
+.wordmark__mark rect {
+  fill: var(--accent);
+}
+
+.wordmark__mark path {
+  stroke: var(--paper);
+  stroke-width: 2;
+  stroke-linecap: round;
+  fill: none;
+  opacity: 0.75;
+}
+
+.wordmark__mark circle {
+  fill: var(--paper);
+}
+
+.wordmark__mark .wordmark__due {
+  fill: #f0a35e;
+}
+
+.wordmark__text {
+  font-family: var(--font-serif);
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variation-settings: "opsz" 24;
+}
+
+.wordmark__text em {
+  font-style: italic;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.app-header__nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.app-header__link {
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.app-header__link:hover {
+  color: var(--accent);
+}
+
+.app-header__mode {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-3);
+  top: -60px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  z-index: 100;
+}
+
+.skip-link:focus {
+  top: var(--space-2);
+}
+
+@media (max-width: 480px) {
+  .app-header__mode {
+    display: none;
+  }
+}

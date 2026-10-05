@@ -1,0 +1,62 @@
+.state-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-5);
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.state-message--compact {
+  padding: var(--space-5) var(--space-4);
+}
+
+.state-message__icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-bottom: var(--space-2);
+}
+
+.state-message--compact .state-message__icon {
+  width: 40px;
+  height: 40px;
+}
+
+.state-message--danger .state-message__icon {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.state-message__title {
+  font-size: var(--text-lg);
+}
+
+.state-message__body {
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.state-message__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--space-3);
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-7) var(--space-4);
+  color: var(--muted);
+}

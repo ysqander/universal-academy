@@ -1,0 +1,30 @@
+.page-image {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.page-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.page-image[data-status="loading"] img {
+  opacity: 0;
+  position: absolute;
+}
+
+.page-image__placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 320px;
+  padding: var(--space-5);
+  color: #776f61;
+  text-align: center;
+}

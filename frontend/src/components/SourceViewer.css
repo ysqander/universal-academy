@@ -1,0 +1,45 @@
+.source-viewer .dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--paper);
+}
+
+/* Keep the dialog's height stable while paging or switching views. */
+.source-viewer__content {
+  min-height: min(62vh, 640px);
+}
+
+.source-viewer__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.source-viewer__uncertain ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+  font-size: var(--text-sm);
+}
+
+.source-viewer__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.source-viewer__page {
+  flex: 1;
+  text-align: center;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.source-viewer .dialog__footer > .source-viewer__nav > .btn {
+  flex: none;
+}

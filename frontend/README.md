@@ -1,32 +1,33 @@
-# React + TypeScript + Vite
+# Universal Academy — frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite 8 + TypeScript 6 single-page app. It talks only to the FastAPI backend under `/api`
+(contract: `src/types.ts`, mirror of `backend/app/schemas.py`; endpoints: `docs/SPEC.md` §5).
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # http://localhost:5173, proxies /api → http://127.0.0.1:8000
+npm run build    # tsc (strict) + vite build → dist/, which FastAPI serves in production
+npm run lint     # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`UA_API_TARGET=http://127.0.0.1:9000 npm run dev` points the dev proxy at another backend.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/api.ts` | One typed function per endpoint; `ApiError` with readable messages (JSON `detail`, validation errors, backend unreachable). Book upload uses XHR for progress. |
+| `src/hooks/useResource.ts` | Keyed data loading with optional polling (paused while the tab is hidden), abort on unmount, `reload` / `mutate`. |
+| `src/components/` | Shared UI: `Markdown` (GFM + KaTeX, `\( \)`/`\[ \]` normalisation, `[[figure:id]]` placeholders), `VisualizationView` (+ `viz/`), `Dialog` (modal / drawer / bottom sheet on `<dialog>`), `SourceViewer`, `TaskMenu`, `StatusChip`, `ProgressBar`, `Toaster`, lesson components. |
+| `src/pages/library` | `/` — courses, books, PDF drop zone / file picker / import from path. |
+| `src/pages/picker` | `/books/:bookId` — outline tree (click / shift-click), thumbnails, page range, build. |
+| `src/pages/course` | `/courses/:courseId` — header, build progress, task menu, knowledge map (React Flow + dagre) and list, skill drawer, lesson preview. |
+| `src/pages/study` | `/courses/:courseId/study` — lesson intro, practice (knowledge points, question card, hints, feedback), reviews, completion. |
+| `src/lib/` | Pure helpers: formatting, outline/page labels, graph layout, ascii-math → LaTeX preview, Markdown/TeX clean-up. |
+
+## Conventions
+
+- Plain CSS: tokens and shared primitives in `src/index.css`, one stylesheet per component. Dark mode follows `prefers-color-scheme`.
+- Reading text is serif (Source Serif 4), UI is sans (Instrument Sans); KaTeX is pinned to the 0.16 line that `rehype-katex` renders with, so its CSS matches.
+- Keyboard in practice: `1`–`5` choose, `H` next hint, `Enter` check / continue, `⌘/Ctrl+Enter` for free responses.
+- Free-response flow: after the learner commits a written answer the UI calls `POST /api/questions/{qid}/reveal` to show the model solution and checklist, then submits the self-grade with `revealed_solution: false` (only an explicit "Show solution" before answering sends `true`).

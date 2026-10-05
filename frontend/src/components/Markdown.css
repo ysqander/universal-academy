@@ -1,0 +1,240 @@
+/* Reading typography for generated lesson text. */
+
+.md {
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  line-height: 1.68;
+  color: var(--ink);
+  overflow-wrap: break-word;
+  font-variation-settings: "opsz" 16;
+}
+
+.md > * + * {
+  margin-top: 0.85em;
+}
+
+.md p,
+.md ul,
+.md ol,
+.md blockquote,
+.md pre {
+  margin: 0;
+}
+
+.md > :is(p, ul, ol, blockquote, pre, .md-table-wrap, .katex-display) + :is(p, ul, ol, blockquote, pre, .md-table-wrap, .katex-display) {
+  margin-top: 0.85em;
+}
+
+.md ul,
+.md ol {
+  padding-left: 1.4em;
+}
+
+.md li + li {
+  margin-top: 0.3em;
+}
+
+.md li::marker {
+  color: var(--muted);
+}
+
+.md strong {
+  font-weight: 650;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-size: 1.08em;
+  margin-top: 1.2em;
+}
+
+.md blockquote {
+  padding: 0.6em 1em;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-tint);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.md blockquote > * + * {
+  margin-top: 0.6em;
+}
+
+/* Transcribed boxes start with "**1.3 Definition — title**": show that as the box heading. */
+.md blockquote > p:first-child > strong:first-child {
+  display: block;
+  margin-bottom: 0.2em;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--accent-strong);
+}
+
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+  background: var(--paper-sunken);
+}
+
+.md pre {
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--paper-sunken);
+  overflow-x: auto;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+}
+
+.md hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 1.4em 0;
+}
+
+.md img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Display math scrolls horizontally on narrow screens instead of overflowing the page. */
+.md .katex-display,
+.tex--display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35em 0.1em;
+  margin: 0.6em 0;
+  scrollbar-width: thin;
+}
+
+.md .katex-display > .katex {
+  white-space: nowrap;
+}
+
+.md .katex {
+  font-size: 1.06em;
+}
+
+.katex-error {
+  color: var(--danger) !important;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.md-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.md th,
+.md td {
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md th {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--paper-sunken);
+}
+
+.md tr:last-child td {
+  border-bottom: none;
+}
+
+.md--inline {
+  font-size: inherit;
+  line-height: inherit;
+  font-family: inherit;
+  font-variation-settings: normal;
+}
+
+.md--inline > * + * {
+  margin-top: 0;
+}
+
+.md--inline .katex {
+  font-size: 1.02em;
+}
+
+/* [[figure:…]] placeholders rendered as book figures */
+.md-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 1em auto;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  max-width: 100%;
+  width: fit-content;
+}
+
+.md-figure img {
+  max-height: 420px;
+  width: auto;
+  object-fit: contain;
+}
+
+.md-figure__caption {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: #5d574c;
+  text-align: center;
+}
+
+.md-figure__source {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md-figure--missing {
+  flex-direction: row;
+  background: var(--paper-sunken);
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Book scans keep a white page so dark ink stays legible. */
+  .md-figure {
+    background: #f4efe4;
+    border-color: transparent;
+  }
+
+  .md-figure__source {
+    color: #2c4a9e;
+  }
+}

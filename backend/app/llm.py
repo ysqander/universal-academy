@@ -75,6 +75,10 @@ class LLMError(RuntimeError):
     pass
 
 
+class _StreamFailed(RuntimeError):
+    """A streamed response ended with status 'failed' (retried like a server error)."""
+
+
 def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
@@ -117,6 +121,7 @@ async def structured(
     shared_prefix: str | None = None,
     max_output_tokens: int = 32000,
     label: str = "",
+    stream: bool = False,
 ) -> T:
     """Run one structured-output call and return the parsed Pydantic object.
 
@@ -124,6 +129,9 @@ async def structured(
     - `shared_prefix`: large context reused across many calls (e.g. chapter markdown). It is placed in the
       developer message behind an explicit cache breakpoint so parallel calls read it from the prompt cache.
     - `text`: the call-specific user message; `images`: PNG bytes attached to the user message (detail=original).
+    - `stream`: stream the response events instead of waiting for one silent HTTP response. Use it for calls that
+      can take minutes (graph, lessons): some networks drop connections that stay idle that long, and the
+      non-streaming request then hangs until the client timeout.
     Retries: the SDK retries transport/429/5xx; we additionally retry once on truncation (larger budget) and
     once on schema-validation failure.
     """
@@ -151,16 +159,20 @@ async def structured(
     for attempt in range(3):
         started = time.monotonic()
         try:
+            request = dict(
+                model=model,
+                reasoning={"effort": effort},
+                input=messages,
+                text_format=schema,
+                max_output_tokens=budget,
+                prompt_cache_options={"mode": "explicit"},
+                store=False,
+            )
             async with _get_semaphore():
-                resp = await _get_client().responses.parse(
-                    model=model,
-                    reasoning={"effort": effort},
-                    input=messages,
-                    text_format=schema,
-                    max_output_tokens=budget,
-                    prompt_cache_options={"mode": "explicit"},
-                    store=False,
-                )
+                if stream:
+                    resp = await _stream_parse(request)
+                else:
+                    resp = await _get_client().responses.parse(**request)
         except openai.BadRequestError as e:  # not retryable: bad schema / param / image
             raise LLMError(f"OpenAI rejected the request ({model}): {e.message}") from e
         except openai.AuthenticationError as e:
@@ -171,7 +183,7 @@ async def structured(
             last_error = e
             await asyncio.sleep(10 * (attempt + 1))
             continue
-        except (openai.APIConnectionError, openai.InternalServerError, openai.APITimeoutError) as e:
+        except (openai.APIConnectionError, openai.InternalServerError, openai.APITimeoutError, _StreamFailed) as e:
             last_error = e
             await asyncio.sleep(5 * (attempt + 1))
             continue
@@ -193,6 +205,18 @@ async def structured(
         return parsed
 
     raise LLMError(f"{role} call failed after retries ({label}): {last_error}")
+
+
+async def _stream_parse(request: dict):
+    """responses.parse() over a stream. Returns the parsed final response, or the raw response of a
+    'response.incomplete' event (status 'incomplete', handled by the caller's truncation retry)."""
+    async with _get_client().responses.stream(**request) as events:
+        async for event in events:
+            if event.type == "response.incomplete":
+                return event.response
+            if event.type == "response.failed":
+                raise _StreamFailed(str(getattr(event.response, "error", None) or "response failed"))
+        return await events.get_final_response()
 
 
 def _record_usage(role: str, model: str, resp, label: str, seconds: float) -> None:

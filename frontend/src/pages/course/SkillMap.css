@@ -1,0 +1,378 @@
+.skill-map {
+  position: relative;
+  height: clamp(440px, 76vh, 860px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle, color-mix(in srgb, var(--line-strong) 55%, transparent) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    var(--surface);
+  overflow: hidden;
+}
+
+.skill-map .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--faint);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--paper-sunken);
+  --xy-controls-button-color: var(--ink-2);
+  --xy-controls-button-color-hover: var(--ink);
+  --xy-controls-button-border-color: var(--line);
+  --xy-controls-box-shadow: var(--shadow-2);
+  --xy-attribution-background-color: transparent;
+  background: transparent;
+}
+
+.skill-map .react-flow__controls {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.skill-map .react-flow__controls-button {
+  width: 32px;
+  height: 32px;
+}
+
+.skill-map .react-flow__attribution {
+  opacity: 0.5;
+  font-size: 9px;
+}
+
+.skill-map .react-flow__node {
+  cursor: default;
+}
+
+.skill-map .react-flow__handle {
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: none;
+  pointer-events: none;
+}
+
+.skill-edge path {
+  transition: opacity 0.2s var(--ease);
+}
+
+.skill-map .react-flow__edge.skill-edge--dimmed {
+  opacity: 0.35;
+}
+
+/* ----- skill node ----- */
+
+.skill-node {
+  --node-bg: var(--surface);
+  --node-border: var(--line-strong);
+  --node-ink: var(--ink);
+  --node-muted: var(--muted);
+  position: relative;
+  border-radius: 12px;
+  background: var(--node-bg);
+  border: 1.5px solid var(--node-border);
+  color: var(--node-ink);
+  box-shadow: var(--shadow-1);
+  transition:
+    opacity 0.2s var(--ease),
+    box-shadow 0.2s var(--ease),
+    transform 0.2s var(--ease);
+}
+
+.skill-node__button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 12px 9px;
+  border: none;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.skill-node__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.skill-node__top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--node-muted);
+}
+
+.skill-node__key {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.skill-node__kind {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-node__pending,
+.skill-node__failed,
+.skill-node__lock {
+  margin-left: auto;
+  flex: none;
+}
+
+.skill-node__failed {
+  display: inline-flex;
+  color: var(--danger);
+}
+
+.skill-node__title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 560;
+  line-height: 1.3;
+}
+
+.skill-node__due {
+  position: absolute;
+  top: -9px;
+  right: 10px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--status-due);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.skill-node[data-status="locked"] {
+  --node-bg: var(--status-locked-bg);
+  --node-border: var(--line);
+  --node-ink: var(--muted);
+  --node-muted: var(--faint);
+  box-shadow: none;
+}
+
+.skill-node[data-status="available"] {
+  --node-border: var(--accent);
+  border-width: 2px;
+}
+
+.skill-node[data-status="in_progress"] {
+  --node-bg: var(--status-progress-bg);
+  --node-border: var(--status-progress);
+}
+
+.skill-node[data-status="learned"] {
+  --node-bg: var(--status-learned-bg);
+  --node-border: var(--status-learned);
+}
+
+.skill-node[data-status="mastered"] {
+  --node-bg: var(--status-mastered-bg);
+  --node-border: var(--status-mastered);
+  --node-ink: #f3faf9;
+  --node-muted: #b9dcd9;
+}
+
+.skill-node[data-due] {
+  box-shadow:
+    0 0 0 3px var(--status-due),
+    var(--shadow-1);
+}
+
+.skill-node[data-emphasis="selected"] {
+  box-shadow:
+    0 0 0 3px var(--paper),
+    0 0 0 5px var(--accent),
+    var(--shadow-2);
+  transform: translateY(-1px);
+}
+
+.skill-node[data-emphasis="related"] {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent),
+    var(--shadow-1);
+}
+
+.skill-node[data-emphasis="dimmed"],
+.foundation-node[data-emphasis="dimmed"] {
+  opacity: 0.45;
+}
+
+.skill-node:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+}
+
+.skill-node[data-due]:hover {
+  box-shadow:
+    0 0 0 3px var(--status-due),
+    var(--shadow-2);
+}
+
+/* ----- foundation node ----- */
+
+.foundation-node {
+  border-radius: 10px;
+  border: 1.5px dashed var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--ink-2);
+  transition: opacity 0.2s var(--ease);
+}
+
+.foundation-node[data-state="known"] {
+  border-color: color-mix(in srgb, var(--status-learned) 60%, var(--line));
+}
+
+.foundation-node[data-state="refresh"] {
+  border-color: var(--status-progress);
+}
+
+.foundation-node[data-emphasis="selected"],
+.foundation-node[data-emphasis="related"] {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.foundation-node__button {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.foundation-node__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.foundation-node[data-state="known"] .foundation-node__key svg {
+  color: var(--status-learned);
+}
+
+.foundation-node[data-state="refresh"] .foundation-node__key svg {
+  color: var(--status-progress);
+}
+
+.foundation-node__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.lane-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ----- legend ----- */
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.map-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-legend__swatch {
+  width: 18px;
+  height: 12px;
+  border-radius: 4px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.map-legend__swatch[data-status="locked"] {
+  background: var(--status-locked-bg);
+  border-color: var(--line);
+}
+
+.map-legend__swatch[data-status="available"] {
+  border: 2px solid var(--accent);
+}
+
+.map-legend__swatch[data-status="in_progress"] {
+  background: var(--status-progress-bg);
+  border-color: var(--status-progress);
+}
+
+.map-legend__swatch[data-status="learned"] {
+  background: var(--status-learned-bg);
+  border-color: var(--status-learned);
+}
+
+.map-legend__swatch[data-status="mastered"] {
+  background: var(--status-mastered-bg);
+  border-color: var(--status-mastered);
+}
+
+.map-legend__swatch[data-status="due"] {
+  box-shadow: 0 0 0 2px var(--status-due);
+}
+
+.map-legend__swatch[data-status="foundation"] {
+  border-style: dashed;
+  background: transparent;
+}
+
+.map-legend__note {
+  margin-left: auto;
+}
+
+@media (max-width: 699px) {
+  .map-legend__note {
+    margin-left: 0;
+    width: 100%;
+  }
+}

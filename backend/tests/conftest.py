@@ -1,0 +1,37 @@
+"""Test setup: offline by default (fake LLM, no NVIDIA), isolated data dir per test."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from pathlib import Path
+
+# Must happen before `app` is imported anywhere.
+os.environ["UA_FAKE_LLM"] = "1"
+os.environ["UA_DATA_DIR"] = tempfile.mkdtemp(prefix="ua-test-")
+os.environ["NVIDIA_API_KEY"] = ""
+
+import pytest  # noqa: E402
+
+from app import db  # noqa: E402
+from app.config import settings  # noqa: E402
+
+AXLER_PDF = Path(
+    "/Users/alexanderadamov/Knowledge Base/books/textbooks/Math for physics/Linear Algebra/Linear_Algebra_Done_Right_Sheldon.pdf"
+)
+
+
+@pytest.fixture(autouse=True)
+def fresh_data_dir(tmp_path: Path):
+    """Point settings.data_dir at a fresh temp dir and reset the DB for every test."""
+    object.__setattr__(settings, "data_dir", tmp_path / "data")
+    db._initialized_for = None
+    db.init_db()
+    yield tmp_path / "data"
+
+
+@pytest.fixture
+def axler_pdf() -> Path:
+    if not AXLER_PDF.exists():
+        pytest.skip("Axler PDF not available on this machine")
+    return AXLER_PDF

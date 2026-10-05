@@ -160,13 +160,15 @@ A lesson = intro (why it matters, the idea, notation, visual) + 2-3 **knowledge 
 
 ### 6.4 Review task (spaced repetition)
 - FSRS (`fsrs` 6.x, desired_retention 0.9, `learning_steps=()` and `relearning_steps=()` so cards stay in Review state; fuzzing on).
-- A review = 3 questions of the skill, one per KP where possible (mixed), preferring questions never answered before, then least-recently answered; flagged excluded.
-- Score: independent correct = 1, hint-assisted correct = 0.5, wrong = 0. Rating: 3 → Good; ≥2 → Hard; else Again (order-aware tie-break: ending on a wrong answer lowers 2 → Again only if both of the last two are wrong). XP 4 (pass, ≥2), 1 (Again).
+- A review = 3 questions of the skill, one per KP where possible (mixed), preferring questions never answered before, then least-recently answered; flagged excluded. When fewer than 3 unseen questions remain for a skill, request a background top-up (pipeline `request_top_up`).
+- **Order-sensitive score** (Math Academy): answer i (1-based) has weight i; credit 1 for independent correct, 0.5 for hint-assisted correct, 0 otherwise; `score = Σ wᵢcᵢ / Σ wᵢ`. ✖✔✖✔✔ → 0.73 (pass), ✔✔✖✔✖ → 0.47 (fail).
+- Rating: score = 1 → Good (Easy if also every answer was faster than half the expected time — optional); 0.6 ≤ score < 1 → Hard; < 0.6 → Again. XP: 4 if ≥ 0.6 (+1 if perfect), 1 otherwise.
 
-### 6.5 FIRe-lite (implicit repetition, after Math Academy)
+### 6.5 FIRe-lite (implicit repetition, after Math Academy: credit flows down, penalties flow up)
 Let `w(S→P)` be the effective encompassing weight from skill S down to ancestor P (max over paths of the product of edge weights; ignore < 0.3).
-- **Success** on S (lesson pass or review Good/Hard): for each learned ancestor P with w ≥ 0.5 whose card is due within 3 days: run FSRS `review_card(P, Good)` and log `implicit=1` (at most once per P per day). For 0.3 ≤ w < 0.5: push `P.due` later by `w × (P.due − P.last_review)` capped at 7 days. Log every implicit credit in `review_log`.
-- **Failure** on S (review Again): for each learned direct prerequisite P with w ≥ 0.5 and retrievability < 0.85: set `P.due = now` (targeted remediation).
+- **Credit flows down.** On success on S (lesson pass, or review Good/Hard): for each learned ancestor P with w ≥ 0.5 whose card is due within 3 days → FSRS `review_card(P, Good)`, logged `implicit=1` (at most once per P per day). For 0.3 ≤ w < 0.5 → push `P.due` later by `w × (P.due − P.last_review)`, capped at 7 days. Every implicit credit is logged in `review_log`.
+- **Penalties flow up.** On a failed review of S (Again): for each learned dependent D (S is an ancestor of D) with w(D→S) ≥ 0.5 → `D.due = min(D.due, now + 1 day)`.
+- **Remediation flows down** only after a lesson plateau (§6.3: second failure at the same KP → top-2 prerequisites due now).
 
 ### 6.6 Task selection — menu + "Continue learning"
 `GET /api/courses/{cid}/next` (no side effects) returns the active task (if any) + a ranked menu of up to 5 `TaskOption`s; `POST /api/courses/{cid}/continue` resumes the active task or starts the top option.
@@ -190,7 +192,7 @@ Markdown everywhere through one `<Markdown>` component (react-markdown + remark-
 
 ## 8. Configuration (.env at project root)
 
-`OPENAI_API_KEY` (required), `NVIDIA_API_KEY` (optional), `UA_MODEL_VISION`, `UA_MODEL_GRAPH`, `UA_MODEL_LESSON`, `UA_MODEL_VIZ`, `UA_MODEL_VERIFY`, `UA_PARSE_ENGINE` (auto|openai|nemotron), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR`, `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work).
+`OPENAI_API_KEY` (required), `NVIDIA_API_KEY` (optional), `UA_MODEL_VISION` (gpt-6-luna), `UA_MODEL_GRAPH`/`UA_MODEL_LESSON`/`UA_MODEL_VIZ` (gpt-6.1-sol), `UA_MODEL_VERIFY` (gpt-6-luna), `UA_EFFORT_*` per role, `UA_MODEL_VISION`, `UA_MODEL_GRAPH`, `UA_MODEL_LESSON`, `UA_MODEL_VIZ`, `UA_MODEL_VERIFY`, `UA_PARSE_ENGINE` (auto|openai|nemotron), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR`, `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work).
 
 ## 9. Testing
 

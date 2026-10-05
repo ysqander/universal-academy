@@ -434,7 +434,7 @@ def test_review_triggers_revision_rules():
     minor = fake_llm.respond(schema=LessonReview, role="graph", instructions="", text="(first draft)")
     assert needs_revision(minor)
     minor.issues[0].severity = "minor"
-    assert not needs_revision(minor)
+    assert needs_revision(minor)  # minor bridges (e.g. notation before introduction) are repaired too
 
 
 def test_invalid_draft_is_revised_with_the_validation_problem(tmp_path, monkeypatch, llm_calls):

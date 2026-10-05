@@ -620,10 +620,11 @@ async def review_lesson(spec: TeachingSpec, draft: LessonV2Draft, *, key: str = 
 
 
 def needs_revision(review: LessonReview) -> bool:
-    """Revise once when the review reports a blocking issue, an exercise needing an untaught method, out-of-scope
-    content, reasoning that sits only in the optional section, or a math error."""
+    """Revise once when the review reports any missing bridge (minor ones too — e.g. notation used before it is
+    introduced), an exercise needing an untaught method, out-of-scope content, reasoning that sits only in the
+    optional section, or a math error."""
     return bool(
-        any(i.severity == "blocking" for i in review.issues)
+        review.issues
         or review.untaught_method_exercises
         or review.out_of_scope_violations
         or review.optional_content_needed

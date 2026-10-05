@@ -94,12 +94,15 @@ Planner (`TeachingPlan`, may split a node) → writer (`LessonV2Draft`: ordered 
 faded examples, then practice knowledge points) → missing-bridge reviewer (`LessonReview`) → one revision. Stored as
 `lesson_json.format = "v2"`; the API returns `Lesson.format/blocks/goal_line/assumed/out_of_scope/deeper`. Applied per
 skill with `backend/scripts/replan.py --data-dir ../data --course <id> --skill S2 [--dry-run] [--no-split]`; a split
-replaces the node by narrower skills (keys S2a, S2b, …), rewires edges, recomputes order/reduction and unlocks, and is
-only allowed while the original skill has no answered attempts and no FSRS card.
+replaces the node by narrower skills (keys S2a, S2b, …, kept at the original's place in the learning order), rewires
+edges, recomputes order/reduction and unlocks, and is only allowed while the original skill has no answered attempts
+and no FSRS card. `scripts/regenerate.py` rewrites a v2 skill from its stored teaching spec. Inline checks and block
+feedback carry `Lesson.version`; a stale page gets 409 and a reload prompt.
 
 Question format rule (all generators): never ask "how many of these are true / belong to …" — use `true_false_set`
 (the learner marks each statement true or false; answer = one letter per statement, e.g. "FTT"; feedback names the
-statements that were marked wrong). With ≥ 3 statements it does not count toward the choice-question cap.
+statements that were marked wrong). With ≥ 3 statements it does not count toward the choice-question cap. A tuple
+answer becomes an unordered set only when the prompt says the order of the answers does not matter.
 
 ### 4.3 Visualization planner (its own step)
 Asks first "what will the learner likely misunderstand, and which representation makes *that* clearer?", then picks one format:

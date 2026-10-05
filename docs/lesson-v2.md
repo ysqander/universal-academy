@@ -52,7 +52,16 @@ dense, mixed several skills, and put needed reasoning in optional sections). Pri
    candidates, essential reasoning only in optional sections, out-of-scope content, math errors; recommends a split
    when a repair would add another substantial objective. No "clarity scores".
 4. **Revision** — the writer revises once with the review; the final review is stored with the lesson.
-5. Questions are verified as before; the learner can mark any block "This step isn't clear" (stored per block).
+5. Questions are verified as before (a `true_false_set` disagreement is re-solved once by the stronger model;
+   `agree_on_recheck` keeps it servable); the learner can mark any block "This step isn't clear" (stored per block
+   with the lesson version; the planner sees notes left on the current version when a skill is re-planned).
+
+Rules added after the first live review: any reviewer issue (minor ones too, e.g. notation used before it is
+introduced) triggers the one revision; a faded example's missing step is always machine-checked (never a 'reflect'
+check); non-obvious algebraic moves are motivated before they are made ("if we also knew a²+b², adding and
+subtracting would isolate a² and b²"), and first encounters show every algebra line; a lesson about *checking*
+supplied answers includes a near miss (a candidate matching one coordinate but not the other) and says why it fails;
+split skills keep the original's place in the learning order and follow the planner's letter order.
 
 ## Reference example (approved by the learner) — procedure skill
 

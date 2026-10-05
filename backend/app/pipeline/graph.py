@@ -109,10 +109,11 @@ def validate_graph(draft: KnowledgeGraphDraft, *, valid_pages: set[int], figure_
 
 def learning_order(graph: nx.DiGraph, first_page: Callable[[str], int], *, keep_key_order: bool = False) -> list[str]:
     """SPEC §4.1 order: topological, ties broken by first source page, then key number, then key ('S2a' < 'S2b').
-    keep_key_order (stored courses, e.g. after a split): ties broken by key number first, so an existing course keeps
-    its learning order and the parts of a split skill (S2a, S2b, …) stay where the original skill was."""
+    keep_key_order (stored courses, e.g. after a split): ties broken by key number, then key, so an existing course
+    keeps its learning order and the parts of a split skill stay where the original was, in the planner's order
+    (S2a, S2b, … — e.g. checking a supplied root before constructing one)."""
     if keep_key_order:
-        return list(nx.lexicographical_topological_sort(graph, key=lambda k: (key_number(k), first_page(k), k)))
+        return list(nx.lexicographical_topological_sort(graph, key=lambda k: (key_number(k), k, first_page(k))))
     return list(nx.lexicographical_topological_sort(graph, key=lambda k: (first_page(k), key_number(k), k)))
 
 

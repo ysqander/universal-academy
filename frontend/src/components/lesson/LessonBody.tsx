@@ -7,7 +7,8 @@ import { Icon } from "../Icon";
 import { Markdown } from "../Markdown";
 import { SourceRefs } from "../SourceRefs";
 import { BookFigure, VisualizationView } from "../VisualizationView";
-import { WorkedExampleView } from "./WorkedExampleView";
+import { KnowledgePointsPreview } from "./KnowledgePointsPreview";
+import { LessonV2Body } from "./LessonV2Body";
 import "./Lesson.css";
 
 interface LessonBodyProps {
@@ -17,8 +18,13 @@ interface LessonBodyProps {
   preview?: boolean;
 }
 
-/** The lesson introduction: objective → why it matters → the idea → notation → visual → depth on demand. */
+/** A lesson's reading part: the v2 teaching sequence, or the v1 introduction (fixed sections). */
 export function LessonBody({ lesson, kind, preview = false }: LessonBodyProps) {
+  return lesson.format === "v2" ? <LessonV2Body lesson={lesson} kind={kind} preview={preview} /> : <LessonBodyV1 lesson={lesson} kind={kind} preview={preview} />;
+}
+
+/** The v1 lesson introduction: objective → why it matters → the idea → notation → visual → depth on demand. */
+function LessonBodyV1({ lesson, kind, preview = false }: LessonBodyProps) {
   // Keyed by the local id ("p21-f1") that [[figure:…]] placeholders use (older responses carry "<course>-p21-f1").
   const catalog = useMemo(() => Object.fromEntries(lesson.figures.map((f) => [localFigureId(f.id), f])), [lesson.figures]);
   const viz = lesson.visualization;
@@ -131,30 +137,5 @@ export function LessonBody({ lesson, kind, preview = false }: LessonBodyProps) {
         </div>
       </article>
     </FigureCatalogContext.Provider>
-  );
-}
-
-function KnowledgePointsPreview({ lesson }: { lesson: Lesson }) {
-  return (
-    <>
-      {lesson.knowledge_points.map((kp) => (
-        <section key={kp.index} className="lesson__section kp-preview">
-          <p className="kicker">
-            Knowledge point {kp.index + 1} of {lesson.knowledge_points.length} · {kp.question_count} practice questions
-          </p>
-          <h2 className="lesson__kp-title">
-            <Markdown inline>{prettyTitle(kp.title)}</Markdown>
-          </h2>
-          <Markdown>{kp.explanation}</Markdown>
-          <WorkedExampleView example={kp.worked_example} stepwise={false} />
-        </section>
-      ))}
-      {lesson.connection && (
-        <section className="lesson__section">
-          <h2 className="lesson__h">Where this leads</h2>
-          <Markdown>{lesson.connection}</Markdown>
-        </section>
-      )}
-    </>
   );
 }

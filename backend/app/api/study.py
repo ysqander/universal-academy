@@ -1,19 +1,23 @@
-"""Study loop API (SPEC §5, §6): next task menu, task lifecycle, answers, reveal/flag, settings."""
+"""Study loop API (SPEC §5, §6): next task menu, task lifecycle, answers, reveal/flag, settings, and the teaching
+blocks of v2 lessons (inline checks, "This step isn't clear")."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import TypeVar
+from typing import Any, TypeVar
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from ..learning import engine, selector, stats
+from ..learning import blocks, engine, selector, stats
 from ..schemas import (
     AnswerResult,
     AnswerSubmit,
+    BlockCheckRequest,
+    BlockCheckResult,
+    BlockFeedbackRequest,
     FlagRequest,
     HintResponse,
     NextTaskResponse,
@@ -99,6 +103,25 @@ def reveal_solution(qid: str, body: RevealRequest | None = None) -> RevealRespon
 @router.post("/api/questions/{qid}/flag", response_model=Task)
 def flag_question(qid: str, body: FlagRequest) -> Task:
     return _run(lambda: engine.flag(qid, body.reason, _now()))
+
+
+@router.post("/api/skills/{sid}/blocks/{index}/check", response_model=BlockCheckResult)
+def check_block(sid: str, index: int, body: BlockCheckRequest) -> BlockCheckResult:
+    """Answer a v2 lesson's inline check (formative: graded, never recorded)."""
+    return _run(lambda: blocks.check_block(sid, index, body))
+
+
+@router.post("/api/skills/{sid}/blocks/{index}/feedback", status_code=204, response_class=Response)
+def block_feedback(sid: str, index: int, body: BlockFeedbackRequest | None = None) -> Response:
+    """'This step isn't clear' for one teaching block."""
+    _run(lambda: blocks.record_feedback(sid, index, body or BlockFeedbackRequest(), _now()))
+    return Response(status_code=204)
+
+
+@router.get("/api/skills/{sid}/feedback")
+def list_block_feedback(sid: str) -> list[dict[str, Any]]:
+    """Block feedback of a skill for later analysis: [{block_index, kind, note, created_at, lesson_hash}]."""
+    return _run(lambda: blocks.list_feedback(sid))
 
 
 @router.get("/api/settings", response_model=StudySettings)

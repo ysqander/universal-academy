@@ -183,12 +183,13 @@ def course_map(course_id: str) -> str:
             prereqs.setdefault(e["dst"], []).append(by_id[e["src"]]["key"])
     lines = ["## Course map (all skills of this course, in learning order)"]
     for s in skills:
-        needs = ", ".join(sorted(prereqs.get(s["id"], []), key=key_number))
+        needs = ", ".join(sorted(prereqs.get(s["id"], []), key=lambda k: (key_number(k), k)))
         lines.append(f"- {s['key']} · {s['title']} — {s['objective']}" + (f" [needs {needs}]" if needs else ""))
     return "\n".join(lines) + "\n"
 
 
 def key_number(key: str) -> int:
+    """'S12' → 12; a split skill 'S2a' → 2 (sort by (key_number(k), k) so S2a < S2b < S3)."""
     digits = "".join(ch for ch in key if ch.isdigit())
     return int(digits) if digits else 10**6
 

@@ -8,12 +8,14 @@ from . import db
 from .pipeline.textutil import bare_latex, clean_source_refs, lesson_text, mentions_caption, placeholder_ids
 from .schemas import (
     Figure,
+    InlineCheckPublic,
     KnowledgePoint,
     Lesson,
     NotationItem,
     PlotCurve,
     QuestionPublic,
     SkillRef,
+    TeachingBlockView,
     Visualization,
     VisualizationFrame,
     WorkedExample,
@@ -148,11 +150,24 @@ def lesson_view(skill_id: str) -> Lesson | None:
     unlocks = db.query(
         "SELECT s.* FROM edges e JOIN skills s ON s.id = e.dst WHERE e.src = ? ORDER BY s.order_index", (skill_id,)
     )
+    v2 = data.get("format") == "v2"
+    v2_fields: dict[str, Any] = {}
+    if v2:  # planned teaching sequence (lesson generation v2): blocks with inline checks — never their answers
+        plan = data.get("plan") or {}
+        v2_fields = {
+            "format": "v2",
+            "goal_line": data.get("goal_line", ""),
+            "blocks": [block_view(i, b, course_id, labels) for i, b in enumerate(data.get("blocks") or [])],
+            "assumed": list(plan.get("assumed_prerequisites") or []),
+            "out_of_scope": list(plan.get("out_of_scope") or []),
+            "deeper": data.get("deeper", ""),
+        }
     return Lesson(
         skill_id=skill_id,
         skill_key=skill["key"],
         title=skill["title"],
         objective=skill["objective"],
+        **v2_fields,
         why_it_matters=data.get("why_it_matters", ""),
         idea=data.get("idea", ""),
         notation=[NotationItem(**n) for n in data.get("notation", [])],
@@ -160,7 +175,7 @@ def lesson_view(skill_id: str) -> Lesson | None:
         missing_steps=data.get("missing_steps", ""),
         common_mistakes=data.get("common_mistakes", []),
         connection=data.get("connection", ""),
-        visualization=visualization_view(db.loads(skill["viz_json"], None), course_id, labels),
+        visualization=None if v2 else visualization_view(db.loads(skill["viz_json"], None), course_id, labels),
         source_refs=clean_source_refs(data.get("source_refs") or db.loads(skill["source_refs_json"], [])),
         source_pages=source_pages,
         page_labels=[label_of(labels, p) for p in source_pages],
@@ -171,10 +186,26 @@ def lesson_view(skill_id: str) -> Lesson | None:
     )
 
 
+def block_view(index: int, block: dict[str, Any], course_id: str, labels: list[str]) -> TeachingBlockView:
+    """A stored v2 teaching block as the learner sees it: the inline check without its answer or explanation (they
+    come back from POST /api/skills/{sid}/blocks/{i}/check)."""
+    check = block.get("check")
+    return TeachingBlockView(
+        index=index,
+        kind=block.get("kind", "explain"),
+        heading=block.get("heading") or None,
+        body=block.get("body", ""),
+        visualization=visualization_view(block.get("visual"), course_id, labels) if block.get("visual") else None,
+        check=InlineCheckPublic(kind=check["kind"], prompt=check["prompt"], choices=list(check.get("choices") or []))
+        if check
+        else None,
+    )
+
+
 def lesson_figure_rows(skill: dict[str, Any], lesson: dict[str, Any]) -> list[dict[str, Any]]:
     """Figure rows a lesson shows: the figures attached to the skill, every figure its text places with
     [[figure:ID]], and figures on its source pages whose caption the text quotes (lessons may only refer to figures
-    the learner can see)."""
+    the learner can see). v2: also the book figures its block visuals show."""
     course_id = skill["course_id"]
     rows = db.query("SELECT * FROM figures WHERE course_id = ? ORDER BY page_index, id", (course_id,))
     if not rows:
@@ -182,6 +213,11 @@ def lesson_figure_rows(skill: dict[str, Any], lesson: dict[str, Any]) -> list[di
     attached = {f"{course_id}-{local_figure_id(course_id, f)}" for f in db.loads(skill["figure_ids_json"], [])}
     text = lesson_text(lesson)
     placed = {f"{course_id}-{local_figure_id(course_id, f)}" for f in placeholder_ids(text)}
+    placed |= {
+        f"{course_id}-{local_figure_id(course_id, b['visual']['book_figure_id'])}"
+        for b in lesson.get("blocks") or []
+        if b.get("visual") and b["visual"].get("book_figure_id")
+    }
     pages = set(db.loads(skill["source_pages_json"], []))
     return [
         r

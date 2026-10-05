@@ -44,7 +44,10 @@ def needs_verification(row: dict[str, Any]) -> bool:
 def verify_request(row: dict[str, Any]) -> str:
     lines = [f"Question type: {row['kind']}", "", row["prompt"]]
     choices = db.loads(row["choices_json"], [])
-    if choices:
+    if row["kind"] == "true_false_set":
+        lines += ["", "Statements (mark each true or false; answer one letter per statement, in this order):"]
+        lines += [f"{i}. {c}" for i, c in enumerate(choices, start=1)]
+    elif choices:
         lines += ["", "Options (0-based index):"] + [f"{i}. {c}" for i, c in enumerate(choices)]
     return "\n".join(lines)
 

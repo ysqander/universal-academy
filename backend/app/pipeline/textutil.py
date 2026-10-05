@@ -66,7 +66,11 @@ MIN_CAPTION_MATCH = 8
 
 def lesson_text(lesson: dict[str, Any]) -> str:
     """All learner-facing prose of a stored lesson (lesson_json), for figure-reference detection."""
-    parts = [lesson.get(k) or "" for k in ("why_it_matters", "idea", "missing_steps", "connection")]
+    parts = [lesson.get(k) or "" for k in ("why_it_matters", "idea", "missing_steps", "connection", "goal_line", "deeper")]
+    for block in lesson.get("blocks") or []:  # v2 teaching sequence
+        parts += [block.get("heading") or "", block.get("body") or ""]
+        check = block.get("check") or {}
+        parts += [check.get("prompt") or "", check.get("explanation") or ""]
     for kp in lesson.get("knowledge_points") or []:
         parts.append(kp.get("explanation") or "")
         example = kp.get("worked_example") or {}

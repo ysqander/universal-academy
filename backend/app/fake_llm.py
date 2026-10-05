@@ -1,6 +1,10 @@
 """Deterministic canned LLM outputs (UA_FAKE_LLM=1) for offline tests and UI development.
 
-respond() dispatches on the schema class name. The content is a small, realistic course on complex numbers and
+respond() dispatches on the schema class name. Lesson generation v2: the planner splits a skill whose title joins
+several abilities with " and " (like "Multiply complex numbers and use their powers") into 3 narrower skills and keeps
+any other; the writer returns a teaching sequence with checks of several kinds (expression, true_false_set,
+reflect), a faded example and a visual; the reviewer reports one blocking issue on a first draft and none on a
+revised one. The content is a small, realistic course on complex numbers and
 F^n (Axler §1A style). Every generated question carries an invisible Markdown marker
     [//]: # "ua-fake|<choice>|<answer>"
 (a link reference definition, which Markdown renderers do not display) so the fake verifier can agree with it.
@@ -17,16 +21,26 @@ from typing import Any, Literal, Union, get_args, get_origin
 from pydantic import BaseModel
 
 from .llm_schemas import (
+    BridgeIssue,
+    DependentLink,
     Foundation,
     IndependentAnswer,
+    InlineCheck,
     KnowledgeGraphDraft,
     KnowledgePointDraft,
     LessonDraft,
+    LessonReview,
+    LessonV2Draft,
     NotationItem,
     PageTranscription,
+    PlannedPrereq,
     PrereqLink,
     QuestionDraft,
+    RepresentationChoice,
     SkillDraft,
+    TeachingBlock,
+    TeachingPlan,
+    TeachingSpec,
     VisualizationPlan,
     VizDiagram,
     VizEqStep,
@@ -286,14 +300,25 @@ def _kp_complex(seed: int) -> KnowledgePointDraft:
             _question(
                 key="k1q2",
                 tier=1,
-                kind="true_false",
-                prompt="True or false: for all real $a,b$, $(a+bi)(a-bi)=a^2+b^2$." + _marker(0, ""),
-                choices=["True", "False"],
-                correct_choice=0,
-                answer_display="True",
-                hints=["Expand the product.", "The cross terms $-abi$ and $abi$ cancel.", "$-b^2i^2=b^2$."],
-                solution="$(a+bi)(a-bi)=a^2-abi+abi-b^2i^2=a^2+b^2$.",
-                targets="using $i^2=-1$",
+                kind="true_false_set",
+                prompt="Mark each statement true or false." + _marker(None, "TFT"),
+                choices=[
+                    "For all real $a,b$: $(a+bi)(a-bi)=a^2+b^2$.",
+                    "$i^2=1$.",
+                    f"$({_cx(a, b)})\\cdot 0=0$.",
+                ],
+                answer="TFT",
+                answer_display="1 true, 2 false, 3 true",
+                hints=[
+                    "Expand statement 1; recall the definition of $i$ for statement 2.",
+                    "In 1 the cross terms $-abi$ and $abi$ cancel; $i$ was defined by $i^2=-1$.",
+                    "1: $-b^2i^2=b^2$, true. 2: false. 3: anything times $0$ is $0$, true.",
+                ],
+                solution=(
+                    "1. True: $(a+bi)(a-bi)=a^2-abi+abi-b^2i^2=a^2+b^2$. 2. False: $i^2=-1$. "
+                    "3. True: multiplying by $0$ gives $0$."
+                ),
+                targets="using $i^2=-1$; which claims about products hold",
             ),
             _question(
                 key="k1q3",
@@ -467,29 +492,7 @@ def _lesson(text: str, _prefix: str) -> LessonDraft:
     seed = _seed(key, title)
     proof = bool(_PROOF_RE.search(text))
     figures = [fid for fid, _ in _FIGURE_RE.findall(text)]
-    first_kp = _kp_complex(seed)
-    second_kp = _kp_vectors(seed)
-    if proof:  # proof skills: every knowledge point carries a free-response proof as q2 and a variant as q4
-        first_kp.questions.insert(1, _proof_question("k1q5"))
-        first_kp.questions.insert(
-            3,
-            _proof_variant(
-                "k1q6",
-                "$\\alpha+\\beta=\\beta+\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$",
-                "With $\\alpha=a+bi$, $\\beta=c+di$: $\\alpha+\\beta=(a+c)+(b+d)i=(c+a)+(d+b)i=\\beta+\\alpha$ by "
-                "commutativity of real addition.",
-                ["Takes arbitrary $\\alpha=a+bi$ and $\\beta=c+di$", "Uses the definition of addition", "Cites commutativity in $\\mathbf{R}$"],
-            ),
-        )
-        proof_q = next(q for q in second_kp.questions if q.kind == "free_response")
-        others = [q for q in second_kp.questions if q is not proof_q]
-        variant = _proof_variant(
-            "k2q6",
-            "$(x+y)+z=x+(y+z)$ for all $x,y,z\\in\\mathbf{F}^n$",
-            "Coordinatewise, $((x+y)+z)_k=(x_k+y_k)+z_k=x_k+(y_k+z_k)=(x+(y+z))_k$ by associativity in $\\mathbf{F}$.",
-            ["Takes arbitrary lists $x,y,z$", "Works coordinate by coordinate", "Cites associativity in $\\mathbf{F}$"],
-        )
-        second_kp.questions = [others[0], proof_q, others[1], variant, *others[2:]]
+    first_kp, second_kp = _lesson_kps(seed, proof)
     figure_line = f"\n\n[[figure:{figures[0]}]]" if figures else ""
     return LessonDraft(
         why_it_matters=(
@@ -516,6 +519,233 @@ def _lesson(text: str, _prefix: str) -> LessonDraft:
         connection="Coordinatewise operations on $\\mathbf{F}^n$ are the model for the abstract vector space in 1B.",
         # the last two are the kind of caption/page note real models emit: the pipeline keeps item numbers only
         source_refs=["1.1", "1.3", "1.13", "1.13 Definition — addition in F^n", "Printed p.2: complex numbers"],
+    )
+
+
+def _lesson_kps(seed: int, proof: bool) -> tuple[KnowledgePointDraft, KnowledgePointDraft]:
+    first_kp = _kp_complex(seed)
+    second_kp = _kp_vectors(seed)
+    if proof:  # proof skills: every knowledge point carries a free-response proof as q2 and a variant as q4
+        first_kp.questions.insert(1, _proof_question("k1q5"))
+        first_kp.questions.insert(
+            3,
+            _proof_variant(
+                "k1q6",
+                "$\\alpha+\\beta=\\beta+\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$",
+                "With $\\alpha=a+bi$, $\\beta=c+di$: $\\alpha+\\beta=(a+c)+(b+d)i=(c+a)+(d+b)i=\\beta+\\alpha$ by "
+                "commutativity of real addition.",
+                ["Takes arbitrary $\\alpha=a+bi$ and $\\beta=c+di$", "Uses the definition of addition", "Cites commutativity in $\\mathbf{R}$"],
+            ),
+        )
+        proof_q = next(q for q in second_kp.questions if q.kind == "free_response")
+        others = [q for q in second_kp.questions if q is not proof_q]
+        variant = _proof_variant(
+            "k2q6",
+            "$(x+y)+z=x+(y+z)$ for all $x,y,z\\in\\mathbf{F}^n$",
+            "Coordinatewise, $((x+y)+z)_k=(x_k+y_k)+z_k=x_k+(y_k+z_k)=(x+(y+z))_k$ by associativity in $\\mathbf{F}$.",
+            ["Takes arbitrary lists $x,y,z$", "Works coordinate by coordinate", "Cites associativity in $\\mathbf{F}$"],
+        )
+        second_kp.questions = [others[0], proof_q, others[1], variant, *others[2:]]
+    return first_kp, second_kp
+
+
+# ---------------------------------------------------------------------------
+# Lesson generation v2: planner, writer, reviewer
+# ---------------------------------------------------------------------------
+
+_PLAN_RE = re.compile(r"Plan the teaching of skill (\S+): (.+)")
+_V2_SKILL_RE = re.compile(r"Write the lesson for skill (\S+): (.+)")
+_LISTED_SKILL_RE = re.compile(r"^- (S\d+[a-z]*) · .*?(?:\(encompassing weight ([\d.]+)\))?$")
+
+
+def _section(text: str, header: str) -> list[tuple[str, float]]:
+    """Skill keys (and weights) listed under a header line of a plan request, up to the next blank line."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(header):
+            found = []
+            for item in lines[i + 1 :]:
+                if not item.strip():
+                    break
+                m = _LISTED_SKILL_RE.match(item.strip())
+                if m:
+                    found.append((m.group(1), float(m.group(2) or 0.5)))
+            return found
+    return []
+
+
+def _field(text: str, name: str, default: str = "") -> str:
+    m = re.search(rf"^{name}: (.+)$", text, re.MULTILINE)
+    return m.group(1).strip() if m else default
+
+
+def _spec(local_id: str, title: str, objective: str, kind: str, prereqs: list[tuple[str, float]], pages: list[int], **extra: Any) -> TeachingSpec:
+    fields: dict[str, Any] = {
+        "local_id": local_id,
+        "title": title,
+        "objective": objective,
+        "kind": kind,
+        "assumed_prerequisites": ["Expand $(x+y)(z+w)$ for real numbers", *[f"{k}: an earlier skill" for k, _ in prereqs if k.startswith("S")]],
+        "prerequisites": [PlannedPrereq(key=k, weight=w) for k, w in prereqs],
+        "out_of_scope": ["Square roots and cube roots", "Exponent rules"],
+        "starting_point": "Work out $(2+3i)(1+2i)$.",
+        "reasoning_sequence": [
+            "Each term of the first bracket multiplies each term of the second: four products.",
+            "$(3i)(2i)$ has two factors of $i$, so it contains $i^2$.",
+            "Replacing $i^2$ by $-1$ makes that product real.",
+            "Collect the real terms and the terms containing $i$.",
+        ],
+        "success_check": "Multiply two complex numbers given as $a+bi$ and explain where the real part comes from.",
+        "representations": [
+            RepresentationChoice(
+                format="grid_table",
+                helps_notice="that there are four products and only one contains $i^2$",
+                how_to_read="row term times column term",
+            )
+        ],
+        "practice_steps": ["Multiplying two complex numbers", "Products with a negative imaginary part"],
+        "source_pages": pages,
+        "source_refs": ["1.1", "Example 1.2"],
+        "difficulty": 2,
+        "est_minutes": 8,
+        "misconceptions": ["Uses $i^2=1$"],
+    }
+    return TeachingSpec(**(fields | extra))
+
+
+def _plan(text: str, _prefix: str) -> TeachingPlan:
+    m = _PLAN_RE.search(text)
+    key, title = (m.group(1), m.group(2).strip()) if m else ("S1", "Skill")
+    prereqs = _section(text, "Direct prerequisites")
+    dependents = [k for k, _ in _section(text, f"Skills that depend on {key}")]
+    pages = sorted({int(p) for p in re.findall(r"<<page (\d+)", _field(text, "Taught on"))})
+    kind = _field(text, "Kind", "computation").split(" ")[0]
+    allowed = "Splitting: NOT allowed" not in text
+    if allowed and " and " in title:
+        skills = [
+            _spec("a", "Multiply two complex numbers", "Compute the product of two complex numbers written as $a+bi$.",
+                  "computation", prereqs, pages),
+            _spec("b", "Compute powers of a complex number", "Compute a positive-integer power of a complex number by repeated multiplication.",
+                  "computation", [("a", 1.0)], pages, out_of_scope=["Finding roots"]),
+            _spec("c", "Check a proposed root", "Decide whether a given complex number is a square or cube root of another by computing its power.",
+                  "procedure", [("b", 0.75)], pages, out_of_scope=["Finding roots from scratch"]),
+        ]
+        return TeachingPlan(
+            split_test=f"Yes: multiplying, computing powers and checking roots need different reasoning ({title}).",
+            decision="split",
+            rationale="Checking a supplied root is a different task from multiplying.",
+            skills=skills,
+            dependents=[DependentLink(dependent_key=d, needs=["a"] if i % 2 == 0 else ["b", "c"]) for i, d in enumerate(dependents)],
+        )
+    objective = _field(text, "Objective", title)
+    spec = _spec("a", title, objective, kind if kind in ("concept", "definition", "procedure", "computation", "distinction", "interpretation", "proof") else "computation", prereqs, pages)
+    return TeachingPlan(
+        split_test="No: one family of questions assesses the whole objective.",
+        decision="keep",
+        rationale="A single coherent ability.",
+        skills=[spec],
+        dependents=[],
+    )
+
+
+def _check(**fields: Any) -> InlineCheck:
+    defaults: dict[str, Any] = {"choices": [], "correct_choice": None, "answer": "", "answer_display": "", "explanation": ""}
+    return InlineCheck(**(defaults | fields))
+
+
+def _block(kind: str, heading: str | None, body: str, *, check: InlineCheck | None = None, visual: VisualizationPlan | None = None) -> TeachingBlock:
+    return TeachingBlock(kind=kind, job=f"{kind}: {heading or body[:40]}", heading=heading, body=body, visual=visual, check=check)
+
+
+def _lesson_v2(text: str, _prefix: str) -> LessonV2Draft:
+    m = _V2_SKILL_RE.search(text)
+    key, title = (m.group(1), m.group(2).strip()) if m else ("S1", "Skill")
+    objective = _field(text, "Objective", title)
+    seed = _seed(key, title)
+    proof = "This is a PROOF skill" in text
+    figures = [fid for fid, _ in _FIGURE_RE.findall(text)]
+    first_kp, second_kp = _lesson_kps(seed, proof)
+    figure = f"\n\n[[figure:{figures[0]}]]" if figures else ""
+    steps = VisualizationPlan(
+        misunderstanding="Treating $i^2$ as $+1$.",
+        purpose="This representation helps the learner notice that only the $bd\\,i^2$ term changes sign.",
+        format="equation_steps",
+        rationale="The generalization is one line of algebra; highlighting the changed term shows where $-bd$ comes from.",
+        book_figure_id=None,
+        learner_prompt="Which term turns real?",
+        caption="Read top to bottom: the highlighted part changes in each line.",
+        table=None,
+        steps=[
+            VizEqStep(latex="(a+bi)(c+di)=ac+ad\\,i+bc\\,i+\\color{#d9480f}{bd\\,i^2}", note="Four products"),
+            VizEqStep(latex="=ac+ad\\,i+bc\\,i\\color{#d9480f}{-bd}", note="Replace $i^2$ by $-1$"),
+            VizEqStep(latex="=\\color{#d9480f}{(ac-bd)+(ad+bc)i}", note="Collect"),
+        ],
+        diagram=None,
+        plot=None,
+        frames=[],
+    )
+    blocks = [
+        _block("setup", "What changes when we multiply?",
+               "You already multiply brackets term by term. The one new step is $i^2=-1$. Let's work out $(2+3i)(1+2i)$." + figure),
+        _block("demonstrate", "First, account for all four products",
+               "| $\\times$ | $1$ | $2i$ |\n|---|---:|---:|\n| $2$ | $2$ | $4i$ |\n| $3i$ | $3i$ | $6i^2$ |\n\n"
+               "The bottom-right entry has two factors of $i$, so it contains $i^2$."),
+        _block("check", "Next, use $i^2=-1$", "Replace the $i^2$ term.",
+               check=_check(kind="expression", prompt="What does $6i^2$ become? Enter a number.", answer="-6",
+                            answer_display="$-6$", explanation="$6i^2=6(-1)=-6$.")),
+        _block("demonstrate", "Finally, collect the terms", "$2+4i+3i-6=-4+7i$."),
+        _block("generalize", "Where the formula comes from", "With real numbers $a,b,c,d$ the same steps give the formula.", visual=steps),
+        _block("faded_example", "Your turn — one step left", "$(1+2i)(3+i)=3+i+6i+2i^2$.",
+               check=_check(kind="expression", prompt="Finish $(1+2i)(3+i)=3+i+6i+2i^2$. Enter your answer in the form $a+bi$.",
+                            answer="1+7*i", answer_display="$1+7i$", explanation="$2i^2=-2$, so $3-2+7i=1+7i$.")),
+        _block("check", None, "Which of these are right?",
+               check=_check(kind="true_false_set", prompt="Mark each statement true or false.",
+                            choices=["$i^2=-1$", "$(3i)(2i)=6i$", "$(1+i)(1-i)=2$"], answer="TFT",
+                            answer_display="True, false, true", explanation="$(3i)(2i)=6i^2=-6$.")),
+        _block("check", None, "Explain it in your own words.",
+               check=_check(kind="reflect", prompt="Why did the bottom-right entry become a real number?",
+                            answer_display="It had two factors of $i$, and $i\\cdot i=i^2=-1$ is real.",
+                            explanation="Two factors of $i$ make $i^2=-1$.")),
+        _block("summary", None, "Expand, replace $i^2$ by $-1$, collect terms."),
+    ]
+    revised = "REVISION:" in text
+    return LessonV2Draft(
+        title=title,
+        objective=objective,
+        goal_line="Your goal: Calculate a product such as $(2+3i)(1+2i)$" + (" and explain the real part." if revised else "."),
+        blocks=blocks,
+        notation=[NotationItem(symbol="$i$", meaning="a number with $i^2=-1$")],
+        knowledge_points=[first_kp, second_kp],
+        common_mistakes=["Using $i^2=1$"],
+        connection=f"{key} prepares powers of complex numbers.",
+        deeper="An alternative view: multiplication by $i$ rotates by a quarter turn.",
+        source_refs=["1.1", "Example 1.2"],
+    )
+
+
+def _review(text: str, _prefix: str) -> LessonReview:
+    first = "(first draft)" in text
+    issues = (
+        [
+            BridgeIssue(
+                location="Block 2 — First, account for all four products",
+                inference_required="why $(3i)(2i)$ contains $i^2$",
+                why_insufficient="the grid shows $6i^2$ without saying the two factors of $i$ multiply",
+                repair="add one sentence: $(3i)(2i)=3\\cdot2\\cdot i\\cdot i=6i^2$",
+                severity="blocking",
+            )
+        ]
+        if first
+        else []
+    )
+    return LessonReview(
+        issues=issues,
+        untaught_method_exercises=[],
+        out_of_scope_violations=[],
+        optional_content_needed=[],
+        math_errors=[],
+        split_recommended=False,
+        split_reason="",
     )
 
 
@@ -714,6 +944,9 @@ def _minimal_value(annotation: Any) -> Any:
 _HANDLERS = {
     "KnowledgeGraphDraft": _graph,
     "LessonDraft": _lesson,
+    "TeachingPlan": _plan,
+    "LessonV2Draft": _lesson_v2,
+    "LessonReview": _review,
     "VisualizationPlan": _viz,
     "IndependentAnswer": _independent,
     "TopUpDraft": _top_up,

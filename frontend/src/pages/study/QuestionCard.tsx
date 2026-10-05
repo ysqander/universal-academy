@@ -7,9 +7,10 @@ import { useToast } from "../../context/toast";
 import { useHotkeys } from "../../hooks/useHotkeys";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useStopwatch } from "../../hooks/useStopwatch";
+import { ChoiceList, FreeResponseInput, MathInput, TfKeyList, TrueFalseSetInput, type ChoiceMark } from "../../components/answers/AnswerInputs";
 import { formatClock } from "../../lib/format";
+import { emptyTfMarks, encodeTfMarks, markNextUnmarked, parseTfKey, resolveTfKey, tfRowResults, type TfLetter, type TfMark } from "../../lib/trueFalseSet";
 import type { AnswerResult, QuestionPublic, RevealResponse, SelfGrade, Task } from "../../types";
-import { ChoiceList, FreeResponseInput, MathInput, type ChoiceMark } from "./AnswerInputs";
 import { FeedbackPanel, type SuggestionAction } from "./FeedbackPanel";
 import { FlagDialog } from "./FlagDialog";
 
@@ -53,6 +54,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const committed = question.kind === "free_response" && question.committed_response ? question.committed_response : null;
   const [choice, setChoice] = useState<number | null>(null);
   const [response, setResponse] = useState(committed ?? "");
+  // true_false_set: one True/False mark per statement, sent as "TFT".
+  const [tfMarks, setTfMarks] = useState<TfMark[]>(() => emptyTfMarks(question.kind === "true_false_set" ? question.choices.length : 0));
   // Hints come from POST /hint (recorded server-side, so a reload can't erase them); texts by hint index.
   const [hintTexts, setHintTexts] = useState<string[]>(() => question.hints.slice(0, question.hints_used));
   const [hinting, setHinting] = useState(false);
@@ -104,9 +107,12 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const isChoice = kind === "multiple_choice" || kind === "true_false";
   const choices = kind === "true_false" && question.choices.length !== 2 ? ["True", "False"] : question.choices;
   const isFree = kind === "free_response";
+  const isTfSet = kind === "true_false_set";
+  const tfResponse = isTfSet ? encodeTfMarks(tfMarks) : null;
   const answered = result !== null;
   const grading = isFree && modelSolution !== null && !answered;
-  const canSubmit = !answered && !submitting && !restoring && (isChoice ? choice !== null : response.trim().length > 0);
+  const canSubmit =
+    !answered && !submitting && !restoring && (isChoice ? choice !== null : isTfSet ? tfResponse !== null : response.trim().length > 0);
   const hintsShown = hintTexts.length;
   const hintTotal = Math.max(question.hints.length, hintsShown);
   const shortFreeAnswer = isFree && committedLength(response) < MIN_COMMITTED_CHARS;
@@ -117,7 +123,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
       const outcome = await submitAnswer(task.id, {
         question_id: question.id,
         choice: isChoice ? choice : null,
-        response: isChoice ? null : response,
+        response: isChoice ? null : isTfSet ? tfResponse : response,
         self_grade: selfGrade,
         hints_used: hintsShown,
         // Comparing a (near-)empty free response is the same as looking at the solution first (D1).
@@ -205,8 +211,16 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     setChoice(n - 1);
   };
 
+  // true_false_set without focus in the list: T / F mark the next unmarked statement (then Enter checks).
+  const markNext = (mark: TfLetter) => () => {
+    if (answered || !isTfSet || busy) return false;
+    setTfMarks((prev) => markNextUnmarked(prev, mark));
+  };
+
   useHotkeys(
     {
+      t: markNext("T"),
+      f: markNext("F"),
       "1": pickByNumber(1),
       "2": pickByNumber(2),
       "3": pickByNumber(3),
@@ -227,6 +241,11 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
 
   const marks = choiceMarks(choices, choice, result);
   const busy = submitting || easing;
+  // true_false_set: mark each statement right/wrong once graded (from the grader's feedback / the correct answer).
+  const tfKey =
+    isTfSet && result && result.status !== "voided" ? resolveTfKey(result.correct_answer, result.feedback, tfResponse, result.correct, choices.length) : null;
+  const revealedKey = isTfSet && revealed ? parseTfKey(revealed.correct_answer, choices.length) : null;
+  const tfResults = isTfSet && result && result.status !== "voided" ? tfRowResults(tfResponse, tfKey, result.correct, choices.length) : undefined;
 
   return (
     <article ref={cardRef} className="question-card card" data-state={answered ? "answered" : "open"} aria-labelledby={`q-${question.id}`}>
@@ -255,6 +274,16 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
             disabled={answered || busy}
             marks={marks}
             variant={kind === "true_false" ? "boolean" : "multiple"}
+          />
+        ) : isTfSet ? (
+          <TrueFalseSetInput
+            statements={choices}
+            marks={tfMarks}
+            onChange={setTfMarks}
+            onSubmit={() => submit()}
+            disabled={answered || busy}
+            results={tfResults}
+            answerKey={tfKey}
           />
         ) : isFree ? (
           <FreeResponseInput
@@ -290,10 +319,16 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
           <div className="question-card__solution reveal">
             <span className="feedback__label">Solution</span>
             <Markdown>{revealed.solution}</Markdown>
-            {revealed.correct_answer && (
-              <p className="question-card__answer-line">
-                <strong>Answer:</strong> <Markdown inline>{revealed.correct_answer}</Markdown>
-              </p>
+            {revealedKey ? (
+              <div className="question-card__answer-line">
+                <strong>Answer:</strong> <TfKeyList answerKey={revealedKey} />
+              </div>
+            ) : (
+              revealed.correct_answer && (
+                <p className="question-card__answer-line">
+                  <strong>Answer:</strong> <Markdown inline>{revealed.correct_answer}</Markdown>
+                </p>
+              )
             )}
             <p className="question-card__assist-note">You can still answer — it won't count toward the two-in-a-row streak.</p>
           </div>
@@ -374,6 +409,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
       {result && (
         <FeedbackPanel
           result={result}
+          // The statements already show the key row by row.
+          answerShown={tfKey !== null}
           before={task}
           onContinue={() => onContinue(result)}
           onSuggestion={(action) => onSuggestion(action, result)}
@@ -387,6 +424,11 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
             {grading || answered ? null : isChoice ? (
               <>
                 <kbd>1</kbd>–<kbd>{choices.length}</kbd> choose · <kbd>Enter</kbd> check
+              </>
+            ) : isTfSet ? (
+              <>
+                <kbd>T</kbd>/<kbd>F</kbd> mark a statement · <kbd>←</kbd>
+                <kbd>→</kbd> switch · <kbd>Enter</kbd> check
               </>
             ) : isFree ? (
               <>

@@ -7,6 +7,8 @@ export type SuggestionAction = "easier" | "reread" | "map";
 
 interface FeedbackPanelProps {
   result: AnswerResult;
+  /** The card already shows the correct answer in place (e.g. true/false statements marked one by one). */
+  answerShown?: boolean;
   before: Task;
   onContinue: () => void;
   onSuggestion: (action: SuggestionAction) => void;
@@ -63,7 +65,7 @@ const SUGGESTION_ACTIONS: Partial<Record<NonNullable<AnswerResult["suggestion"]>
   review_prerequisite: { action: "map", label: "See what to review", icon: "graph" },
 };
 
-export function FeedbackPanel({ result, before, onContinue, onSuggestion }: FeedbackPanelProps) {
+export function FeedbackPanel({ result, answerShown = false, before, onContinue, onSuggestion }: FeedbackPanelProps) {
   const continueRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const tone = toneOf(result);
@@ -73,7 +75,7 @@ export function FeedbackPanel({ result, before, onContinue, onSuggestion }: Feed
   const suggestion = result.suggestion ? SUGGESTION_ACTIONS[result.suggestion] : undefined;
   const taskOngoing = result.task.phase !== "done";
   const suggestionAvailable = suggestion && (suggestion.action === "map" || taskOngoing);
-  const showAnswer = !result.correct && result.correct_answer.trim() && result.status !== "voided";
+  const showAnswer = !answerShown && !result.correct && result.correct_answer.trim() && result.status !== "voided";
 
   useEffect(() => {
     continueRef.current?.focus({ preventScroll: true });

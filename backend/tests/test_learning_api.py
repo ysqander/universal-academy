@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from test_learning_fixtures import build_course, isolated_engine, question  # noqa: F401
+from test_learning_fixtures import build_course, isolated_engine, question, wrong_response  # noqa: F401
 
 from app import db
 from app.api import study
@@ -24,7 +24,7 @@ def answer_body(qid: str, correct: bool = True, **extra) -> dict:
     if q["kind"] in ("multiple_choice", "true_false"):
         body["choice"] = q["correct_choice"] if correct else (q["correct_choice"] + 1) % 3
     else:
-        body["response"] = q["answer"] if correct else "98765"
+        body["response"] = q["answer"] if correct else wrong_response(q)
     return body
 
 

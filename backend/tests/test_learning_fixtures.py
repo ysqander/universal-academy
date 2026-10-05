@@ -131,11 +131,28 @@ def right(qid: str, **extra) -> AnswerSubmit:
     return AnswerSubmit(question_id=qid, response=q["answer"], **extra)
 
 
+def wrong_response(q: dict) -> str:
+    """A readable but wrong response: a true/false set with its first mark flipped, otherwise a wrong number."""
+    if q["kind"] == "true_false_set":
+        return ("F" if q["answer"][0] == "T" else "T") + q["answer"][1:]
+    return "98765"
+
+
 def wrong(qid: str, **extra) -> AnswerSubmit:
     q = question(qid)
     if q["kind"] in ("multiple_choice", "true_false"):
         return AnswerSubmit(question_id=qid, choice=(q["correct_choice"] + 1) % 3, **extra)
-    return AnswerSubmit(question_id=qid, response="98765", **extra)
+    return AnswerSubmit(question_id=qid, response=wrong_response(q), **extra)
+
+
+def make_true_false_set(qid: str, answer: str = "FTT", answer_display: str = "") -> None:
+    """Turn a fixture question into a 'mark each statement true or false' question."""
+    statements = [f"Statement {n + 1} about $i$." for n in range(len(answer))]
+    db.execute(
+        "UPDATE questions SET kind = 'true_false_set', choices_json = ?, correct_choice = NULL, answer = ?, answer_display = ?"
+        " WHERE id = ?",
+        (db.dumps(statements), answer, answer_display, qid),
+    )
 
 
 def learn(fx: CourseFixture, key: str, now: datetime) -> None:

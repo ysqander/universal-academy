@@ -215,6 +215,12 @@ UNSIMPLIFIED = [
     ("(-1, 25, -14)", "(-5, 5, 2)+4(1, 5, -4)", "each component"),
     ("(4, 6)", "[1, 2] + [3, 4]", "each component"),
     ("(1/2, 1)", "(1, 2)/2", "each component"),
+    # a product with -1 left to evaluate (lesson v2 inline check "what does 6i^2 become?")
+    ("-6", "6(-1)", "simplify"),
+    ("-6", "6*(-1)", "simplify"),
+    ("-6", "-1*6", "simplify"),
+    ("-2.5", "2.5*(-1)", "simplify"),
+    ("(-6, 2)", "(6(-1), 2)", "each component"),
 ]
 
 
@@ -263,6 +269,14 @@ REDUCED = [
     ("2^(3/4)", "8^(1/4)"),
     ("1/2^(2/3)", "1/∛4"),
     ("12^(1/3)", "∛12"),
+    # a typed minus sign is not a product with -1
+    ("-6", "-6"),
+    ("-6", "-(6)"),
+    ("-1", "-1"),
+    ("-3/4", "-3/4"),
+    ("-2*sqrt(3)", "-2√3"),
+    ("-6*i", "-6i"),
+    ("-3-6*i", "-3-6i"),
 ]
 
 
@@ -452,3 +466,85 @@ def test_grading_has_a_hard_time_budget(monkeypatch: pytest.MonkeyPatch) -> None
     assert time.monotonic() - start < 2.0
     monkeypatch.setattr(grading, "GRADE_TIMEOUT_SECONDS", 5.0)
     assert grade("x^2+2*x+1", "(x+1)^2").correct  # the killed worker was replaced
+
+
+# ---------------------------------------------------------------------------
+# true_false_set: "mark each statement true or false" (one letter per statement, e.g. 'FTT')
+# ---------------------------------------------------------------------------
+
+
+def tf_set(answer: str, response: str | None):
+    return check_answer("true_false_set", answer=answer, correct_choice=None, tolerance=None, response=response, choice=None)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "FTT", "ftt", "F T T", "f, t, t", "F,T,T", "F/T/T", "F; T; T", "F-T-T", "false true true", "False, True, True",
+        "FALSE TRUE TRUE", "falsetruetrue", "1. F 2. T 3. T", "1) F, 2) T, 3) T", "1: false 2: true 3: true", "1F 2T 3T",
+        "(1) F (2) T (3) T", "  F T T.  ", "F T T",
+    ],
+)  # fmt: skip
+def test_true_false_set_accepts_every_way_of_writing_the_marks(response: str) -> None:
+    result = tf_set("FTT", response)
+    assert result.correct and not result.invalid and result.feedback == "Correct."
+
+
+@pytest.mark.parametrize("answer", ["FTT", "F T T", "f,t,t", "false, true, true", "1. F 2. T 3. T"])
+def test_true_false_set_answer_key_is_read_the_same_way(answer: str) -> None:
+    assert grading.parse_true_false_set(answer) == "FTT"
+    assert tf_set(answer, "FTT").correct
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["1 0 1", "101", "yes no yes", "Y N N", "FTX", "F T maybe", "✓ ✗ ✓", "1. F 3. T 2. T", "2. F 3. T 4. T", "1. FT 2. T", "", "   ", None],
+)
+def test_true_false_set_unreadable_marks_are_invalid_not_wrong(response: str | None) -> None:
+    result = tf_set("FTT", response)
+    assert result.invalid and not result.correct
+    assert result.feedback.startswith("Mark every statement true or false (3 statements).")
+    assert "FTT" not in result.feedback and "false" not in result.feedback.replace("true or false", "")
+
+
+@pytest.mark.parametrize(("response", "marked"), [("FT", 2), ("F T T F", 4), ("T", 1), ("true false true true false", 5)])
+def test_true_false_set_wrong_number_of_marks_is_invalid(response: str, marked: int) -> None:
+    result = tf_set("FTT", response)
+    assert result.invalid and not result.correct
+    assert result.feedback == f"Mark every statement true or false (3 statements). You marked {marked}."
+
+
+def test_true_false_set_feedback_names_the_statements_marked_wrong() -> None:
+    assert tf_set("FTT", "TFT").feedback == "Statement 1 is actually false; statement 2 is actually true."
+    assert tf_set("FTT", "FTF").feedback == "Statement 3 is actually true."
+    assert tf_set("FTT", "TFF").feedback == (
+        "Statement 1 is actually false; statement 2 is actually true; statement 3 is actually true."
+    )
+    one = tf_set("TFTTF", "TFTTT")
+    assert not one.correct and not one.invalid and one.feedback == "Statement 5 is actually false."
+    assert tf_set("T", "F").feedback == "Statement 1 is actually true."
+    singular = tf_set("T", "TF")
+    assert singular.invalid and singular.feedback == "Mark every statement true or false (1 statement). You marked 2."
+
+
+def test_true_false_set_unreadable_key_does_not_blame_the_learner() -> None:
+    result = tf_set("3", "TFT")
+    assert not result.correct and not result.invalid and "no answer key" in result.feedback
+    assert grading.true_false_set_request("") == "Mark every statement true or false."
+
+
+def test_true_false_set_is_checkable_and_displayed() -> None:
+    assert is_checkable("true_false_set", "FTT", None)
+    assert is_checkable("true_false_set", "F T T", None, ["a", "b", "c"])
+    assert not is_checkable("true_false_set", "FTT", None, ["a", "b"])  # one mark per statement
+    assert not is_checkable("true_false_set", "", None)
+    assert not is_checkable("true_false_set", "3", None)
+    assert not is_checkable("true_false_set", "1 0 1", None)
+    assert grading.true_false_set_display("FTT") == "1. False; 2. True; 3. True"
+    assert grading.true_false_set_display("not a key") == "not a key"
+    assert grading.true_false_set_request("TFTF") == "Mark every statement true or false (4 statements)."
+
+
+def test_true_false_set_does_not_change_the_other_kinds() -> None:
+    assert not check_answer("true_false", answer="", correct_choice=0, tolerance=None, response="T", choice=None).correct
+    assert check_answer("numeric", answer="2", correct_choice=None, tolerance=None, response="2", choice=None).correct

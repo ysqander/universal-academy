@@ -9,6 +9,8 @@
   point at a deleted question; when the regeneration fails the old lesson and its tasks stay as they were.
   A regenerated lesson also gets a new visual and verification.
 - visuals: the visual plan is redone; the stored one is replaced only by a successful new plan.
+- v2 lessons (lesson_json.format 'v2', see lesson_v2.py) are rewritten from their stored teaching spec with the v2
+  writer → reviewer → revision; their visuals live in the blocks, so the visual planner skips them.
 - verify: machine-checkable questions are re-verified in place (learner flags and retired questions are left alone).
   Nothing is held out of serving meanwhile: each question keeps its old verdict until the new one is written.
 Progress (status, FSRS cards, XP) is never touched. Runs in the caller's event loop; refuses while a build runs. An
@@ -22,9 +24,10 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
-from .. import llm
+from .. import db, llm
 from . import jobs
 from .context import BuildContext, load_course, skill_rows
+from .lesson_v2 import generate_v2_lesson, stored_spec
 from .lessons import ensure_lesson, lesson_prefix
 from .topup import release_stale_holds
 from .tracker import JobTracker
@@ -78,13 +81,20 @@ async def regenerate(
 
         async def one(skill: dict) -> None:
             regenerated = False
-            if lessons:
+            spec = stored_spec(db.loads(skill["lesson_json"], None) or {})  # v2 lesson: rewritten from its stored plan
+            if lessons and spec is not None:
+                result = await generate_v2_lesson(ctx, skill["id"], spec, prefix)  # also verifies the new questions
+                (report.lessons_regenerated if result.ok else report.lessons_kept).append(skill["key"])
+                if result.ok or not verify:
+                    return
+                regenerated = False
+            elif lessons:
                 regenerated = await ensure_lesson(ctx, skill["id"], prefix, force=True)
                 if regenerated:
                     report.lessons_regenerated.append(skill["key"])
                 elif skill["lesson_status"] == "ready":
                     report.lessons_kept.append(skill["key"])
-            if regenerated or visuals:
+            if spec is None and (regenerated or visuals):  # a v2 lesson's visuals live in its blocks
                 await ensure_visual(ctx, skill["id"], force=True)  # the old visual stays unless the new plan works
             notes: list[str] = []
             if regenerated:

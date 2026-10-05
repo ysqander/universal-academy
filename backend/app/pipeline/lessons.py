@@ -276,6 +276,13 @@ def resolve_figures(
 
     for field in ("why_it_matters", "idea", "missing_steps", "connection"):
         lesson[field] = fix(lesson.get(field) or "")
+    for field in ("goal_line", "deeper"):  # v2
+        if field in lesson:
+            lesson[field] = fix(lesson.get(field) or "")
+    for block in lesson.get("blocks") or []:  # v2 teaching sequence
+        block["body"] = fix(block.get("body") or "")
+        if block.get("check"):
+            block["check"]["explanation"] = fix(block["check"].get("explanation") or "")
     for kp in lesson.get("knowledge_points") or []:
         kp["explanation"] = fix(kp.get("explanation") or "")
         example = kp.get("worked_example") or {}

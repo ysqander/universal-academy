@@ -2,6 +2,9 @@
 import type {
   AnswerResult,
   AnswerSubmit,
+  BlockCheckRequest,
+  BlockCheckResult,
+  BlockFeedbackRequest,
   Book,
   BookSummary,
   Course,
@@ -180,6 +183,12 @@ export const figureUrl = (courseId: string, figureId: string) =>
 export const getSourcePage = (courseId: string, page: number, signal?: AbortSignal) =>
   get<SourcePage>(`/api/courses/${seg(courseId)}/source/${page}`, signal);
 export const getLesson = (skillId: string, signal?: AbortSignal) => get<Lesson>(`/api/skills/${seg(skillId)}/lesson`, signal);
+/** Answer a v2 lesson's inline check (formative: graded, never recorded). `reflect` checks send an empty body. */
+export const checkBlock = (skillId: string, blockIndex: number, body: BlockCheckRequest) =>
+  post<BlockCheckResult>(`/api/skills/${seg(skillId)}/blocks/${blockIndex}/check`, body);
+/** "This step isn't clear" on one teaching block (204). */
+export const sendBlockFeedback = (skillId: string, blockIndex: number, body: BlockFeedbackRequest) =>
+  post<void>(`/api/skills/${seg(skillId)}/blocks/${blockIndex}/feedback`, body);
 export const setFoundationKnown = (courseId: string, key: string, known: boolean) =>
   post<FoundationNode>(`/api/foundations/${seg(courseId)}/${seg(key)}`, { known });
 

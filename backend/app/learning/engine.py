@@ -23,6 +23,10 @@ the KP by itself: another unseen written question of the KP is served if there i
 waived for this KP (it passes on the plain two-in-a-row rule), and a lesson passed with a waived proof gets the
 initial FSRS rating Hard (an earlier first review, which includes a written question).
 
+Question kinds: multiple_choice and true_false are answered with `choice`; true_false_set ('TFT', one mark per
+statement), numeric and expression with `response`. All of these are graded automatically and count the same way
+(streaks, independence, reviews); only free_response is self-graded (E1).
+
 Every mutating function takes an explicit `now` and serializes through `lock` (single-process app; SQLite
 writes are short and each step is a handful of statements). Grading an answer (SymPy, bounded by its own time
 budget) happens OUTSIDE the lock; the state is re-validated afterwards. Reads (get_task, build_task) need neither.
@@ -177,6 +181,8 @@ def _set_current(st: dict[str, Any], qid: str | None) -> None:
 def _answer_display(q: dict[str, Any]) -> str:
     if q["answer_display"]:
         return q["answer_display"]
+    if q["kind"] == "true_false_set":
+        return grading.true_false_set_display(q["answer"])
     choices = db.loads(q["choices_json"], [])
     if q["correct_choice"] is not None and 0 <= q["correct_choice"] < len(choices):
         return choices[q["correct_choice"]]
@@ -824,7 +830,16 @@ def _norm_text(text: str | None) -> str:
 
 
 def _is_choice(q: dict[str, Any]) -> bool:
+    """Answered by picking one option (`choice`). A true/false set is answered with `response` ('TFT')."""
     return q["kind"] in ("multiple_choice", "true_false")
+
+
+def _nothing_submitted_message(q: dict[str, Any]) -> str:
+    if _is_choice(q):
+        return "Choose one of the options."
+    if q["kind"] == "true_false_set":
+        return grading.true_false_set_request(q["answer"])
+    return "Enter an answer first."
 
 
 def _submitted_nothing(q: dict[str, Any], sub: AnswerSubmit) -> bool:
@@ -864,7 +879,7 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
         return _Graded(correct, "self_graded", independent, _SELF_GRADE_FEEDBACK[sub.self_grade], res, sub.response or "", revealed, hints)
     if check is None:
         if not revealed:
-            raise Invalid("Choose one of the options." if _is_choice(q) else "Enter an answer first.")
+            raise Invalid(_nothing_submitted_message(q))
         correct, feedback = False, "Solution viewed — no answer submitted."
     else:
         if check.invalid:

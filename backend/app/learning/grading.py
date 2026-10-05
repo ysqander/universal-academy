@@ -2,7 +2,16 @@
 
 Public interface (stable):
     check_answer(kind, *, answer, correct_choice, tolerance, response, choice, require_simplified=True) -> GradeResult
-    is_checkable(kind, answer, correct_choice) -> bool      # does the answer key parse / exist?
+    is_checkable(kind, answer, correct_choice, choices=None) -> bool  # does the answer key parse / exist?
+    parse_true_false_set(text) -> str | None                # 'T F T', 'true,false,true' ... -> 'TFT'
+    true_false_set_display(answer) -> str                   # 'FTT' -> '1. False; 2. True; 3. True'
+    true_false_set_request(answer) -> str                   # 'Mark every statement true or false (3 statements).'
+
+true_false_set ("mark each statement true or false"): the key is one letter per statement, in order ('FTT'). The
+learner's response is read from T/F/true/false only — glued ('TFT'), separated ('T F T', 't,f,t', 'true false true')
+and optionally numbered ('1. T 2. F 3. T'); anything else, or a different number of marks, is invalid (asked again,
+never counted). A wrong answer names exactly the statements marked wrong ("Statement 2 is actually false; statement 3
+is actually true.") — that is the point of the format, so it never collapses into "how many are true?".
 
 Math answers are parsed with SymPy's parser from a heavily normalized string (unicode, LaTeX-ish input,
 `i`/`j` as the imaginary unit, implicit multiplication). The parser only ever sees a whitelisted character
@@ -985,6 +994,10 @@ def _is_reduced_number(raw: sp.Basic, *, real_only: bool = False) -> bool:
     imaginary), integer fractions in lowest terms, no arithmetic left to do. '(p + q i)/n' is also accepted."""
     if raw.free_symbols:
         return False
+    if isinstance(raw, sp.Mul) and len(raw.args) == 2 and sp.S.NegativeOne in raw.args and all(a.is_Number for a in raw.args):
+        # '6*(-1)', '6(-1)', '-1*6': a minus sign typed on a number literal parses as Integer(-6), so a lone
+        # Mul(-1, 6) outside a sum is a product left to evaluate (inside a sum, '3 - 6' is a subtraction term)
+        return False
     # (p + q i)/n with an integer n: the numerator must be reduced, with no common factor left with n
     num: list[sp.Basic] = []
     den: list[sp.Basic] = []
@@ -1137,6 +1150,83 @@ _SEPARATED_NUMBER = re.compile(r"[+-]?\d+(?:,\d+)+(?:\.\d+)?")
 _NUMBER_WITH_UNITS = re.compile(r"[+-]?(?:\d+(?:[.,]\d*)?|\.\d+)\s*[A-Za-z°%][A-Za-z°%/^*.\s\d]*")
 
 
+# ---------------------------------------------------------------------------
+# true_false_set: "mark each statement true or false"
+# ---------------------------------------------------------------------------
+
+_TF_TOKEN = re.compile(r"(?:true|false|t|f)+")
+_TF_WORD = re.compile(r"true|false|t|f")
+# Optional statement numbers: '1.', '2)', '3:', '1 T', '1T' (a number directly followed by a mark, so '1 0 1' is not one)
+_TF_NUMBER = re.compile(r"(?<![0-9])([0-9]{1,2})\s*(?:[.):=\-]\s*)?(?=[a-z])")
+_TF_SEPARATORS = re.compile(r"[\s,;/|.\-()\[\]]+")
+
+
+def parse_true_false_set(text: str | None) -> str | None:
+    """A true/false-set response or key -> one letter per statement ('TFT'); None if it isn't only T/F marks.
+
+    Accepted: 'TFT', 'T F T', 't,f,t', 'T/F/T', 'true false true', 'True, False, True', '1. T 2. F 3. T', '1T 2F 3T'.
+    Rejected: digits as marks ('1 0 1'), yes/no, ticks, anything else."""
+    if text is None:
+        return None
+    s = unicodedata.normalize("NFKC", text).casefold().strip()
+    for src, dst in _UNICODE_OPS.items():
+        s = s.replace(src, dst)
+    if not s or len(s) > MAX_INPUT_CHARS:
+        return None
+    numbers = [int(m.group(1)) for m in _TF_NUMBER.finditer(s)]
+    if numbers:
+        if numbers != list(range(1, len(numbers) + 1)):
+            return None
+        s = _TF_NUMBER.sub(" ", s)
+    letters: list[str] = []
+    for token in _TF_SEPARATORS.split(s):
+        if not token:
+            continue
+        if not _TF_TOKEN.fullmatch(token):
+            return None
+        letters.extend(word[0].upper() for word in _TF_WORD.findall(token))
+    if not letters or (numbers and len(numbers) != len(letters)):
+        return None
+    return "".join(letters)
+
+
+def _statements(n: int) -> str:
+    return f"{n} statement" if n == 1 else f"{n} statements"
+
+
+def true_false_set_request(answer: str) -> str:
+    """The 'answer every statement' message for a true/false set (no part of the key is revealed)."""
+    key = parse_true_false_set(answer)
+    return f"Mark every statement true or false ({_statements(len(key))})." if key else "Mark every statement true or false."
+
+
+def true_false_set_display(answer: str) -> str:
+    """'FTT' -> '1. False; 2. True; 3. True' (the key as it is shown after an answer)."""
+    key = parse_true_false_set(answer)
+    if not key:
+        return answer
+    return "; ".join(f"{k}. {'True' if mark == 'T' else 'False'}" for k, mark in enumerate(key, start=1))
+
+
+def _check_true_false_set(answer: str, response: str | None) -> GradeResult:
+    key = parse_true_false_set(answer)
+    if not key:
+        log.warning("true_false_set question without a readable answer key: %r", answer)
+        return GradeResult(False, "This question has no answer key — please report it as wrong.")
+    request = true_false_set_request(answer)
+    got = parse_true_false_set(response)
+    if got is None:
+        return GradeResult(False, f"{request} Use T or F for each statement, in order.", invalid=True)
+    if len(got) != len(key):
+        return GradeResult(False, f"{request} You marked {len(got)}.", invalid=True)
+    wrong = [k for k in range(len(key)) if got[k] != key[k]]
+    if not wrong:
+        return GradeResult(True, "Correct.")
+    parts = [f"statement {k + 1} is actually {'true' if key[k] == 'T' else 'false'}" for k in wrong]
+    text = "; ".join(parts)
+    return GradeResult(False, text[0].upper() + text[1:] + ".")
+
+
 def check_answer(
     kind: str,
     *,
@@ -1147,6 +1237,8 @@ def check_answer(
     choice: int | None,
     require_simplified: bool = True,
 ) -> GradeResult:
+    if kind == "true_false_set":
+        return _check_true_false_set(answer, response)
     if kind in ("multiple_choice", "true_false"):
         if choice is None:
             return GradeResult(False, "Choose one of the options.", invalid=True)
@@ -1220,8 +1312,12 @@ def _same_text(answer: str, response: str, keep_greek: frozenset[str] | None = N
         return False
 
 
-def is_checkable(kind: str, answer: str, correct_choice: int | None) -> bool:
-    """True if a question's answer key can be graded automatically."""
+def is_checkable(kind: str, answer: str, correct_choice: int | None, choices: list[str] | None = None) -> bool:
+    """True if a question's answer key can be graded automatically. For a true/false set, pass its statements as
+    `choices` to also require one mark per statement."""
+    if kind == "true_false_set":
+        key = parse_true_false_set(answer)
+        return bool(key) and (choices is None or len(key) == len(choices))
     if kind in ("multiple_choice", "true_false"):
         return correct_choice is not None
     if kind in ("numeric", "expression"):

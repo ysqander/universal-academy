@@ -7,6 +7,32 @@ MATH_FORMAT = (
     "Keep the author's notation (e.g. $\\mathbf{F}^n$, $\\mathbf{C}$, 'list', 'length')."
 )
 
+# Question format rule for every question generator (v1 lessons, top-ups, v2 lessons and their inline checks).
+COUNT_QUESTION_RULE = (
+    'Never ask "How many of these are true / belong to …?" or any other count of correct statements or matching '
+    "items: the count hides which ones the learner got wrong. Use true_false_set instead — the learner marks each "
+    'statement true or false. Example: instead of "How many of these equalities are true? 1. $(1,9)=(9,1)$ '
+    '2. $\\{1,9\\}=\\{9,1\\}$ 3. $(1,9)=(1,9)$" ask "Mark each equality true or false." with choices '
+    '["$(1,9)=(9,1)$", "$\\{1,9\\}=\\{9,1\\}$", "$(1,9)=(1,9)$"] and answer "FTT".'
+)
+ONE_ANSWER_RULE = (
+    "Each question asks for exactly ONE answer, the one the app checks: never \"compute X, then decide Y\" (only "
+    "`answer` is checked, so the decision goes unassessed and the expected input is unclear). To assess a decision "
+    "about several candidates or claims, use true_false_set with one statement per candidate (e.g. \"$2+i$ is a square "
+    "root of $3+4i$\"); for a single decision, true_false."
+)
+UNORDERED_RULE = (
+    'Several values whose order does not matter (both square roots, all solutions) are a set in braces, e.g. answer '
+    '"{1+i, -1-i}", and the prompt says "Enter both roots separated by a comma, in any order"; a tuple "( … )" is '
+    "only for ordered lists and vectors, where the order is part of the answer."
+)
+TF_SET_KIND = (
+    'true_false_set: "Mark each statement true or false" — choices holds the 2–5 statements (each self-contained, '
+    'without its own number); answer = one letter per statement in order, T or F (e.g. "FTT"); correct_choice null; '
+    "tolerance null. Mix true and false statements; the hints and the solution address every statement by its "
+    "number (why it is true, or a counterexample). With 3 or more statements it is not a guessable choice question."
+)
+
 GRAPH_INSTRUCTIONS = f"""\
 You design the knowledge graph of a Math-Academy-style course generated from pages of a textbook the learner owns.
 The user message holds a faithful transcription of the selected pages: page markers <<page N · p.L>> (N = PDF page
@@ -121,19 +147,22 @@ QUESTIONS
 - Self-contained: restate every object and value needed. Never refer to "the example above", the book or a figure.
 - Assess the stated objective, using only this lesson and its prerequisites.
 - Make the learner produce the answer. Computations → numeric or expression (typed answers). Conceptual claims →
-  true_false whose solution gives the reason or a counterexample. multiple_choice only when choosing among options
-  IS the skill (which hypothesis is missing, which step is invalid, which object fits a definition). Choice-based
-  questions (multiple_choice and true_false together) are guessable: at most 40% of the lesson's questions, and at
-  most one of each per knowledge point. Even conceptual knowledge points can usually be checked with typed answers:
-  ask for a concrete instance (compute the element, give the length, the coordinate, the missing value, the count),
-  and use free_response for "explain why".
+  true_false whose solution gives the reason or a counterexample, or true_false_set for several related claims.
+  multiple_choice only when choosing among options IS the skill (which hypothesis is missing, which step is
+  invalid, which object fits a definition). Choice-based questions (multiple_choice, true_false and a
+  true_false_set of only 2 statements) are guessable: at most 40% of the lesson's questions, and at most one of
+  each per knowledge point. Even conceptual knowledge points can usually be checked with typed answers: ask for a
+  concrete instance (compute the element, give the length, the coordinate, the missing value), and use
+  free_response for "explain why".
+- {COUNT_QUESTION_RULE}
+- {ONE_ANSWER_RULE}
 - Machine-checkable whenever possible — at least 3 of the 4 questions of a knowledge point (2 of 4 for proof
   skills):
   - numeric: answer is a plain number in SymPy syntax ("-3.5", "2/3", "sqrt(2)"); tolerance (e.g. 0.001) only
     when a decimal approximation is expected, else null.
   - expression: answer in SymPy syntax — ** for powers, * for every product, i for the imaginary unit ("-7+22*i"),
     sqrt(2), pi; a list or vector as a tuple "(1, -2, 3)". The prompt must state the exact form to enter (e.g.
-    "Enter your answer in the form $a+bi$" or "Enter the list as $(x_1, x_2, x_3)$").
+    "Enter your answer in the form $a+bi$" or "Enter the list as $(x_1, x_2, x_3)$"). {UNORDERED_RULE}
   - multiple_choice: 3–5 choices; distractors come from real misconceptions (sign error, conjugate, coordinate-wise
     product, swapped order, a hypothesis dropped), never random values; exactly one correct; correct_choice is its
     0-based index; vary its position across questions. All options have similar length, wording and level of
@@ -143,10 +172,11 @@ QUESTIONS
     an arbitrary index, a single example, a wrong law cited, a dropped hypothesis or uniqueness step).
   - true_false: choices exactly ["True", "False"]; correct_choice 0 for True, 1 for False. Good for "always /
     sometimes" claims; the solution gives the reason or a counterexample.
+  - {TF_SET_KIND}
   - free_response: for prove / explain / justify objectives only; answer ""; checklist of 2–5 concrete criteria a
     correct answer must meet; solution is a model answer (the learner compares and self-grades).
 - multiple_choice, true_false and free_response: answer "" and tolerance null. numeric and expression: choices []
-  and correct_choice null.
+  and correct_choice null. true_false_set: answer is the T/F letters, correct_choice null.
 - hints: exactly 3, progressive — (1) which idea applies, (2) a partial step, (3) nearly the whole solution.
 - solution: complete and correct. answer_display: the answer formatted with LaTeX.
 - targets: which part of the objective or which misconception the question checks.
@@ -205,7 +235,10 @@ You independently check an auto-generated practice question. Solve it yourself, 
   answer = "".
 - numeric: answer = the value as a plain number in SymPy syntax ("-3.5", "2/3", "sqrt(2)"); choice = null.
 - expression: answer in SymPy syntax in the form the question asks for — ** for powers, * for products, i for the
-  imaginary unit ("-7+22*i"), tuples for lists "(1, -2, 3)"; choice = null.
+  imaginary unit ("-7+22*i"), tuples for lists "(1, -2, 3)", several values in any order separated by commas;
+  choice = null.
+- true_false_set (mark each numbered statement true or false): answer = one letter per statement in order, T or F,
+  e.g. "FTT"; choice = null.
 - confidence: your probability (0-1) that your answer is correct.
 - problems: any defect of the question itself — ambiguous wording, missing information, no correct option, several
   correct options, an unclear answer format, or a correct option that can be recognized without solving (it is the
@@ -221,13 +254,17 @@ passage and the questions that already exist.
   point, with different numbers or objects than every existing question (no rewordings).
 - Self-contained; assess the stated objective; only use this lesson and its prerequisites.
 - Machine-checkable whenever possible; make the learner produce the answer: computations → numeric/expression,
-  conceptual claims → true_false (reason or counterexample in the solution), multiple_choice only when choosing is
-  the skill; choice-based questions (multiple_choice + true_false) at most 40% — prefer typed answers. numeric: a plain number in SymPy syntax. expression: SymPy syntax with ** for powers, * for products, i
-  for the imaginary unit, tuples "(1, -2, 3)" for lists, and the prompt states the form to enter. multiple_choice:
-  3–5 choices with misconception-based distractors, correct_choice = 0-based index; all options of similar length
-  and detail (the correct one must not be the longest or only detailed one; argument options are all complete
-  arguments, each wrong one with exactly one specific flaw). true_false: choices exactly ["True", "False"].
+  conceptual claims → true_false (reason or counterexample in the solution) or true_false_set for several related
+  claims, multiple_choice only when choosing is the skill; choice-based questions (multiple_choice, true_false, a
+  true_false_set of only 2 statements) at most 40% — prefer typed answers. numeric: a plain number in SymPy
+  syntax. expression: SymPy syntax with ** for powers, * for products, i for the imaginary unit, tuples
+  "(1, -2, 3)" for lists, and the prompt states the form to enter. {UNORDERED_RULE} multiple_choice: 3–5 choices with
+  misconception-based distractors, correct_choice = 0-based index; all options of similar length and detail (the
+  correct one must not be the longest or only detailed one; argument options are all complete arguments, each
+  wrong one with exactly one specific flaw). true_false: choices exactly ["True", "False"]. {TF_SET_KIND}
   free_response (prove / explain only): answer "" and a 2–5 item checklist.
+- {COUNT_QUESTION_RULE}
+- {ONE_ANSWER_RULE}
 - Exactly 3 progressive hints; a complete solution; answer_display in LaTeX; targets; source_exercise null unless
   adapted from a book exercise.
 - Solve each question again before writing its answer.

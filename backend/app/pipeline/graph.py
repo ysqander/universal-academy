@@ -4,6 +4,8 @@ with networkx (SPEC §4.1) and persistence of skills, edges and foundations."""
 from __future__ import annotations
 
 import logging
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import networkx as nx
@@ -71,7 +73,7 @@ def validate_graph(draft: KnowledgeGraphDraft, *, valid_pages: set[int], figure_
         pages = [p for p in by_key[key].source_pages if p in valid_pages]
         return min(pages) if pages else 10**6
 
-    order = list(nx.lexicographical_topological_sort(graph, key=lambda k: (first_page(k), key_number(k), k)))
+    order = learning_order(graph, first_page)
     reduction = nx.transitive_reduction(graph)
     rename = {old: f"S{i + 1}" for i, old in enumerate(order)}
 
@@ -103,6 +105,45 @@ def validate_graph(draft: KnowledgeGraphDraft, *, valid_pages: set[int], figure_
     if not SANE_SKILLS[0] <= len(cleaned) <= SANE_SKILLS[1]:
         warnings.append(f"unusual skill count: {len(cleaned)} (expected {SANE_SKILLS[0]}–{SANE_SKILLS[1]})")
     return ValidatedGraph(skills=cleaned, edges=edges, foundations=foundations, warnings=warnings)
+
+
+def learning_order(graph: nx.DiGraph, first_page: Callable[[str], int]) -> list[str]:
+    """SPEC §4.1 order: topological, ties broken by first source page, then key number, then key ('S2a' < 'S2b')."""
+    return list(nx.lexicographical_topological_sort(graph, key=lambda k: (first_page(k), key_number(k), k)))
+
+
+def reorder_course(conn: sqlite3.Connection, course_id: str) -> list[str]:
+    """Recompute order_index (learning order) and the `reduced` flag (transitive reduction) of every skill and edge
+    of a stored course, inside the caller's transaction — after the graph was edited (e.g. a skill was split).
+    Cycles are broken at their lowest-weight edge (deleted). Returns warnings."""
+    warnings: list[str] = []
+    skills = conn.execute("SELECT id, key, source_pages_json FROM skills WHERE course_id = ?", (course_id,)).fetchall()
+    by_key = {s["key"]: s for s in skills}
+    key_of = {s["id"]: s["key"] for s in skills}
+    graph = nx.DiGraph()
+    graph.add_nodes_from(by_key)
+    for e in conn.execute("SELECT src, dst, weight FROM edges WHERE course_id = ?", (course_id,)).fetchall():
+        if e["src"] in key_of and e["dst"] in key_of:
+            graph.add_edge(key_of[e["src"]], key_of[e["dst"]], weight=e["weight"])
+    before = set(graph.edges())
+    _break_cycles(graph, warnings)
+    for u, v in before - set(graph.edges()):
+        conn.execute("DELETE FROM edges WHERE src = ? AND dst = ?", (by_key[u]["id"], by_key[v]["id"]))
+
+    def first_page(key: str) -> int:
+        pages = db.loads(by_key[key]["source_pages_json"], [])
+        return min(pages) if pages else 10**6
+
+    order = learning_order(graph, first_page)
+    for index, key in enumerate(order):
+        conn.execute("UPDATE skills SET order_index = ? WHERE id = ?", (index, by_key[key]["id"]))
+    reduction = nx.transitive_reduction(graph)
+    for u, v in graph.edges():
+        conn.execute(
+            "UPDATE edges SET reduced = ? WHERE src = ? AND dst = ?",
+            (int(reduction.has_edge(u, v)), by_key[u]["id"], by_key[v]["id"]),
+        )
+    return warnings
 
 
 def _unique_skills(skills: list[SkillDraft], warnings: list[str]) -> list[SkillDraft]:

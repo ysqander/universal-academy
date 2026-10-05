@@ -7,23 +7,43 @@ import re
 import sqlite3
 
 from .. import db
-from ..learning.grading import check_answer
+from ..learning.grading import check_answer, parse_true_false_set
 from ..llm_schemas import QuestionDraft
 
 log = logging.getLogger("ua.pipeline.questions")
 
-MACHINE_CHECKABLE = {"multiple_choice", "true_false", "numeric", "expression"}
+MACHINE_CHECKABLE = {"multiple_choice", "true_false", "true_false_set", "numeric", "expression"}
 TRUE_FALSE = ["True", "False"]
 MAX_CHOICES = 6
 MAX_CHECKLIST = 5
+TF_SET_STATEMENTS = (2, 5)  # true_false_set: the learner marks 2-5 statements true or false
 MAX_MC_SHARE = 0.4  # target: at most ~40% of a lesson's questions are choice-based (multiple choice + true/false)
 MAX_CHOICE_SHARE_HARD = 0.5  # above this a lesson draft is rejected and regenerated (guessable practice)
 CHOICE_KINDS = {"multiple_choice", "true_false"}
+# "How many of these are true / belong to …" hides which statements the learner got wrong: use true_false_set.
+_COUNT_THE_TRUE = re.compile(
+    r"\bhow\s+many\s+of\s+(?:these|those|the\s+(?:following|statements|claims|equalities|equations|items|"
+    r"objects|listed|given|above|below|numbers|lists|sets|vectors))\b",
+    re.IGNORECASE,
+)
+
+
+def is_choice_based(kind: str, n_choices: int = 0) -> bool:
+    """Guessable formats that count toward the choice-question cap: multiple choice, true/false, and a
+    true_false_set of only 2 statements (with 3 or more, guessing every letter right is unlikely)."""
+    return kind in CHOICE_KINDS or (kind == "true_false_set" and n_choices < 3)
 
 
 def choice_share(pools: list[list[QuestionDraft]]) -> float:
     questions = [q for pool in pools for q in pool]
-    return sum(1 for q in questions if q.kind in CHOICE_KINDS) / len(questions) if questions else 0.0
+    return sum(1 for q in questions if is_choice_based(q.kind, len(q.choices))) / len(questions) if questions else 0.0
+
+
+def counts_true_statements(prompt: str) -> bool:
+    """A 'How many of these are true / belong to …' question (forbidden: use true_false_set instead)."""
+    return bool(_COUNT_THE_TRUE.search(prompt or ""))
+
+
 LENGTH_CUE_RATIO = 1.4  # the correct option is this much longer than every distractor …
 LENGTH_CUE_CHARS = 25  # … and at least this many characters longer: answerable without solving
 PENDING_REASON = "verification: pending"
@@ -41,6 +61,10 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
     """Return a normalized copy or raise InvalidQuestion with the reason."""
     if not q.prompt.strip():
         raise InvalidQuestion("empty prompt")
+    if q.kind != "true_false_set" and counts_true_statements(q.prompt):
+        raise InvalidQuestion(
+            "asks how many statements are true (hides which ones the learner got wrong) — use true_false_set"
+        )
     update: dict = {"tier": min(3, max(1, int(q.tier))), "hints": [h for h in q.hints if h.strip()][:3]}
     if q.kind == "multiple_choice":
         choices = [c for c in q.choices if c.strip()]
@@ -55,10 +79,27 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
             raise InvalidQuestion(f"true/false choices must be {TRUE_FALSE}, got {q.choices}")
         _require_choice_index(q.correct_choice, 2)
         update |= {"choices": TRUE_FALSE, "answer": "", "tolerance": None, "checklist": []}
+    elif q.kind == "true_false_set":
+        statements = [c.strip() for c in q.choices if c.strip()]
+        low, high = TF_SET_STATEMENTS
+        if not low <= len(statements) <= high or len(statements) != len(q.choices):
+            raise InvalidQuestion(f"true_false_set needs {low}-{high} non-empty statements")
+        if len({_norm(c) for c in statements}) != len(statements):
+            raise InvalidQuestion("duplicate statements")
+        letters = parse_true_false_set(q.answer.strip().strip("$")) or ""
+        if len(letters) != len(statements):
+            raise InvalidQuestion(
+                f"true_false_set answer must be one letter T or F per statement ({len(statements)}), got {q.answer!r}"
+            )
+        if not q.solution.strip():
+            raise InvalidQuestion("true_false_set needs a solution that explains each statement")
+        update |= {"choices": statements, "answer": letters, "correct_choice": None, "tolerance": None, "checklist": []}
     elif q.kind in ("numeric", "expression"):
         answer = _strip_math(q.answer)
         if not answer:
             raise InvalidQuestion(f"{q.kind} question without an answer")
+        if q.kind == "expression" and _ANY_ORDER.search(q.prompt) and _is_tuple(answer):
+            answer = "{" + answer[1:-1].strip() + "}"  # "in any order": the grader compares a set without order
         tolerance = abs(q.tolerance) if q.tolerance is not None and q.kind == "numeric" else None
         if not check_answer(
             q.kind,
@@ -81,6 +122,23 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
     else:
         raise InvalidQuestion(f"unknown kind {q.kind}")
     return q.model_copy(update=update)
+
+
+_ANY_ORDER = re.compile(r"\b(?:either|any)\s+order\b", re.IGNORECASE)
+
+
+def _is_tuple(answer: str) -> bool:
+    """'(a, b)' with a comma at the top level (not '(1+2i)')."""
+    if not (answer.startswith("(") and answer.endswith(")")):
+        return False
+    depth, comma = 0, False
+    for i, ch in enumerate(answer):
+        depth += ch in "([{"
+        depth -= ch in ")]}"
+        if depth == 0 and i < len(answer) - 1:
+            return False  # '(a)(b)' or '(a, b)*(c, d)': the outer parentheses do not enclose everything
+        comma = comma or (ch == "," and depth == 1)
+    return comma
 
 
 def clean_questions(questions: list[QuestionDraft], context: str) -> tuple[list[QuestionDraft], list[str]]:
@@ -146,13 +204,16 @@ def format_warnings(pools: list[list[QuestionDraft]]) -> list[str]:
     """Lesson-level checks of the answer formats: share of multiple choice, options that give the answer away."""
     questions = [q for pool in pools for q in pool]
     mc = [q for q in questions if q.kind == "multiple_choice"]
-    choice = [q for q in questions if q.kind in CHOICE_KINDS]
+    choice = [q for q in questions if is_choice_based(q.kind, len(q.choices))]
     notes = []
     if questions and len(choice) / len(questions) > MAX_MC_SHARE:
         notes.append(
             f"{len(choice)} of {len(questions)} questions are multiple choice or true/false "
             f"(target ≤ {MAX_MC_SHARE:.0%}); prefer typed numeric/expression answers"
         )
+    uniform = [q.key for q in questions if q.kind == "true_false_set" and len(set(q.answer)) == 1 and len(q.answer) >= 3]
+    if uniform:
+        notes.append(f"every statement has the same truth value in {', '.join(uniform)}")
     cued = [q.key for q in mc if length_cue(q)]
     if cued:
         notes.append(f"correct option much longer than the distractors in {', '.join(cued)}")

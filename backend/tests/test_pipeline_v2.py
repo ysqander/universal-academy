@@ -1,0 +1,597 @@
+"""Lesson generation v2 (offline, fake LLM): plan validation, split + rewiring + order/reduction + progress, refusal
+with learner history, v2 persistence and the lesson view (no answers leaked), the revision loop, true_false_set and
+the question-format rule, regeneration of a v2 lesson, and the replan CLI's server guard."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import networkx as nx
+import pytest
+from test_pipeline_build import build, llm_calls, tiny_course  # noqa: F401  (fixture)
+
+from app import db, fake_llm
+from app.llm_schemas import (
+    DependentLink,
+    InlineCheck,
+    LessonReview,
+    LessonV2Draft,
+    PlannedPrereq,
+    QuestionDraft,
+    TeachingPlan,
+)
+from app.pipeline import jobs
+from app.pipeline.context import key_number
+from app.pipeline.lesson_v2 import (
+    InvalidPlan,
+    PlanGraph,
+    clean_inline_check,
+    needs_revision,
+    validate_plan,
+    validate_v2,
+)
+from app.pipeline.lessons import InvalidLesson
+from app.pipeline.questions import InvalidQuestion, choice_share, clean_question, format_warnings
+from app.pipeline.replan import SplitRefused, apply_split, check_plan, plan_replan, replan, report_lines
+from app.views import lesson_view
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def built_course(tmp_path: Path) -> str:
+    cid = tiny_course(tmp_path)
+    assert build(cid).state == "done"
+    return cid
+
+
+def skill_by_title(cid: str, prefix: str) -> dict:
+    row = db.query_one("SELECT * FROM skills WHERE course_id = ? AND title LIKE ?", (cid, prefix + "%"))
+    assert row is not None, prefix
+    return row
+
+
+def key_of(cid: str) -> dict[str, str]:
+    return {s["id"]: s["key"] for s in db.query("SELECT id, key FROM skills WHERE course_id = ?", (cid,))}
+
+
+def edge_keys(cid: str) -> set[tuple[str, str]]:
+    keys = key_of(cid)
+    return {(keys[e["src"]], keys[e["dst"]]) for e in db.query("SELECT src, dst FROM edges WHERE course_id = ?", (cid,))}
+
+
+def fake_plan(text: str) -> TeachingPlan:
+    return fake_llm.respond(schema=TeachingPlan, role="graph", instructions="", text=text)
+
+
+def split_plan() -> TeachingPlan:
+    return fake_plan("Plan the teaching of skill S2: Multiply complex numbers and use their powers\nTaught on: <<page 1 · p.2>>")
+
+
+def graph(**kw) -> PlanGraph:
+    base = dict(
+        key="S2",
+        keys={"S1", "S2", "S3", "S4", "S5", "S9"},
+        prereqs={"S1": 0.5, "S9": 0.25},
+        dependents={"S3": 0.75, "S5": 0.5},
+        descendants={"S3", "S4", "S5"},
+        pages={0, 1, 2},
+    )
+    return PlanGraph(**(base | kw))
+
+
+def question(**kw) -> QuestionDraft:
+    base = dict(
+        key="k1q1", tier=1, kind="true_false_set", prompt="Mark each equality true or false.",
+        choices=["$(1,9)=(9,1)$", "$\\{1,9\\}=\\{9,1\\}$", "$(1,9)=(1,9)$"], correct_choice=None, answer="FTT",
+        answer_display="F, T, T", tolerance=None, hints=["a", "b", "c"], solution="1 false; 2 true; 3 true.",
+        checklist=[], targets="", source_exercise=None,
+    )
+    return QuestionDraft(**(base | kw))
+
+
+# ---------------------------------------------------------------------------
+# true_false_set and the question-format rule (all generators)
+# ---------------------------------------------------------------------------
+
+
+def test_true_false_set_validation():
+    q = clean_question(question(answer="F, T, t", correct_choice=1, tolerance=0.5, checklist=["x"]))
+    assert (q.answer, q.correct_choice, q.tolerance, q.checklist) == ("FTT", None, None, [])
+    for bad, reason in [
+        (dict(answer="FT"), "one letter T or F per statement"),
+        (dict(answer="FTX"), "one letter T or F per statement"),
+        (dict(choices=["only one"], answer="T"), "2-5 non-empty statements"),
+        (dict(choices=list("abcdef"), answer="TTTFFF"), "2-5 non-empty statements"),
+        (dict(choices=["a", "a", "b"]), "duplicate statements"),
+        (dict(solution=""), "explains each statement"),
+    ]:
+        with pytest.raises(InvalidQuestion, match=reason):
+            clean_question(question(**bad))
+
+
+def test_counting_true_statements_is_rejected():
+    counting = question(kind="numeric", choices=[], answer="2", prompt="How many of these equalities are true? 1. ...")
+    with pytest.raises(InvalidQuestion, match="use true_false_set"):
+        clean_question(counting)
+    with pytest.raises(InvalidQuestion, match="use true_false_set"):
+        clean_question(counting.model_copy(update={"prompt": "How many of the following lists belong to $\\mathbf{F}^2$?"}))
+    assert clean_question(counting.model_copy(update={"prompt": "How many elements does $\\{1,2,2\\}$ have?"})).answer == "2"
+
+
+def test_order_free_tuple_answers_become_sets():
+    roots = question(kind="expression", choices=[], answer="(1+i, -1-i)", prompt="Find both square roots of $2i$. Enter them in any order.")
+    assert clean_question(roots).answer == "{1+i, -1-i}"
+    assert clean_question(roots.model_copy(update={"prompt": "Enter the list as $(x, y)$."})).answer == "(1+i, -1-i)"
+    single = roots.model_copy(update={"answer": "(1+2*i)", "prompt": "Compute it; factors in either order."})
+    assert clean_question(single).answer == "(1+2*i)"
+
+
+def test_choice_share_counts_true_false_sets_of_two_only():
+    three = clean_question(question())
+    two = clean_question(question(choices=["$1=1$", "$1=2$"], answer="TF"))
+    typed = clean_question(question(kind="numeric", choices=[], answer="3", prompt="Compute $1+2$."))
+    mc = clean_question(question(kind="multiple_choice", choices=["a", "b", "c"], correct_choice=0, answer=""))
+    assert choice_share([[three, typed]]) == 0
+    assert choice_share([[two, typed]]) == 0.5
+    assert choice_share([[mc, three, three, typed]]) == 0.25
+    assert not any("multiple choice" in n for n in format_warnings([[three, three, typed]]))
+    assert any("same truth value" in n for n in format_warnings([[clean_question(question(answer="TTT"))]]))
+
+
+def test_question_format_rule_is_in_every_question_generating_prompt():
+    from app.pipeline.prompts import (
+        COUNT_QUESTION_RULE,
+        LESSON_INSTRUCTIONS,
+        ONE_ANSWER_RULE,
+        TOPUP_INSTRUCTIONS,
+        UNORDERED_RULE,
+        VERIFY_INSTRUCTIONS,
+    )
+    from app.pipeline.prompts_v2 import REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
+
+    assert "How many of these equalities are true?" in COUNT_QUESTION_RULE and '"FTT"' in COUNT_QUESTION_RULE
+    for prompt in (LESSON_INSTRUCTIONS, TOPUP_INSTRUCTIONS, WRITER_INSTRUCTIONS):
+        assert COUNT_QUESTION_RULE in prompt and "true_false_set" in prompt
+        assert ONE_ANSWER_RULE in prompt and UNORDERED_RULE in prompt
+    assert WRITER_INSTRUCTIONS.count(COUNT_QUESTION_RULE) >= 2  # practice questions and inline checks
+    assert WRITER_INSTRUCTIONS.count(ONE_ANSWER_RULE) >= 2
+    assert "true_false_set" in VERIFY_INSTRUCTIONS and "How many of these are true" in REVIEWER_INSTRUCTIONS
+
+
+def test_v2_prompts_follow_the_design():
+    from app.pipeline.prompts_v2 import PLANNER_INSTRUCTIONS, REFERENCE_EXAMPLE, REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
+
+    principle = "Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects"
+    for prompt in (PLANNER_INSTRUCTIONS, WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS):
+        assert principle in prompt
+    assert "Checking a supplied answer and constructing an answer are different" in PLANNER_INSTRUCTIONS
+    assert REFERENCE_EXAMPLE in WRITER_INSTRUCTIONS and "never copy its content" in WRITER_INSTRUCTIONS
+    writer, reviewer = (" ".join(t.split()) for t in (WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS))
+    assert "the formula is a record of the steps" in writer and "Explain consequential transitions where they happen" in writer
+    assert "This representation helps the learner notice ___" in writer and "Nothing essential in `deeper`" in writer
+    assert "the smallest adequate repair" in reviewer and "No clarity scores" not in reviewer and "no clarity scores" in reviewer
+
+
+def test_verification_lists_true_false_set_statements(tmp_path):
+    from app.pipeline.verify import judge, verify_request
+    from app.llm_schemas import IndependentAnswer
+
+    row = {"kind": "true_false_set", "prompt": "Mark each.", "choices_json": db.dumps(["A", "B", "C"]), "answer": "FTT",
+           "correct_choice": None, "tolerance": None}
+    assert "1. A\n2. B\n3. C" in verify_request(row)
+    agree = judge(row, IndependentAnswer(choice=None, answer="F T T", confidence=0.9, problems=""))
+    assert not agree.flagged
+    disagree = judge(row, IndependentAnswer(choice=None, answer="TTT", confidence=0.9, problems=""))
+    assert disagree.flagged and "'TTT'" in disagree.reason
+
+
+# ---------------------------------------------------------------------------
+# Plan validation
+# ---------------------------------------------------------------------------
+
+
+def test_split_plan_is_normalized_against_the_graph():
+    plan = split_plan()
+    skills = [s.model_copy(update={"local_id": lid}) for s, lid in zip(plan.skills, ["x", "y", "z"])]
+    skills[0] = skills[0].model_copy(update={"prerequisites": [
+        PlannedPrereq(key="S1", weight=7), PlannedPrereq(key="S3", weight=0.5),  # S3 depends on S2: a cycle
+        PlannedPrereq(key="S2", weight=0.5), PlannedPrereq(key="nope", weight=0.5), PlannedPrereq(key="y", weight=0.5),
+    ]})
+    skills[1] = skills[1].model_copy(update={"prerequisites": [PlannedPrereq(key="x", weight=1)]})
+    skills[2] = skills[2].model_copy(update={"prerequisites": [PlannedPrereq(key="S2b", weight=0.75)]})  # future key
+    plan = plan.model_copy(update={"skills": skills, "dependents": [
+        DependentLink(dependent_key="S3", needs=["x", "Z"]), DependentLink(dependent_key="S4", needs=["x"]),
+    ]})
+    validated, notes = validate_plan(plan, graph())
+    a, b, c = validated.skills
+    assert [s.local_id for s in validated.skills] == ["a", "b", "c"]
+    assert [(p.key, p.weight) for p in a.prerequisites] == [("S1", 1.0), ("S9", 0.25)]  # S9 was forgotten: added
+    assert [p.key for p in b.prerequisites] == ["a"] and [p.key for p in c.prerequisites] == ["b"]
+    assert {d.dependent_key: d.needs for d in validated.dependents} == {"S3": ["a", "c"], "S5": ["a", "b", "c"]}
+    text = "\n".join(notes)
+    for expected in ("dropped prerequisite S3", "the original skill", "unknown key 'nope'", "not an earlier sibling",
+                     "dropped the original prerequisite S9", "ignored a mapping for 'S4'", "did not map dependent S5"):
+        assert expected in text, expected
+
+
+def test_plan_decision_rules():
+    plan = split_plan()
+    with pytest.raises(InvalidPlan, match="not allowed"):
+        validate_plan(plan, graph(), allow_split=False)
+    kept, notes = validate_plan(plan.model_copy(update={"decision": "keep"}), graph())
+    assert kept.decision == "keep" and len(kept.skills) == 1 and kept.dependents == [] and "kept the first" in notes[0]
+    single, _ = validate_plan(plan.model_copy(update={"skills": plan.skills[:1]}), graph())
+    assert single.decision == "keep"
+    with pytest.raises(InvalidPlan, match="2–5"):
+        validate_plan(plan.model_copy(update={"skills": plan.skills * 2}), graph())
+    with pytest.raises(InvalidPlan, match="no skills"):
+        validate_plan(plan.model_copy(update={"skills": []}), graph())
+
+
+def test_split_keys_sort_after_their_parent():
+    assert sorted(["S10", "S2b", "S3", "S2a", "S1"], key=lambda k: (key_number(k), k)) == ["S1", "S2a", "S2b", "S3", "S10"]
+
+
+# ---------------------------------------------------------------------------
+# Split: rewiring, order, reduction, progress, persistence, lesson view
+# ---------------------------------------------------------------------------
+
+
+def test_split_rewires_the_graph_and_writes_v2_lessons(tmp_path, llm_calls):
+    cid = built_course(tmp_path)
+    original = skill_by_title(cid, "Add and multiply")
+    key = original["key"]
+    keys = key_of(cid)
+    old_prereqs = {keys[e["src"]] for e in db.query("SELECT src FROM edges WHERE dst = ?", (original["id"],))}
+    old_dependents = {keys[e["dst"]]: e["weight"] for e in db.query("SELECT dst, weight FROM edges WHERE src = ?", (original["id"],))}
+    assert old_dependents  # the fake graph has dependents of this skill
+    # learner progress elsewhere (must survive untouched) and an unanswered, active task on the original
+    other = skill_by_title(cid, "Distinguish lists")
+    from datetime import UTC, datetime
+
+    from fsrs import Card
+
+    card = Card(card_id=1, due=datetime.now(UTC)).to_json()
+    db.execute("UPDATE progress SET status = 'learned', card_json = ?, lesson_attempts = 2 WHERE skill_id = ?", (card, other["id"]))
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'lesson', 'active', '{}', ?)",
+        (db.new_id(), cid, original["id"], db.now_iso()),
+    )
+    before = {r["skill_id"]: dict(r) for r in db.query("SELECT * FROM progress WHERE course_id = ? AND skill_id != ?", (cid, original["id"]))}
+    llm_calls.clear()
+
+    report = asyncio.run(replan(cid, key))
+
+    assert report.decision == "split" and list(report.keys.values()) == [f"{key}a", f"{key}b", f"{key}c"]
+    assert report.deleted_tasks == 1 and all(r.ok for r in report.results)
+    assert db.query_one("SELECT 1 FROM skills WHERE id = ?", (original["id"],)) is None
+    for table in ("questions", "progress", "tasks"):
+        assert not db.query(f"SELECT 1 FROM {table} WHERE skill_id = ?", (original["id"],))
+    # edges: spec prerequisites + the dependents mapping (original weights), every original link represented
+    edges = edge_keys(cid)
+    a, b, c = (f"{key}{x}" for x in "abc")
+    assert {(a, b), (b, c)} <= edges
+    assert all(any((p, n) in edges for n in (a, b, c)) for p in old_prereqs)
+    for i, (dep, weight) in enumerate(sorted(old_dependents.items(), key=lambda kv: (key_number(kv[0]), kv[0]))):
+        needs = [a] if i % 2 == 0 else [b, c]
+        assert all((n, dep) in edges for n in needs)
+        rows = db.query(
+            "SELECT e.weight FROM edges e JOIN skills s ON s.id = e.src JOIN skills d ON d.id = e.dst WHERE d.key = ? AND s.key IN (?, ?, ?)",
+            (dep, a, b, c),
+        )
+        assert rows and all(r["weight"] == weight for r in rows)
+    # order: a topological order over the whole course, 0..n-1; reduced = transitive reduction
+    skills = db.query("SELECT id, key, order_index FROM skills WHERE course_id = ? ORDER BY order_index", (cid,))
+    assert [s["order_index"] for s in skills] == list(range(len(skills)))
+    order = {s["key"]: s["order_index"] for s in skills}
+    g = nx.DiGraph(list(edges))
+    assert all(order[u] < order[v] for u, v in g.edges)
+    reduction = nx.transitive_reduction(g)
+    keys = key_of(cid)
+    for e in db.query("SELECT * FROM edges WHERE course_id = ?", (cid,)):
+        assert bool(e["reduced"]) == reduction.has_edge(keys[e["src"]], keys[e["dst"]])
+    # progress: new rows; the learner's other rows untouched
+    after = {r["skill_id"]: dict(r) for r in db.query("SELECT * FROM progress WHERE course_id = ?", (cid,))}
+    assert all(after[sid] == row for sid, row in before.items())
+    statuses = {keys[sid]: r["status"] for sid, r in after.items()}
+    assert statuses[a] == ("available" if not old_prereqs else statuses[a]) and statuses[b] == "locked"
+    # lessons: v2, questions inserted and verified, the job is done
+    for local, sid in report.skill_ids.items():
+        row = db.query_one("SELECT * FROM skills WHERE id = ?", (sid,))
+        lesson = db.loads(row["lesson_json"])
+        assert row["lesson_status"] == "ready" and lesson["format"] == "v2" and db.loads(row["viz_json"]) == {"format": "none"}
+        assert lesson["plan"]["local_id"] == local and lesson["review"]["issues"] == []
+        assert lesson["initial_review"]["issues"][0]["severity"] == "blocking"
+        assert row["summary"] == lesson["goal_line"] and not lesson["goal_line"].lower().startswith("your goal")
+        questions = db.query("SELECT * FROM questions WHERE skill_id = ?", (sid,))
+        assert questions and all(db.loads(q["verify_json"]) for q in questions)
+        assert not any(q["flagged"] for q in questions)
+    assert llm_calls["LessonV2Draft"] == 6 and llm_calls["LessonReview"] == 6 and llm_calls["TeachingPlan"] == 1
+    job = jobs.get_job(cid)
+    assert job.state == "done" and any(f"Split {key} into" in line for line in job.log)
+    assert any("Edges:" in line for line in report_lines(report))
+
+
+def test_v2_lesson_view_never_leaks_check_answers(tmp_path):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Add and multiply")["key"]
+    report = asyncio.run(replan(cid, key))
+    sid = report.skill_ids["a"]
+    view = lesson_view(sid)
+    assert view.format == "v2" and view.goal_line and view.deeper and view.visualization is None
+    assert view.why_it_matters == "" and view.idea == "" and view.missing_steps == ""
+    assert view.assumed and view.out_of_scope == ["Square roots and cube roots", "Exponent rules"]
+    assert [b.index for b in view.blocks] == list(range(len(view.blocks)))
+    kinds = {b.check.kind for b in view.blocks if b.check}
+    assert {"expression", "true_false_set", "reflect"} <= kinds
+    tf = next(b.check for b in view.blocks if b.check and b.check.kind == "true_false_set")
+    assert tf.choices == ["$i^2=-1$", "$(3i)(2i)=6i$", "$(1+i)(1-i)=2$"]
+    visual = next(b.visualization for b in view.blocks if b.visualization)
+    assert visual.format == "equation_steps" and len(visual.steps) == 3
+    dumped = view.model_dump_json()
+    for secret in ('"answer"', "1+7*i", "TFT", "$1+7i$", "two factors of $i$, and", "correct_choice", "answer_display"):
+        assert secret not in dumped, secret
+    assert all(set(b.check.model_dump()) == {"kind", "prompt", "choices"} for b in view.blocks if b.check)
+    assert view.knowledge_points and all(kp.question_count >= 2 for kp in view.knowledge_points)
+    assert {p.key for p in view.unlocks} or {p.key for p in view.prerequisites} is not None
+    # the learning agent's check endpoint reads the stored block (answers stay server side)
+    stored = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (sid,))["lesson_json"])
+    faded = next(b for b in stored["blocks"] if b["kind"] == "faded_example")
+    assert faded["check"]["answer"] == "1+7*i" and faded["check"]["explanation"]
+
+
+def test_split_is_refused_while_the_original_has_learner_history(tmp_path, llm_calls):
+    cid = built_course(tmp_path)
+    original = skill_by_title(cid, "Add and multiply")
+    key, sid = original["key"], original["id"]
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'lesson', 'active', '{}', ?)",
+        (task_id, cid, sid, db.now_iso()),
+    )
+    answered = db.query_one("SELECT id, key FROM questions WHERE skill_id = ? ORDER BY rowid", (sid,))
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, created_at) VALUES (?, ?, ?, ?, 1, 'correct', ?)",
+        (db.new_id(), task_id, answered["id"], sid, db.now_iso()),
+    )
+    with pytest.raises(SplitRefused, match="1 answered attempt"):
+        apply_split(cid, key, split_plan())
+    with pytest.raises(SplitRefused):
+        check_plan(cid, key, split_plan())
+    planned = asyncio.run(plan_replan(cid, key))
+    assert not planned.split_allowed and planned.plan.decision == "keep" and "cannot be split" in planned.notes[0]
+
+    report = asyncio.run(replan(cid, key, plan=split_plan()))  # a saved split plan falls back to a kept skill
+    assert report.decision == "keep" and report.keys == {"a": key} and report.results[0].ok
+    row = db.query_one("SELECT * FROM skills WHERE id = ?", (sid,))
+    assert db.loads(row["lesson_json"])["format"] == "v2"
+    old = db.query_one("SELECT * FROM questions WHERE id = ?", (answered["id"],))
+    assert old["flagged"] == 1 and old["key"].startswith("old-")  # retired, never deleted
+    assert db.query_one("SELECT status FROM tasks WHERE id = ?", (task_id,))["status"] == "completed"
+    assert report.results[0].abandoned_tasks == 1
+    # a voided attempt is no history: it does not block a split
+    db.execute("UPDATE attempts SET status = 'voided' WHERE question_id = ?", (answered["id"],))
+    assert check_plan(cid, key, split_plan()).split_allowed
+
+
+def test_no_split_keeps_the_skill_and_its_edges(tmp_path, llm_calls):
+    cid = built_course(tmp_path)
+    original = skill_by_title(cid, "Add and multiply")
+    edges = edge_keys(cid)
+    report = asyncio.run(replan(cid, original["key"], no_split=True))
+    assert report.decision == "keep" and report.results[0].ok
+    assert edge_keys(cid) == edges
+    plan_text = None
+
+    def capture(**kwargs):
+        nonlocal plan_text
+        if kwargs["schema"] is TeachingPlan:
+            plan_text = kwargs["text"]
+        return original_respond(**kwargs)
+
+    original_respond = fake_llm.respond
+    fake_llm.respond = capture
+    try:
+        asyncio.run(plan_replan(cid, original["key"], no_split=True))
+    finally:
+        fake_llm.respond = original_respond
+    assert "Splitting: NOT allowed" in plan_text and "## Course map" in plan_text and "## Source pages" in plan_text
+
+
+def test_no_revision_when_the_first_review_is_clean(tmp_path, llm_calls, monkeypatch):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    original = fake_llm.respond
+
+    def clean_reviews(**kwargs):
+        if kwargs["schema"] is LessonReview:
+            kwargs = {**kwargs, "text": kwargs["text"].replace("(first draft)", "(clean)")}
+        return original(**kwargs)
+
+    monkeypatch.setattr(fake_llm, "respond", clean_reviews)
+    llm_calls.clear()
+    report = asyncio.run(replan(cid, key))
+    result = report.results[0]
+    assert report.decision == "keep" and result.ok and not result.revised
+    assert llm_calls["LessonV2Draft"] == 1 and llm_calls["LessonReview"] == 1
+    lesson = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (result.skill_id,))["lesson_json"])
+    assert "initial_review" not in lesson and lesson["review"]["issues"] == []
+
+
+def test_review_triggers_revision_rules():
+    clean = LessonReview(issues=[], untaught_method_exercises=[], out_of_scope_violations=[], optional_content_needed=[],
+                         math_errors=[], split_recommended=False, split_reason="")
+    assert not needs_revision(clean)
+    for field in ("untaught_method_exercises", "out_of_scope_violations", "optional_content_needed", "math_errors"):
+        assert needs_revision(clean.model_copy(update={field: ["x"]}))
+    minor = fake_llm.respond(schema=LessonReview, role="graph", instructions="", text="(first draft)")
+    assert needs_revision(minor)
+    minor.issues[0].severity = "minor"
+    assert not needs_revision(minor)
+
+
+def test_invalid_draft_is_revised_with_the_validation_problem(tmp_path, monkeypatch, llm_calls):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    original = fake_llm.respond
+    revision_texts = []
+
+    def broken_first_draft(**kwargs):
+        result = original(**kwargs)
+        if kwargs["schema"] is LessonV2Draft:
+            if "REVISION:" in kwargs["text"]:
+                revision_texts.append(kwargs["text"])
+            else:  # the first draft's faded example has an unreadable answer
+                for block in result.blocks:
+                    if block.kind == "faded_example":
+                        block.check.answer = "((("
+        return result
+
+    monkeypatch.setattr(fake_llm, "respond", broken_first_draft)
+    report = asyncio.run(replan(cid, key))
+    assert report.results[0].ok and report.results[0].revised
+    assert revision_texts and "Validation problems" in revision_texts[0] and "invalid inline check" in revision_texts[0]
+    assert "## Review" in revision_texts[0] and "## Your previous draft (JSON)" in revision_texts[0]
+
+
+def test_inline_check_validation():
+    reflect = InlineCheck(kind="reflect", prompt="Why?", choices=["x"], correct_choice=2, answer="a", answer_display="Because.", explanation="")
+    assert clean_inline_check(reflect) == {"kind": "reflect", "prompt": "Why?", "choices": [], "correct_choice": None,
+                                           "answer": "", "answer_display": "Because.", "explanation": ""}
+    with pytest.raises(InvalidQuestion):
+        clean_inline_check(reflect.model_copy(update={"answer_display": "", "explanation": ""}))
+    tf = InlineCheck(kind="true_false", prompt="True?", choices=[], correct_choice=1, answer="", answer_display="False", explanation="e")
+    assert clean_inline_check(tf)["choices"] == ["True", "False"]
+    with pytest.raises(InvalidQuestion, match="one letter"):
+        clean_inline_check(InlineCheck(kind="true_false_set", prompt="Mark.", choices=["a", "b"], correct_choice=None,
+                                       answer="T", answer_display="", explanation="e"))
+    with pytest.raises(InvalidQuestion, match="use true_false_set"):
+        clean_inline_check(InlineCheck(kind="numeric", prompt="How many of these are true? 1. a", choices=[], correct_choice=None,
+                                       answer="1", answer_display="1", explanation="e"))
+
+
+def test_v2_validation_strict_and_lenient():
+    draft = fake_llm.respond(schema=LessonV2Draft, role="lesson", instructions="", text="Write the lesson for skill S1: x")
+    spec = split_plan().skills[0]
+    lesson, pools, notes = asyncio.run(validate_v2(draft, spec, []))
+    assert lesson["format"] == "v2" and len(lesson["blocks"]) == 9 and len(pools) == 2
+    assert lesson["blocks"][4]["visual"]["format"] == "equation_steps" and lesson["goal_line"].startswith("Calculate")
+    assert "questions" not in lesson["knowledge_points"][0]
+    broken = draft.model_copy(deep=True)
+    broken.blocks[2].check = None  # a check block without a check
+    with pytest.raises(InvalidLesson, match="block 3"):
+        asyncio.run(validate_v2(broken, spec, []))
+    lesson, _, notes = asyncio.run(validate_v2(broken, spec, [], strict=False))
+    assert lesson["blocks"][2]["kind"] == "explain" and any("shown as explain" in n for n in notes)
+    no_checks = draft.model_copy(update={"blocks": [b.model_copy(update={"check": None, "kind": "explain"}) for b in draft.blocks]})
+    with pytest.raises(InvalidLesson, match="no inline check"):
+        asyncio.run(validate_v2(no_checks, spec, []))
+    with pytest.raises(InvalidLesson, match="usable blocks"):
+        asyncio.run(validate_v2(draft.model_copy(update={"blocks": draft.blocks[:2]}), spec, [], strict=False))
+
+
+def test_regenerate_rewrites_a_v2_lesson_from_its_stored_plan(tmp_path, llm_calls):
+    from app.pipeline.regenerate import regenerate
+
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    asyncio.run(replan(cid, key))
+    llm_calls.clear()
+    report = asyncio.run(regenerate(cid, [key]))
+    assert report.lessons_regenerated == [key]
+    assert llm_calls["LessonV2Draft"] == 2 and llm_calls["LessonDraft"] == 0 and llm_calls["VisualizationPlan"] == 0
+    row = db.query_one("SELECT * FROM skills WHERE course_id = ? AND key = ?", (cid, key))
+    assert db.loads(row["lesson_json"])["format"] == "v2"
+
+
+def test_resume_after_an_interrupted_split_writes_missing_lessons(tmp_path, monkeypatch):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Add and multiply")["key"]
+    original = fake_llm.respond
+
+    def failing_writer(**kwargs):
+        if kwargs["schema"] is LessonV2Draft:
+            raise RuntimeError("simulated")
+        return original(**kwargs)
+
+    monkeypatch.setattr(fake_llm, "respond", failing_writer)
+    report = asyncio.run(replan(cid, key))
+    assert report.decision == "split" and not any(r.ok for r in report.results)
+    assert {r["lesson_status"] for r in db.query("SELECT lesson_status FROM skills WHERE key LIKE ?", (f"{key}_",))} == {"failed"}
+    assert jobs.get_job(cid).state == "done"
+    monkeypatch.undo()
+    job = asyncio.run(jobs.run_build(cid))  # Resume in the app: v1 lessons for the new skills
+    assert job.state == "done"
+    assert {r["lesson_status"] for r in db.query("SELECT lesson_status FROM skills WHERE course_id = ?", (cid,))} == {"ready"}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def test_replan_cli_refuses_while_the_app_server_runs_and_applies_otherwise(tmp_path):
+    import http.server
+    import threading
+
+    from app.config import settings
+
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Add and multiply")["key"]
+
+    class Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args):
+            pass
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "replan.py"
+
+    def run(url: str, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(script), "--data-dir", str(settings.data_dir), "--course", cid, "--skill", key,
+             "--yes", "--no-backup", "--server-url", url, *extra],
+            capture_output=True, text=True, timeout=300, env={**os.environ, "UA_FAKE_LLM": "1"},
+        )
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        log_before = jobs.get_job(cid).log
+        refused = run(f"http://127.0.0.1:{server.server_address[1]}/api/health")
+        assert refused.returncode == 1 and "app server is running" in refused.stdout, refused.stdout + refused.stderr
+        assert jobs.get_job(cid).log == log_before and skill_by_title(cid, "Add and multiply")["key"] == key
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    free = f"http://127.0.0.1:{_free_port()}/api/health"
+    dry = run(free, "--dry-run")
+    assert dry.returncode == 0 and "Decision: split" in dry.stdout, dry.stdout + dry.stderr
+    saved = sorted((settings.data_dir / "replans").glob(f"{cid}-{key}-*.json"))
+    assert saved and json.loads(saved[-1].read_text())["plan"]["decision"] == "split"
+    assert skill_by_title(cid, "Add and multiply")["key"] == key  # nothing applied
+
+    applied = run(free, "--plan", str(saved[-1]))
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    assert "Using the saved plan" in applied.stdout and f"SPLIT: {key} → {key}a, {key}b, {key}c" in applied.stdout
+    assert db.query_one("SELECT 1 FROM skills WHERE course_id = ? AND key = ?", (cid, key)) is None
+    assert list((settings.data_dir / "replans").glob("*-report.txt"))

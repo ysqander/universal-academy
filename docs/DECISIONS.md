@@ -81,6 +81,18 @@ simpler questions so it proves they can chain concepts.
 - Integrity: hints and reveals are recorded server-side; an answer equal in value but not simplified (e.g. the
   question's own expression retyped) gets a 422 "simplify" and is not counted.
 
+## 5b. Quizzes (decided 2026-10-06)
+
+Reviews consolidate (one skill, spaced, untimed, help at half credit); **quizzes validate** (several skills mixed,
+timed, no help). Following Math Academy (a quiz about every 150 XP; missed topics are reviewed straight away; optional
+retake), with the learner's choices:
+- **Every 150 XP** (and at least 5 newly learned skills), **forced** ("we need a bit of discipline"): after the
+  current task, nothing else can be started until the quiz is taken; it cannot be abandoned.
+- **Timed** (60–90 s per question, adjustable with `quiz_time_factor`); the clock runs on the server.
+- 6–8 single-answer questions, one per skill, recent skills first; no hints/solutions; correctness shown only at the
+  end; pass mark 80 %; missed skills → immediate review; optional retake below 80 %.
+Details: [SPEC.md §6.7](SPEC.md).
+
 ## 6. Verification
 
 - **Model: `gpt-6-luna` at effort `high`** (unchanged). Benchmark on 70 real questions (2026-10-06): `gpt-6-luna`
@@ -119,3 +131,4 @@ simpler questions so it proves they can chain concepts.
   with several correct options are withheld and need rewriting.
 - Generation-time check for "more than one correct option" (§3).
 - Roll v2 out beyond S2/S3 skill by skill if the learner approves (§1).
+- Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).

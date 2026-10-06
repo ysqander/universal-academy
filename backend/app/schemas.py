@@ -93,6 +93,9 @@ class CourseStats(BaseModel):
     daily_goal: int = 30
     streak_days: int = 0
     next_review_at: str | None = None
+    quiz_due: bool = False  # a (forced) quiz must be taken before new lessons or reviews
+    xp_until_quiz: int | None = None  # XP still to earn before the next quiz; None when not enough skills learned yet
+    last_quiz_score: float | None = None
 
 
 class CourseSummary(BaseModel):
@@ -339,7 +342,7 @@ class SourcePage(BaseModel):
 # Study loop
 # ---------------------------------------------------------------------------
 
-TaskType = Literal["lesson", "review"]
+TaskType = Literal["lesson", "review", "quiz"]
 TaskPhase = Literal["learn", "practice", "done"]
 TaskOutcome = Literal["passed", "failed", "abandoned"]
 
@@ -372,12 +375,43 @@ class TaskProgress(BaseModel):
     halted: bool = False  # the lesson stopped early (80 % became unreachable with planned questions left)
 
 
+class QuizQuestionResult(BaseModel):
+    """One quiz question after the quiz has finished (nothing about correctness is shown before)."""
+
+    question_id: str
+    skill: SkillRef
+    kind: QuestionKindT
+    prompt: str
+    choices: list[str]
+    response: str | None  # what the learner answered (choice text for choice questions); None when passed / unanswered
+    answered: bool  # False: passed, or time ran out
+    score: float  # 1 correct, 0 wrong / passed / unanswered
+    correct_answer: str
+    solution: str
+    seconds: float
+
+
+class QuizInfo(BaseModel):
+    """SPEC §6.7 — a timed, cumulative check every ~150 XP (forced); a retake is optional."""
+
+    kind: Literal["quiz", "retake"]
+    question_count: int
+    time_limit_seconds: int
+    started_at: str | None  # None until the learner starts the clock (POST /practice)
+    deadline: str | None  # ISO UTC; answers after it are not accepted
+    seconds_left: int | None  # server-computed when the response was built
+    skills: list[SkillRef]
+    results: list[QuizQuestionResult] = Field(default_factory=list)  # filled once the quiz is finished
+    missed_skills: list[SkillRef] = Field(default_factory=list)  # reviewed straight away after the quiz
+    retake_available: bool = False
+
+
 class Task(BaseModel):
     id: str
     course_id: str
     type: TaskType
     phase: TaskPhase
-    skill: SkillRef
+    skill: SkillRef | None  # None for quizzes (they span several skills — see quiz.skills)
     reason: str  # transparent "why this task now", e.g. "Review due — retention estimated at 82%"
     xp_value: int
     lesson: Lesson | None = None  # included for type == "lesson"
@@ -385,6 +419,7 @@ class Task(BaseModel):
     progress: TaskProgress
     outcome: TaskOutcome | None = None
     cooldown_until: str | None = None  # failed lesson: when it comes back (ISO UTC); None = no pause (e.g. after a flag)
+    quiz: QuizInfo | None = None  # type == "quiz"
 
 
 class SessionInfo(BaseModel):
@@ -392,12 +427,14 @@ class SessionInfo(BaseModel):
     daily_goal: int
     goal_reached: bool
     due_reviews: int
+    quiz_due: bool = False  # the next task is a forced quiz (after any active task)
+    xp_until_quiz: int | None = None
 
 
 class TaskOption(BaseModel):
-    """One entry of the Math-Academy-style task menu (up to 5)."""
+    """One entry of the Math-Academy-style task menu (up to 5). A due quiz is the only entry."""
 
-    skill: SkillRef
+    skill: SkillRef | None  # None for a quiz
     type: TaskType
     reason: str
     xp_value: int
@@ -430,11 +467,13 @@ class AnswerSubmit(BaseModel):
     revealed_solution: bool = False
     seconds: float = 0.0
     step: int | None = None  # multistep: index of the step being answered (one submission per step)
+    skip: bool = False  # quiz only: pass on this question (0 points)
 
 
 class AnswerResult(BaseModel):
     correct: bool
-    status: Literal["correct", "incorrect", "self_graded", "voided", "step"]  # "step": a multistep step, more to come
+    # "step": a multistep step, more to come; "recorded": a quiz answer was saved — correctness is shown at the end
+    status: Literal["correct", "incorrect", "self_graded", "voided", "step", "recorded"]
     independent: bool  # counted toward passing (no hints, no reveal)
     feedback: str  # short message, e.g. "Equivalent to the expected answer." / "Close: check the sign of the imaginary part."
     correct_answer: str  # answer_display

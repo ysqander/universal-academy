@@ -73,6 +73,9 @@ export interface CourseStats {
   daily_goal: number;
   streak_days: number;
   next_review_at: string | null;
+  quiz_due: boolean; // a forced quiz comes before new lessons or reviews
+  xp_until_quiz: number | null; // XP still to earn before the next quiz; null when not enough skills learned yet
+  last_quiz_score: number | null;
 }
 
 export interface CourseSummary {
@@ -396,7 +399,35 @@ export interface SourcePage {
 }
 
 // ---------- Study loop ----------
-export type TaskType = "lesson" | "review";
+export type TaskType = "lesson" | "review" | "quiz";
+
+// SPEC §6.7 — one quiz question after the quiz has finished (correctness is not shown before).
+export interface QuizQuestionResult {
+  question_id: string;
+  skill: SkillRef;
+  kind: QuestionKind;
+  prompt: string;
+  choices: string[];
+  response: string | null; // null when passed / unanswered
+  answered: boolean; // false: passed, or time ran out
+  score: number; // 1 correct, 0 otherwise
+  correct_answer: string;
+  solution: string;
+  seconds: number;
+}
+
+export interface QuizInfo {
+  kind: "quiz" | "retake";
+  question_count: number;
+  time_limit_seconds: number;
+  started_at: string | null; // null until the clock is started (POST /practice)
+  deadline: string | null; // ISO UTC
+  seconds_left: number | null; // server-computed
+  skills: SkillRef[];
+  results: QuizQuestionResult[]; // filled once finished
+  missed_skills: SkillRef[]; // reviewed straight away after the quiz
+  retake_available: boolean;
+}
 export type TaskPhase = "learn" | "practice" | "done";
 export type TaskOutcome = "passed" | "failed" | "abandoned";
 
@@ -431,7 +462,7 @@ export interface Task {
   course_id: string;
   type: TaskType;
   phase: TaskPhase;
-  skill: SkillRef;
+  skill: SkillRef | null; // null for quizzes (see quiz.skills)
   reason: string;
   xp_value: number;
   lesson: Lesson | null;
@@ -439,6 +470,7 @@ export interface Task {
   progress: TaskProgress;
   outcome: TaskOutcome | null;
   cooldown_until?: string | null; // failed lesson: when it comes back (ISO UTC); null = no pause (e.g. after a flag)
+  quiz: QuizInfo | null; // type === "quiz"
 }
 
 export interface SessionInfo {
@@ -446,10 +478,12 @@ export interface SessionInfo {
   daily_goal: number;
   goal_reached: boolean;
   due_reviews: number;
+  quiz_due: boolean; // the next task is a forced quiz (after any active task)
+  xp_until_quiz: number | null;
 }
 
 export interface TaskOption {
-  skill: SkillRef;
+  skill: SkillRef | null; // null for a quiz (a due quiz is the only option)
   type: TaskType;
   reason: string;
   xp_value: number;
@@ -481,11 +515,13 @@ export interface AnswerSubmit {
   revealed_solution: boolean;
   seconds: number;
   step?: number | null; // multistep: index of the step being answered
+  skip?: boolean; // quiz only: pass on this question (0 points)
 }
 
 export interface AnswerResult {
   correct: boolean;
-  status: "correct" | "incorrect" | "self_graded" | "voided" | "step"; // "step": a multistep step, more to come
+  // "step": a multistep step, more to come; "recorded": a quiz answer was saved (correctness shown at the end)
+  status: "correct" | "incorrect" | "self_graded" | "voided" | "step" | "recorded";
   independent: boolean;
   feedback: string;
   correct_answer: string;

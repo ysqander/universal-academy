@@ -141,7 +141,7 @@ Prefer the book's own figure when one fits. Never 3D. Interactivity only when mo
 | GET `/api/skills/{sid}/lesson` | → `Lesson` (404 until ready) |
 | POST `/api/foundations/{cid}/{key}` | `FoundationKnownRequest` → `FoundationNode` |
 | GET `/api/courses/{cid}/next` | → `NextTaskResponse` (active task + ranked menu; no side effects) |
-| POST `/api/courses/{cid}/continue` | → `Task` (resume active task or start the top option; 409 if nothing to do) |
+| POST `/api/courses/{cid}/continue` | → `Task` (resume active task, else a due quiz, else the top option; 409 if nothing to do) |
 | POST `/api/courses/{cid}/tasks` | `StartTaskRequest` → `Task` (manual override: learn/review a chosen skill; 409 if another task is active unless `replace_active`; locked skills need `force`) |
 | GET `/api/tasks/{tid}` | → `Task` |
 | GET `/api/settings` / PUT `/api/settings` | `{daily_goal}` |
@@ -188,6 +188,28 @@ A lesson = the teaching part (v2: the teaching sequence; v1: intro sections) + 1
 - A review = 3 questions of the skill (mixed KPs; when the skill has a capstone, it may replace one of them — weight 2), preferring questions never answered before, then least-recently answered; flagged excluded. When fewer than 3 unseen questions remain for a skill, request a background top-up (pipeline `request_top_up`).
 - **Order-sensitive score** (Math Academy): answer i (1-based) has order weight i (× 2 for a capstone); points as in §6.3 (1 / 0.5 / 0; multistep = mean of steps); `score = Σ wᵢcᵢ / Σ wᵢ`.
 - Rating: score ≥ 0.8 → Good (Easy optional when perfect and fast); 0.6 ≤ score < 0.8 → Hard; < 0.6 → Again. XP: 4 if ≥ 0.8 (+1 if perfect), 2 if ≥ 0.6, 1 otherwise.
+
+### 6.7 Quizzes (timed, forced — validate what reviews consolidate)
+Reviews consolidate one skill at a time on the FSRS schedule (untimed, help at half credit). Quizzes validate: a
+timed, cumulative, mixed check with no help, after Math Academy (≈ every 150 XP).
+- **Due** when the course has earned ≥ 150 XP since the last quiz (quiz XP excluded) **and** ≥ 5 skills were learned
+  since the last quiz. A due quiz is **forced**: an active lesson/review may be finished first, then `/continue`
+  starts the quiz, the menu (`/next`) offers only the quiz, and manual starts of other tasks get 409 ("Take the quiz
+  first — about N minutes"). A quiz cannot be abandoned.
+- **Content**: 6–8 single-answer questions (no multistep, no free response), one per skill: skills learned since the
+  last quiz first, then older learned skills with the lowest recall; unseen questions, tier ≥ 2 preferred; difficulty
+  nudged towards an ~80 % average (last quiz ≥ 90 % → harder tiers, < 70 % → easier).
+- **Timed**: allowance 60 s (multiple choice, true/false) or 90 s (numeric, expression, true_false_set) per question ×
+  `quiz_time_factor` (settings, default 1.0), rounded up to whole minutes. The clock starts with `POST /practice`
+  (intro screen first) and runs on the server: answers after the deadline get 409 and the quiz is finished;
+  unanswered questions score 0. Leaving the page does not stop the clock.
+- **Conduct**: one question at a time; no hints, no solutions, no easier step, no lesson or source view; "Pass" = 0;
+  flagging a question voids it. Correctness is not shown until the end (`AnswerResult.status = "recorded"`).
+- **Score**: 1 correct / 0 otherwise; pass mark 80 %. XP = round(time-limit minutes × score).
+- **Afterwards** (`Task.quiz.results`): every missed skill gets an immediate remedial review (top of the menu); a
+  correct answer counts as an FSRS review (Good) only if that skill was due within 3 days. Below 80 % an optional
+  **retake** (same skills, fresh questions, not forced, does not reset the 150-XP counter) unlocks once the
+  remedial reviews are done.
 
 ### 6.5 FIRe-lite (implicit repetition, after Math Academy: credit flows down, penalties flow up)
 Let `w(S→P)` be the effective encompassing weight from skill S down to ancestor P (max over paths of the product of edge weights; ignore < 0.3).

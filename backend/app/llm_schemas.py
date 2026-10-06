@@ -225,6 +225,12 @@ class LessonDraft(BaseModel):
     )
     missing_steps: str = Field(description="Optional deeper detail / omitted justifications, shown behind 'Show the missing steps'.")
     common_mistakes: list[str]
+    capstone: QuestionDraft = Field(
+        description=(
+            "The final multistep problem (kind 'multistep', 2-4 steps, key 'cap') that chains this lesson's ideas with "
+            "earlier skills into one problem; every step machine-checked and adds a new demand."
+        )
+    )
     connection: str = Field(description="1-2 sentences: what this enables next / how it connects to earlier skills.")
     source_refs: list[str]
 
@@ -445,7 +451,7 @@ class LessonV2Draft(BaseModel):
     blocks: list[TeachingBlock] = Field(description="The ordered teaching sequence (typically 5-10 blocks, 1-3 checks).")
     notation: list[NotationItem] = Field(description="Only symbols actually used in this lesson, each introduced in the text before use.")
     knowledge_points: list[KnowledgePointDraft] = Field(
-        description="Practice after the teaching sequence: 1-3 knowledge points (short reminder + a fresh worked example + 4 questions)."
+        description="Practice after the teaching sequence: 1-3 knowledge points (short reminder + a fresh worked example + target_questions + 2 questions)."
     )
     capstone: QuestionDraft = Field(
         description=(

@@ -365,6 +365,7 @@ class TaskProgress(BaseModel):
     planned: int = 0  # questions planned for the whole task (lesson: sum of KP targets + capstone)
     pass_mark: float = 0.8
     in_capstone: bool = False  # the lesson's final multistep problem is being answered
+    has_capstone: bool = False  # the task ends with (or includes) a capstone
 
 
 class Task(BaseModel):

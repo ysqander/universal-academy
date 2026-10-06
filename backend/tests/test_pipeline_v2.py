@@ -91,7 +91,7 @@ def question(**kw) -> QuestionDraft:
         key="k1q1", tier=1, kind="true_false_set", prompt="Mark each equality true or false.",
         choices=["$(1,9)=(9,1)$", "$\\{1,9\\}=\\{9,1\\}$", "$(1,9)=(1,9)$"], correct_choice=None, answer="FTT",
         answer_display="F, T, T", tolerance=None, hints=["a", "b", "c"], solution="1 false; 2 true; 3 true.",
-        checklist=[], targets="", source_exercise=None,
+        checklist=[], targets="", source_exercise=None, steps=[],
     )
     return QuestionDraft(**(base | kw))
 
@@ -480,15 +480,17 @@ def test_inline_check_validation():
 def test_v2_validation_strict_and_lenient():
     draft = fake_llm.respond(schema=LessonV2Draft, role="lesson", instructions="", text="Write the lesson for skill S1: x")
     spec = split_plan().skills[0]
-    lesson, pools, notes = asyncio.run(validate_v2(draft, spec, []))
+    lesson, pools, capstone, notes = asyncio.run(validate_v2(draft, spec, []))
     assert lesson["format"] == "v2" and len(lesson["blocks"]) == 9 and len(pools) == 2
     assert lesson["blocks"][4]["visual"]["format"] == "equation_steps" and lesson["goal_line"].startswith("Calculate")
     assert "questions" not in lesson["knowledge_points"][0]
+    assert [kp["target_questions"] for kp in lesson["knowledge_points"]] == [2, 1] and lesson["common_mistakes"] == []
+    assert capstone.key == "cap" and capstone.kind == "multistep" and len(capstone.steps) == 3
     broken = draft.model_copy(deep=True)
     broken.blocks[2].check = None  # a check block without a check
     with pytest.raises(InvalidLesson, match="block 3"):
         asyncio.run(validate_v2(broken, spec, []))
-    lesson, _, notes = asyncio.run(validate_v2(broken, spec, [], strict=False))
+    lesson, _, _, notes = asyncio.run(validate_v2(broken, spec, [], strict=False))
     assert lesson["blocks"][2]["kind"] == "explain" and any("shown as explain" in n for n in notes)
     no_checks = draft.model_copy(update={"blocks": [b.model_copy(update={"check": None, "kind": "explain"}) for b in draft.blocks]})
     with pytest.raises(InvalidLesson, match="no inline check"):

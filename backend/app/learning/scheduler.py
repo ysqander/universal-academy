@@ -86,18 +86,26 @@ def status_for(card: Card) -> str:
     return "mastered" if (card.stability or 0.0) >= MASTERED_STABILITY_DAYS else "learned"
 
 
-def review_score(credits: list[float]) -> float:
-    """Order-sensitive score: answer i (1-based) has weight i, so a strong finish counts more than a strong start."""
+def review_score(credits: list[float], weights: list[float] | None = None) -> float:
+    """Order-sensitive score: answer i (1-based) has weight i (× its own weight, e.g. 2 for a capstone), so a strong
+    finish counts more than a strong start."""
     if not credits:
         return 0.0
-    weights = range(1, len(credits) + 1)
-    return sum(w * c for w, c in zip(weights, credits)) / sum(weights)
+    own = weights if weights is not None else [1.0] * len(credits)
+    order = [(i + 1) * w for i, w in enumerate(own)]
+    total = sum(order)
+    return sum(w * c for w, c in zip(order, credits)) / total if total > 0 else 0.0
+
+
+GOOD_REVIEW_SCORE = 0.8
+HARD_REVIEW_SCORE = 0.6
 
 
 def rating_for_score(score: float) -> Rating:
-    if score >= 1.0 - 1e-9:
+    """Review rating (SPEC §6.4): >= 0.8 Good, 0.6-0.8 Hard, < 0.6 Again."""
+    if score >= GOOD_REVIEW_SCORE - 1e-9:
         return Rating.Good
-    if score >= 0.6 - 1e-9:
+    if score >= HARD_REVIEW_SCORE - 1e-9:
         return Rating.Hard
     return Rating.Again
 

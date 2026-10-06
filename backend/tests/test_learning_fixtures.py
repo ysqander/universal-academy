@@ -3,8 +3,9 @@
 Graph (prerequisite -> dependent, encompassing weight):
     S1 -0.8-> S3 -0.6-> S4        effective: w(S4→S3)=0.6, w(S4→S1)=0.48, w(S3→S1)=0.8, w(S3→S2)=0.4
     S2 -0.4-> S3
-Every skill has a 2-KP lesson and 4 questions per KP (tiers 1, 1, 2, 3; numeric / expression / MC).
-`extra_roots` adds independent skills R1, R2, ... with no edges.
+Every skill has a 2-KP lesson (legacy: no target_questions, so 2 per KP; no capstone) and 4 questions per KP
+(tiers 1, 1, 2, 3; numeric / expression / MC). `extra_roots` adds independent skills R1, R2, ... with no edges.
+`set_targets` / `add_question` / `add_capstone` turn a skill into a new-style lesson (KP targets, multistep capstone).
 """
 
 from __future__ import annotations
@@ -156,13 +157,99 @@ def make_true_false_set(qid: str, answer: str = "FTT", answer_display: str = "")
 
 
 def learn(fx: CourseFixture, key: str, now: datetime) -> None:
-    """Pass a skill's lesson perfectly (through the engine)."""
+    """Pass a skill's lesson perfectly (through the engine; multistep questions step by step)."""
     task_id = engine.start_lesson(fx.sid(key), "test", now)
     task = engine.begin_practice(task_id, now)
     while task.phase != "done":
         assert task.question is not None
-        task = engine.submit_answer(task_id, right(task.question.id), now).task
+        task = answer_fully(task_id, task.question.id, now).task
     assert task.outcome == "passed"
+
+
+# ---------------------------------------------------------------------------
+# Score-based lessons: KP targets, extra questions, multistep capstones
+# ---------------------------------------------------------------------------
+
+CAPSTONE_STEPS = [
+    {
+        "prompt": "Step 1: compute $2+3$.", "kind": "numeric", "choices": [], "correct_choice": None, "answer": "5",
+        "answer_display": "$5$", "tolerance": None, "hint": "Add the two numbers.", "explanation": "$2+3=5$.",
+    },
+    {
+        "prompt": "Step 2: which law justifies the next move?", "kind": "multiple_choice", "choices": ["A", "B", "C"],
+        "correct_choice": 2, "answer": "", "answer_display": "C", "tolerance": None, "hint": "Not A.",
+        "explanation": "Law C lets us regroup.",
+    },
+    {
+        "prompt": "Step 3: write the result as $a+bi$.", "kind": "expression", "choices": [], "correct_choice": None,
+        "answer": "3+4*i", "answer_display": "$3+4i$", "tolerance": None, "hint": "The real part is 3.",
+        "explanation": "So the result is $3+4i$.",
+    },
+]  # fmt: skip
+
+
+def add_question(
+    fx: CourseFixture, key: str, kp: int, *, kind: str = "numeric", answer: str = "7", tier: int = 1,
+    role: str = "practice", steps: list[dict] | None = None, choices: list[str] | None = None,
+    correct: int | None = None, hints: list[str] | None = None, solution: str = "Model solution.",
+) -> str:  # fmt: skip
+    qid = db.new_id()
+    n = db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ?", (fx.sid(key),))["n"]
+    db.execute(
+        "INSERT INTO questions(id, skill_id, key, kp_index, tier, kind, prompt, choices_json, correct_choice, answer,"
+        " answer_display, hints_json, solution, steps_json, role, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            qid, fx.sid(key), f"x{n + 1}", kp, tier, kind, f"Extra question {n + 1}", db.dumps(choices or []), correct,
+            answer, "", db.dumps(hints if hints is not None else ["h1"]), solution, db.dumps(steps or []), role,
+            scheduler.iso(T0),
+        ),
+    )  # fmt: skip
+    return qid
+
+
+def add_capstone(fx: CourseFixture, key: str, steps: list[dict] | None = None, kp: int = 0) -> str:
+    """A multistep capstone (kp_index deliberately overlaps a KP: the role, not the KP, makes it the capstone)."""
+    return add_question(
+        fx, key, kp, kind="multistep", answer="", tier=3, role="capstone", steps=steps or CAPSTONE_STEPS,
+        hints=[], solution="Whole worked solution.",
+    )  # fmt: skip
+
+
+def set_targets(fx: CourseFixture, key: str, targets: list) -> None:
+    """Set knowledge_points[i].target_questions of a skill's lesson (None removes it: legacy)."""
+    row = db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (fx.sid(key),))
+    lesson = db.loads(row["lesson_json"])
+    for kp, target in zip(lesson["knowledge_points"], targets):
+        if target is None:
+            kp.pop("target_questions", None)
+        else:
+            kp["target_questions"] = target
+    db.execute("UPDATE skills SET lesson_json = ? WHERE id = ?", (db.dumps(lesson), fx.sid(key)))
+
+
+def step_submit(qid: str, index: int, correct: bool = True, **extra) -> AnswerSubmit:
+    steps = db.loads(question(qid)["steps_json"])
+    s = steps[index]
+    if s["kind"] in ("multiple_choice", "true_false"):
+        choice = s["correct_choice"] if correct else (s["correct_choice"] + 1) % max(2, len(s["choices"]))
+        return AnswerSubmit(question_id=qid, step=index, choice=choice, **extra)
+    return AnswerSubmit(question_id=qid, step=index, response=s["answer"] if correct else "98765", **extra)
+
+
+def answer_fully(task_id: str, qid: str, now: datetime, correct: bool = True):
+    """Answer the current question (every step of a multistep one); returns the last AnswerResult."""
+    q = question(qid)
+    if q["kind"] != "multistep":
+        return engine.submit_answer(task_id, (right if correct else wrong)(qid), now)
+    task = engine.get_task(task_id)
+    result = None
+    for index in range(task.question.step_index, len(task.question.steps)):
+        result = engine.submit_answer(task_id, step_submit(qid, index, correct), now)
+    return result
+
+
+def task_state(task_id: str) -> dict:
+    return db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
 
 
 def card(skill_id: str):

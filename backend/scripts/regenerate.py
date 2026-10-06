@@ -60,7 +60,7 @@ if args.data_dir:
 from app import db  # noqa: E402  (UA_DATA_DIR must be set before the app is imported)
 from app.config import settings  # noqa: E402
 from app.pipeline import jobs  # noqa: E402
-from app.pipeline.lessons import is_proof_skill  # noqa: E402
+from app.pipeline.lessons import is_proof_skill, kp_targets  # noqa: E402
 from app.pipeline.questions import visible_length  # noqa: E402
 from app.pipeline.regenerate import regenerate  # noqa: E402
 from app.views import lesson_view  # noqa: E402
@@ -105,7 +105,7 @@ def quality(course_id: str, keys: list[str]) -> None:
     """A compact check of the content rules the prompts now enforce."""
     skills = [s for s in db.query("SELECT * FROM skills WHERE course_id = ? ORDER BY order_index", (course_id,))]
     skills = [s for s in skills if not keys or s["key"] in keys]
-    print(f"{'skill':<5} {'kind':<14} {'lesson':<7} {'Qs':>3} {'MC%':>4} {'longest✓':>8} {'FR/KP':<9} {'visual':<15} refs / figures")
+    print(f"{'skill':<5} {'kind':<14} {'lesson':<7} {'Qs':>3} {'MC%':>4} {'longest✓':>8} {'targets':<12} {'visual':<15} refs / figures")
     for s in skills:
         rows = db.query("SELECT * FROM questions WHERE skill_id = ? AND flagged = 0 ORDER BY rowid", (s["id"],))
         mc = [r for r in rows if r["kind"] == "multiple_choice"]
@@ -115,9 +115,11 @@ def quality(course_id: str, keys: list[str]) -> None:
             cc = r["correct_choice"]
             if cc is not None and 0 <= cc < len(lengths) and all(lengths[cc] > n for i, n in enumerate(lengths) if i != cc):
                 longest += 1
-        kps = sorted({r["kp_index"] for r in rows})
-        # free-response questions per knowledge point (proof skills want 2: a second one when the first was assisted)
-        fr = "".join(str(min(9, sum(1 for r in rows if r["kp_index"] == k and r["kind"] == "free_response"))) for k in kps)
+        # questions served per knowledge point (legacy: 2), + the multistep capstone, and legacy written questions
+        targets = "/".join(map(str, kp_targets(db.loads(s["lesson_json"], None) or {}))) or "-"
+        targets += "+cap" if any(r.get("role") == "capstone" for r in rows) else ""
+        fr = sum(1 for r in rows if r["kind"] == "free_response")
+        targets += f" FR{fr}" if fr else ""
         viz = db.loads(s["viz_json"], None) or {}
         lesson = lesson_view(s["id"])
         refs = ", ".join(lesson.source_refs) if lesson else "-"
@@ -126,7 +128,7 @@ def quality(course_id: str, keys: list[str]) -> None:
         marker = " (proof)" if is_proof_skill(s) else ""
         print(
             f"{s['key']:<5} {s['kind'][:14]:<14} {s['lesson_status']:<7} {len(rows):>3} {share:>4} "
-            f"{f'{longest}/{len(mc)}':>8} {fr + marker:<9} {viz.get('format', '-'):<15} {refs} / {figs or '—'}"
+            f"{f'{longest}/{len(mc)}':>8} {targets + marker:<12} {viz.get('format', '-'):<15} {refs} / {figs or '—'}"
         )
 
 

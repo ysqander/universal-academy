@@ -107,6 +107,11 @@ def build(course_id: str) -> JobStatus:
     return asyncio.run(jobs.run_build(course_id))
 
 
+def solver_calls(questions: list[dict]) -> int:
+    """Independent solves needed to verify these question rows: one per question, one per step of a multistep one."""
+    return sum(len(db.loads(q["steps_json"], [])) if q["kind"] == "multistep" else 1 for q in questions)
+
+
 def assert_complete(course_id: str, job: JobStatus) -> None:
     assert job.state == "done", job.error
     assert [s.status for s in job.stages] == ["done"] * 7
@@ -146,10 +151,9 @@ def test_full_build_on_tiny_pdf(tmp_path, llm_calls):
         "SELECT q.* FROM questions q JOIN skills s ON s.id = q.skill_id WHERE s.course_id = ?", (cid,)
     )
     statuses = Counter(db.loads(q["verify_json"], {}).get("status") for q in questions)
-    assert statuses["agree"] == sum(1 for q in questions if q["kind"] != "free_response")
-    assert statuses["skipped"] == sum(1 for q in questions if q["kind"] == "free_response")
+    assert statuses["agree"] == len(questions) and not any(q["kind"] == "free_response" for q in questions)
     assert not any(q["flagged"] for q in questions)
-    assert llm_calls["IndependentAnswer"] == statuses["agree"]
+    assert llm_calls["IndependentAnswer"] == solver_calls(questions)  # a multistep question: one solve per step
     assert llm_calls["KnowledgeGraphDraft"] == 1 and llm_calls["LessonDraft"] == len(skills)
 
     progress = db.query("SELECT * FROM progress WHERE course_id = ?", (cid,))
@@ -293,13 +297,17 @@ def test_disagreements_are_flagged_but_every_kp_stays_servable(tmp_path, monkeyp
     cid = tiny_course(tmp_path)
     job = build(cid)
     assert job.state == "done"
-    for skill in db.query("SELECT id FROM skills WHERE course_id = ?", (cid,)):
+    for skill in db.query("SELECT id, lesson_json FROM skills WHERE course_id = ?", (cid,)):
         rows = db.query("SELECT * FROM questions WHERE skill_id = ?", (skill["id"],))
+        targets = [kp["target_questions"] for kp in db.loads(skill["lesson_json"])["knowledge_points"]]
         for kp in {r["kp_index"] for r in rows}:
             pool = [r for r in rows if r["kp_index"] == kp]
-            assert sum(1 for r in pool if not r["flagged"]) == 2
+            assert sum(1 for r in pool if not r["flagged"]) == targets[kp]  # each KP keeps its target servable
         flagged = [r for r in rows if r["flagged"]]
-        assert flagged and all(r["flag_reason"].startswith("verification: independent solver answered") for r in flagged)
+        assert flagged and all(r["flag_reason"].startswith("verification: ") for r in flagged)
+        assert all("independent solver answered" in r["flag_reason"] for r in flagged)
+        steps = [r for r in flagged if r["kind"] == "multistep"]
+        assert steps and all(r["flag_reason"].startswith("verification: step 1: ") for r in steps)
         kept = [db.loads(r["verify_json"]) for r in rows if not r["flagged"] and r["kind"] != "free_response"]
         assert all(k["status"] == "disagree_kept" for k in kept)
     message = next(s for s in job.stages if s.key == "verify").message
@@ -398,8 +406,8 @@ def test_request_top_up_deduplicates_in_flight_requests(tmp_path, llm_calls):
 
     asyncio.run(main())
     assert llm_calls["TopUpDraft"] == 1
-    # S2 is a proof skill: 6 lesson questions in KP 2 (two written proofs) + 3 from the one top-up
-    assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kp_index = 1", (skill,))["n"] == 9
+    # 5 lesson questions in KP 2 (the last a proof walkthrough) + 3 from the one top-up
+    assert db.query_one("SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kp_index = 1", (skill,))["n"] == 8
 
 
 # ---------------------------------------------------------------------------
@@ -570,50 +578,60 @@ def test_concurrent_top_ups_do_not_duplicate_keys_or_questions(tmp_path):
     assert len(prompts) == len(set(prompts)) == 4 + 6
 
 
-def test_proof_skills_serve_a_free_response_by_the_second_question(tmp_path):
+def test_proof_skills_are_practised_with_walkthroughs_not_written_proofs(tmp_path):
     cid = tiny_course(tmp_path)
     build(cid)
     for key in ("S2", "S6"):  # the fake graph's proof skills
-        rows = db.query("SELECT kp_index, kind FROM questions WHERE skill_id = ? ORDER BY rowid", (_skill(cid, key),))
-        for kp in {r["kp_index"] for r in rows}:
-            kinds = [r["kind"] for r in rows if r["kp_index"] == kp]
-            assert "free_response" in kinds[:2], (key, kp, kinds)
+        rows = db.query("SELECT kp_index, kind, steps_json FROM questions WHERE skill_id = ? ORDER BY rowid", (_skill(cid, key),))
+        assert not any(r["kind"] == "free_response" for r in rows)
+        kp0 = [r for r in rows if r["kp_index"] == 0]
+        assert kp0[1]["kind"] == "multistep" and len(db.loads(kp0[1]["steps_json"])) == 3, key
 
 
-def test_proof_lesson_without_a_free_response_is_retried_with_feedback(tmp_path, monkeypatch):
+def _with_free_response(draft: LessonDraft) -> LessonDraft:
+    question = draft.knowledge_points[0].questions[0].model_copy(
+        update={"key": "k1q9", "kind": "free_response", "prompt": "Write a worked evaluation of $(3-2i)(-1+4i)$.",
+                "choices": [], "correct_choice": None, "checklist": ["shows all four products", "uses $i^2=-1$"]}
+    )
+    kps = [kp.model_copy(deep=True) for kp in draft.knowledge_points]
+    kps[0].questions.insert(1, question)
+    return draft.model_copy(update={"knowledge_points": kps})
+
+
+def test_lesson_with_a_free_response_question_is_retried_with_feedback(tmp_path, monkeypatch):
     cid = tiny_course(tmp_path)
     original = fake_llm.respond
     texts: list[str] = []
 
-    def no_proof_first(**kwargs):
+    def written_first(**kwargs):
         draft = original(**kwargs)
         if kwargs["schema"] is LessonDraft and "skill S2:" in kwargs["text"]:
             texts.append(kwargs["text"])
             if len(texts) == 1:
-                kps = [kp.model_copy(update={"questions": [q for q in kp.questions if q.kind != "free_response"]}) for kp in draft.knowledge_points]
-                return draft.model_copy(update={"knowledge_points": kps})
+                return _with_free_response(draft)
         return draft
 
-    monkeypatch.setattr(fake_llm, "respond", no_proof_first)
+    monkeypatch.setattr(fake_llm, "respond", written_first)
     assert_complete(cid, build(cid))
-    assert len(texts) == 2 and "rejected" in texts[1] and "free-response" in texts[1]
+    assert len(texts) == 2 and "rejected" in texts[1] and "free_response question(s) k1q9" in texts[1]
+    assert not db.query("SELECT 1 FROM questions WHERE skill_id = ? AND kind = 'free_response'", (_skill(cid, "S2"),))
 
 
-def test_proof_lesson_is_kept_with_a_warning_when_the_retry_also_lacks_a_proof(tmp_path, monkeypatch):
+def test_written_questions_are_dropped_with_a_warning_when_the_retry_also_has_them(tmp_path, monkeypatch):
     cid = tiny_course(tmp_path)
     original = fake_llm.respond
 
-    def never_proof(**kwargs):
+    def always_written(**kwargs):
         draft = original(**kwargs)
         if kwargs["schema"] is LessonDraft and "skill S2:" in kwargs["text"]:
-            kps = [kp.model_copy(update={"questions": [q for q in kp.questions if q.kind != "free_response"]}) for kp in draft.knowledge_points]
-            return draft.model_copy(update={"knowledge_points": kps})
+            return _with_free_response(draft)
         return draft
 
-    monkeypatch.setattr(fake_llm, "respond", never_proof)
+    monkeypatch.setattr(fake_llm, "respond", always_written)
     job = build(cid)
     assert_complete(cid, job)
-    assert any("Lesson S2" in line and "no free-response proof" in line for line in job.log)
+    assert any("Lesson S2" in line and "free_response" in line and "dropped" in line for line in job.log)
+    assert not db.query("SELECT 1 FROM questions WHERE skill_id = ? AND kind = 'free_response'", (_skill(cid, "S2"),))
 
 
 def test_lessons_keep_item_refs_only_and_show_the_figures_they_reference(tmp_path):
@@ -686,10 +704,8 @@ def test_regenerate_in_place_keeps_learner_history(tmp_path, llm_calls):
     # verification only: learner flags survive, everything else is re-checked
     llm_calls.clear()
     report = asyncio.run(regenerate(cid, ["S3"], lessons=False, visuals=False))
-    machine = db.query_one(
-        "SELECT COUNT(*) AS n FROM questions WHERE skill_id = ? AND kind != 'free_response' AND flagged = 0", (s3,)
-    )["n"]
-    assert llm_calls["IndependentAnswer"] == machine and llm_calls["LessonDraft"] == 0
+    machine = db.query("SELECT * FROM questions WHERE skill_id = ? AND kind != 'free_response' AND flagged = 0", (s3,))
+    assert llm_calls["IndependentAnswer"] == solver_calls(machine) and llm_calls["LessonDraft"] == 0
     row = db.query_one("SELECT * FROM questions WHERE id = ?", (reported["id"],))
     assert row["flagged"] == 1 and row["flag_reason"] == "Learner: unclear"
 

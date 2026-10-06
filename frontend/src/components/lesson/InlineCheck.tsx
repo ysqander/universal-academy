@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { checkBlock, isApiError } from "../../api";
 import { useToast } from "../../context/toast";
+import { choiceMarksFromText } from "../../lib/choices";
 import { stripStockVerdict } from "../../lib/feedback";
 import type { CheckOutcome } from "../../lib/lessonFlow";
 import { decodeTfResponse, encodeTfMarks, resolveTfKey, tfRowResults, wrongRowsLabel, type TfMark } from "../../lib/trueFalseSet";
@@ -25,15 +26,9 @@ interface InlineCheckProps {
   label: string;
 }
 
-const normalize = (text: string): string => text.replace(/[$\s]/g, "").toLowerCase();
-
 /** Inline checks return the answer as text only: find the matching option to mark it. */
-function inlineChoiceMarks(choices: string[], chosen: number | null, result: BlockCheckResult | null): ChoiceMark[] {
-  if (!result || chosen === null || result.correct === null) return [];
-  const answer = normalize(result.answer_display);
-  const keyIndex = result.correct ? chosen : choices.findIndex((c) => normalize(c) === answer);
-  return choices.map((_, i) => (i === keyIndex ? "correct" : i === chosen && !result.correct ? "incorrect" : null));
-}
+const inlineChoiceMarks = (choices: string[], chosen: number | null, result: BlockCheckResult | null): ChoiceMark[] =>
+  result ? choiceMarksFromText(choices, chosen, result.correct, result.answer_display) : [];
 
 /**
  * A formative check inside the teaching sequence: graded by the server, never recorded or scored. Every kind of

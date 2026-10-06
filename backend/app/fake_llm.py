@@ -4,11 +4,15 @@ respond() dispatches on the schema class name. Lesson generation v2: the planner
 several abilities with " and " (like "Multiply complex numbers and use their powers") into 3 narrower skills and keeps
 any other (its specs name earlier siblings the way real planners do, "a (S2a): …", which plan validation rewrites to
 "S2a: …"); the writer returns a teaching sequence with checks of several kinds (expression, true_false_set,
-reflect), a faded example and a visual; the reviewer reports one blocking issue on a first draft and none on a
-revised one. The content is a small, realistic course on complex numbers and
-F^n (Axler §1A style). Every generated question carries an invisible Markdown marker
+reflect), a faded example and a visual, knowledge points with target_questions 2 and 1, and a 3-step capstone of
+mixed kinds (expression, multiple_choice, true_false_set); the reviewer reports one blocking issue on a first draft
+and none on a revised one. v1 lessons have targets 2 and 3; no generated question is free_response (proofs are
+multistep walkthroughs). The content is a small, realistic course on complex numbers and
+F^n (Axler §1A style). Every generated question — and every step of a multistep question — carries an invisible
+Markdown marker
     [//]: # "ua-fake|<choice>|<answer>"
-(a link reference definition, which Markdown renderers do not display) so the fake verifier can agree with it.
+(a link reference definition, which Markdown renderers do not display) so the fake verifier can agree with it (it
+reads the LAST marker of a request: a step's verification request ends with the current step).
 Unknown schemas get a minimal valid instance.
 """
 
@@ -32,6 +36,7 @@ from .llm_schemas import (
     LessonDraft,
     LessonReview,
     LessonV2Draft,
+    MultistepStep,
     NotationItem,
     PageTranscription,
     PlannedPrereq,
@@ -115,8 +120,31 @@ def _question(**fields: Any) -> QuestionDraft:
         "tolerance": None,
         "checklist": [],
         "source_exercise": None,
+        "steps": [],
     }
     return QuestionDraft(**(defaults | fields))
+
+
+def _step(kind: str, prompt: str, *, display: str, hint: str, explanation: str, choices: list[str] | None = None,
+          correct: int | None = None, answer: str = "") -> MultistepStep:
+    """One step of a multistep question, with its own verification marker."""
+    return MultistepStep(
+        prompt=prompt + _marker(correct, answer),
+        kind=kind,
+        choices=choices or [],
+        correct_choice=correct,
+        answer=answer,
+        answer_display=display,
+        tolerance=None,
+        hint=hint,
+        explanation=explanation,
+    )
+
+
+def _multistep(key: str, prompt: str, steps: list[MultistepStep], *, tier: int = 3, display: str, solution: str,
+               targets: str) -> QuestionDraft:
+    return _question(key=key, tier=tier, kind="multistep", prompt=prompt, steps=steps, answer_display=display,
+                     hints=[], solution=solution, targets=targets)
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +300,7 @@ def _kp_complex(seed: int) -> KnowledgePointDraft:
     choices.insert(order, choices.pop(0))
     return KnowledgePointDraft(
         title="Multiplying complex numbers",
+        target_questions=2,
         explanation=(
             "To multiply $(a+bi)(c+di)$, expand with the distributive property and replace $i^2$ by $-1$:\n\n"
             "$$(a+bi)(c+di)=(ac-bd)+(ad+bc)i.$$\n\nThere is no need to memorise the formula — rederive it from $i^2=-1$."
@@ -361,6 +390,7 @@ def _kp_vectors(seed: int) -> KnowledgePointDraft:
     choices.insert(order, choices.pop(0))
     return KnowledgePointDraft(
         title="Adding and scaling vectors in $\\mathbf{F}^n$",
+        target_questions=3,
         explanation=(
             "Vectors in $\\mathbf{F}^n$ are added and scaled coordinate by coordinate:\n\n"
             "$$(x_1,\\dots,x_n)+(y_1,\\dots,y_n)=(x_1+y_1,\\dots,x_n+y_n),\\qquad \\lambda(x_1,\\dots,x_n)=(\\lambda x_1,\\dots,\\lambda x_n).$$"
@@ -422,69 +452,150 @@ def _kp_vectors(seed: int) -> KnowledgePointDraft:
                 solution="Both lists have length 4, so their sum is defined and lies in $\\mathbf{R}^4$.",
                 targets="lengths must match",
             ),
-            _question(
-                key="k2q5",
-                tier=3,
-                kind="free_response",
-                prompt="Prove that $x+y=y+x$ for all $x,y\\in\\mathbf{F}^n$.",
-                answer_display="See the model proof.",
-                hints=["Write $x=(x_1,\\dots,x_n)$ and $y=(y_1,\\dots,y_n)$.", "Use the definition of addition.", "Use commutativity in $\\mathbf{F}$ in each coordinate."],
-                solution=(
-                    "Let $x=(x_1,\\dots,x_n)$, $y=(y_1,\\dots,y_n)$. Then $x+y=(x_1+y_1,\\dots,x_n+y_n)"
-                    "=(y_1+x_1,\\dots,y_n+x_n)=y+x$, using commutativity of addition in $\\mathbf{F}$."
-                ),
-                checklist=[
-                    "Writes $x$ and $y$ with arbitrary coordinates",
-                    "Applies the definition of addition in $\\mathbf{F}^n$",
-                    "Uses commutativity in $\\mathbf{F}$ coordinate by coordinate",
+            _vector_walkthrough("k2q5"),
+        ],
+    )
+
+
+def _vector_walkthrough(key: str) -> QuestionDraft:
+    """A proof of commutativity in F^n as a guided walkthrough (replaces the former written proof)."""
+    return _multistep(
+        key,
+        "Walk through a proof that $x+y=y+x$ for all $x,y\\in\\mathbf{F}^n$, with $x=(x_1,\\dots,x_n)$ and "
+        "$y=(y_1,\\dots,y_n)$.",
+        [
+            _step(
+                "multiple_choice",
+                "Which definition gives the $k$-th coordinate of $x+y$?",
+                choices=[
+                    "Addition in $\\mathbf{F}^n$ is coordinatewise: $(x+y)_k=x_k+y_k$",
+                    "Scalar multiplication: $(\\lambda x)_k=\\lambda x_k$",
+                    "Commutativity of addition in $\\mathbf{F}$",
+                    "Two lists are equal when they have the same length",
                 ],
-                targets="proof from the definition",
-                source_exercise="Exercise 1A.10",
+                correct=0,
+                display="$(x+y)_k=x_k+y_k$",
+                hint="The proof starts from how $x+y$ is defined.",
+                explanation="Addition in $\\mathbf{F}^n$ is defined coordinate by coordinate (1.13).",
+            ),
+            _step(
+                "expression",
+                "For $x=(1,2)$ and $y=(3,-5)$ in $\\mathbf{R}^2$, enter $x+y$ as $(a, b)$.",
+                answer="(4, -3)",
+                display="$(4,-3)$",
+                hint="Add the first coordinates, then the second ones.",
+                explanation="$(1+3, 2+(-5))=(4,-3)$; $y+x$ gives the same list.",
+            ),
+            _step(
+                "multiple_choice",
+                "Which fact justifies $x_k+y_k=y_k+x_k$ in every coordinate?",
+                choices=[
+                    "Commutativity of addition in $\\mathbf{F}$",
+                    "Associativity of addition in $\\mathbf{F}$",
+                    "The definition of addition in $\\mathbf{F}^n$",
+                    "Every element of $\\mathbf{F}$ has an additive inverse",
+                ],
+                correct=0,
+                display="Commutativity of addition in $\\mathbf{F}$",
+                hint="Each coordinate is a sum of two numbers in $\\mathbf{F}$.",
+                explanation="$x_k,y_k\\in\\mathbf{F}$ and addition in $\\mathbf{F}$ is commutative, so the lists agree.",
             ),
         ],
+        display="$x+y=y+x$",
+        solution=(
+            "$x+y=(x_1+y_1,\\dots,x_n+y_n)=(y_1+x_1,\\dots,y_n+x_n)=y+x$, using the definition of addition in "
+            "$\\mathbf{F}^n$ and commutativity of addition in $\\mathbf{F}$."
+        ),
+        targets="proof from the definition, as a walkthrough",
     )
 
 
 def _proof_question(key: str) -> QuestionDraft:
-    return _question(
-        key=key,
+    """Commutativity of complex multiplication as a guided proof walkthrough (proof skills; no written proofs)."""
+    return _multistep(
+        key,
+        "Walk through the proof that $\\alpha\\beta=\\beta\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$, "
+        "with $\\alpha=a+bi$ and $\\beta=c+di$ ($a,b,c,d\\in\\mathbf{R}$).",
+        [
+            _step(
+                "multiple_choice",
+                "By the definition of multiplication, which expression is $\\alpha\\beta$?",
+                choices=["$(ac-bd)+(ad+bc)i$", "$(ac+bd)+(ad-bc)i$", "$ac+bdi$", "$(ac-bd)+(ad-bc)i$"],
+                correct=0,
+                display="$(ac-bd)+(ad+bc)i$",
+                hint="Expand and use $i^2=-1$.",
+                explanation="$(a+bi)(c+di)=ac+adi+bci+bdi^2=(ac-bd)+(ad+bc)i$.",
+            ),
+            _step(
+                "true_false_set",
+                "Mark each statement true or false (for all real $a,b,c,d$).",
+                choices=["$ac-bd=ca-db$", "$ad+bc=cb+da$", "$ad+bc=ad-bc$"],
+                answer="TTF",
+                display="True, true, false",
+                hint="Real multiplication and addition can be done in either order.",
+                explanation="1 and 2 hold by commutativity in $\\mathbf{R}$; 3 fails unless $bc=0$.",
+            ),
+            _step(
+                "multiple_choice",
+                "Which property of $\\mathbf{R}$ justifies the true equalities?",
+                choices=[
+                    "Commutativity of real addition and multiplication",
+                    "Existence of additive inverses in $\\mathbf{R}$",
+                    "Distributivity alone",
+                    "Associativity of real multiplication alone",
+                ],
+                correct=0,
+                display="Commutativity in $\\mathbf{R}$",
+                hint="The two sides contain the same products in a different order.",
+                explanation="Both equalities only swap factors and summands, which commutativity in $\\mathbf{R}$ allows.",
+            ),
+        ],
         tier=2,
-        kind="free_response",
-        prompt="Prove that $\\alpha\\beta=\\beta\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$, starting from the definition of multiplication.",
-        answer_display="See the model proof.",
-        hints=[
-            "Write $\\alpha=a+bi$ and $\\beta=c+di$ with $a,b,c,d\\in\\mathbf{R}$.",
-            "Compute both products with the definition.",
-            "Compare real and imaginary parts using commutativity in $\\mathbf{R}$.",
-        ],
+        display="$\\alpha\\beta=\\beta\\alpha$",
         solution=(
-            "Let $\\alpha=a+bi$, $\\beta=c+di$. Then $\\alpha\\beta=(ac-bd)+(ad+bc)i$ and "
-            "$\\beta\\alpha=(ca-db)+(cb+da)i$. Since multiplication and addition of real numbers are commutative, "
-            "$ac-bd=ca-db$ and $ad+bc=cb+da$, so $\\alpha\\beta=\\beta\\alpha$."
+            "$\\alpha\\beta=(ac-bd)+(ad+bc)i$ and $\\beta\\alpha=(ca-db)+(cb+da)i$; by commutativity of real "
+            "addition and multiplication the real and imaginary parts agree."
         ),
-        checklist=[
-            "Takes arbitrary $\\alpha=a+bi$ and $\\beta=c+di$ (not an example)",
-            "Computes both products from the definition",
-            "Uses commutativity of real addition and multiplication part by part",
-        ],
         targets="proof from the definition, without assuming the result",
-        source_exercise=None,
     )
 
 
-def _proof_variant(key: str, statement: str, steps: str, checklist: list[str]) -> QuestionDraft:
-    """A second written proof for a knowledge point of a proof skill (served when the first one was assisted)."""
-    return _question(
-        key=key,
-        tier=3,
-        kind="free_response",
-        prompt=f"Prove that {statement}, starting from the definitions.",
-        answer_display="See the model proof.",
-        hints=["Take arbitrary elements and write them out.", "Apply the definition of the operation.", steps],
-        solution=steps,
-        checklist=checklist,
-        targets="a second proof from the definition (variant)",
-        source_exercise=None,
+def _capstone() -> QuestionDraft:
+    """The v2 lesson's final problem: three chained steps of mixed kinds."""
+    return _multistep(
+        "cap",
+        "Let $z=1+2i$ and $w=3-i$. Find $zw$, then use the result to answer two questions without starting over.",
+        [
+            _step(
+                "expression",
+                "Compute $zw=(1+2i)(3-i)$. Enter your answer in the form $a+bi$.",
+                answer="5+5*i",
+                display="$5+5i$",
+                hint="Four products; the product of the two $i$ terms contains $i^2$.",
+                explanation="$3-i+6i-2i^2=3+5i+2=5+5i$.",
+            ),
+            _step(
+                "multiple_choice",
+                "Without recomputing, what is $(3-i)(1+2i)$?",
+                choices=["$5+5i$", "$5-5i$", "$1+7i$", "$-5+5i$"],
+                correct=0,
+                display="$5+5i$",
+                hint="Does the order of the factors matter?",
+                explanation="Multiplication of complex numbers is commutative, so $wz=zw=5+5i$.",
+            ),
+            _step(
+                "true_false_set",
+                "Mark each statement about $zw=5+5i$ true or false.",
+                choices=["The real part of $zw$ is $5$", "$zw$ is a real number", "$i\\cdot zw=-5+5i$"],
+                answer="TFT",
+                display="True, false, true",
+                hint="Multiply $5+5i$ by $i$ and use $i^2=-1$.",
+                explanation="$\\operatorname{Re}(zw)=5$; $zw$ has a nonzero imaginary part; $i(5+5i)=5i-5$.",
+            ),
+        ],
+        display="$zw=5+5i$",
+        solution="$zw=5+5i$; by commutativity $wz=5+5i$; $\\operatorname{Re}(zw)=5$ and $i\\,zw=-5+5i$.",
+        targets="chains multiplication with commutativity and $i^2=-1$",
     )
 
 
@@ -516,37 +627,24 @@ def _lesson(text: str, _prefix: str) -> LessonDraft:
         missing_steps=(
             "Why $i^2=-1$ follows from the definition: $(0+1i)(0+1i)=(0\\cdot0-1\\cdot1)+(0\\cdot1+1\\cdot0)i=-1$."
         ),
-        common_mistakes=["Dropping the minus sign from $i^2$", "Adding lists of different lengths"],
+        common_mistakes=[],
         connection="Coordinatewise operations on $\\mathbf{F}^n$ are the model for the abstract vector space in 1B.",
         # the last two are the kind of caption/page note real models emit: the pipeline keeps item numbers only
         source_refs=["1.1", "1.3", "1.13", "1.13 Definition — addition in F^n", "Printed p.2: complex numbers"],
     )
 
 
-def _lesson_kps(seed: int, proof: bool) -> tuple[KnowledgePointDraft, KnowledgePointDraft]:
+def _lesson_kps(seed: int, proof: bool, *, v2: bool = False) -> tuple[KnowledgePointDraft, KnowledgePointDraft]:
+    """KP 1 (target 2, 4 questions) and KP 2 (v1: target 3, 5 questions ending with a proof walkthrough; v2: target 1,
+    3 questions). Proof skills get a multistep proof walkthrough as KP 1's second question."""
     first_kp = _kp_complex(seed)
     second_kp = _kp_vectors(seed)
-    if proof:  # proof skills: every knowledge point carries a free-response proof as q2 and a variant as q4
+    if v2:
+        by_key = {q.key: q for q in second_kp.questions}
+        second_kp.target_questions = 1
+        second_kp.questions = [by_key["k2q1"], by_key["k2q3"], by_key["k2q5"]]
+    if proof:
         first_kp.questions.insert(1, _proof_question("k1q5"))
-        first_kp.questions.insert(
-            3,
-            _proof_variant(
-                "k1q6",
-                "$\\alpha+\\beta=\\beta+\\alpha$ for all $\\alpha,\\beta\\in\\mathbf{C}$",
-                "With $\\alpha=a+bi$, $\\beta=c+di$: $\\alpha+\\beta=(a+c)+(b+d)i=(c+a)+(d+b)i=\\beta+\\alpha$ by "
-                "commutativity of real addition.",
-                ["Takes arbitrary $\\alpha=a+bi$ and $\\beta=c+di$", "Uses the definition of addition", "Cites commutativity in $\\mathbf{R}$"],
-            ),
-        )
-        proof_q = next(q for q in second_kp.questions if q.kind == "free_response")
-        others = [q for q in second_kp.questions if q is not proof_q]
-        variant = _proof_variant(
-            "k2q6",
-            "$(x+y)+z=x+(y+z)$ for all $x,y,z\\in\\mathbf{F}^n$",
-            "Coordinatewise, $((x+y)+z)_k=(x_k+y_k)+z_k=x_k+(y_k+z_k)=(x+(y+z))_k$ by associativity in $\\mathbf{F}$.",
-            ["Takes arbitrary lists $x,y,z$", "Works coordinate by coordinate", "Cites associativity in $\\mathbf{F}$"],
-        )
-        second_kp.questions = [others[0], proof_q, others[1], variant, *others[2:]]
     return first_kp, second_kp
 
 
@@ -671,7 +769,7 @@ def _lesson_v2(text: str, _prefix: str) -> LessonV2Draft:
     seed = _seed(key, title)
     proof = "This is a PROOF skill" in text
     figures = [fid for fid, _ in _FIGURE_RE.findall(text)]
-    first_kp, second_kp = _lesson_kps(seed, proof)
+    first_kp, second_kp = _lesson_kps(seed, proof, v2=True)
     figure = f"\n\n[[figure:{figures[0]}]]" if figures else ""
     steps = VisualizationPlan(
         misunderstanding="Treating $i^2$ as $+1$.",
@@ -723,7 +821,7 @@ def _lesson_v2(text: str, _prefix: str) -> LessonV2Draft:
         blocks=blocks,
         notation=[NotationItem(symbol="$i$", meaning="a number with $i^2=-1$")],
         knowledge_points=[first_kp, second_kp],
-        common_mistakes=["Using $i^2=1$"],
+        capstone=_capstone(),
         connection=f"{key} prepares powers of complex numbers.",
         deeper="An alternative view: multiplication by $i$ rotates by a quarter turn.",
         source_refs=["1.1", "Example 1.2"],
@@ -869,11 +967,11 @@ def _frame_diagram(ends: list[list[int]]) -> VizDiagram:
 
 
 def _independent(text: str, _prefix: str) -> IndependentAnswer:
-    m = _MARKER_RE.search(text)
-    if m is None:
+    markers = _MARKER_RE.findall(text)  # the last one: a multistep step's request ends with the current step
+    if not markers:
         return IndependentAnswer(choice=None, answer="", confidence=0.3, problems="Could not determine an answer.")
-    choice = int(m.group(1)) if m.group(1) else None
-    return IndependentAnswer(choice=choice, answer=m.group(2), confidence=0.95, problems="")
+    choice, answer = markers[-1]
+    return IndependentAnswer(choice=int(choice) if choice else None, answer=answer, confidence=0.95, problems="")
 
 
 class _TopUp(BaseModel):
@@ -883,7 +981,7 @@ class _TopUp(BaseModel):
 def _top_up(text: str, _prefix: str) -> _TopUp:
     keys = re.findall(r"\bk\d+q\d+\b", text.split("\n", 1)[0]) or ["k1q9"]
     questions = []
-    if _PROOF_RE.search(text) and len(keys) > 1:
+    if _PROOF_RE.search(text) and len(keys) > 1:  # proof skills: a walkthrough (never a written proof)
         proof = _proof_question(keys.pop())
         questions.append(proof.model_copy(update={"prompt": f"{proof.prompt} (Variant {proof.key}.)"}))
     for key in keys:

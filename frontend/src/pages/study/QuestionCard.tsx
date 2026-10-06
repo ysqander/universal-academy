@@ -298,9 +298,9 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                 : null
             }
           />
-        ) : (
+        ) : kind === "numeric" || kind === "expression" ? (
           <MathInput value={response} onChange={setResponse} disabled={answered || busy} kind={kind} autoFocus={finePointer} />
-        )}
+        ) : null}
 
         {hintsShown > 0 && (
           <ol className="hints" aria-label="Hints">
@@ -308,6 +308,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
               <li key={i} className="hint reveal">
                 <span className="hint__label">
                   Hint {i + 1} of {hintTotal}
+                  {i === 0 && !answered && <span className="hint__cost"> · ½ point for this question</span>}
                 </span>
                 <Markdown>{hint}</Markdown>
               </li>
@@ -330,7 +331,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                 </p>
               )
             )}
-            <p className="question-card__assist-note">You can still answer — it won't count toward the two-in-a-row streak.</p>
+            <p className="question-card__assist-note">You can still answer — after seeing the solution it's worth 0 points.</p>
           </div>
         )}
 
@@ -381,7 +382,13 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
             </button>
             <div className="question-card__tools">
               {question.hints.length > 0 && (
-                <button type="button" className="btn btn--ghost btn--sm" onClick={() => void nextHint()} disabled={!canHint}>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => void nextHint()}
+                  disabled={!canHint}
+                  title={hintsShown === 0 ? "With a hint, a right answer earns ½ point" : undefined}
+                >
                   {hinting ? <Spinner size={14} label="Loading hint" /> : <Icon name="bulb" size={15} />}
                   {hintsShown === 0 ? "Hint" : hintsShown < question.hints.length ? `Next hint (${hintsShown + 1} of ${question.hints.length})` : "No more hints"}
                   {hintsShown < question.hints.length && <kbd>H</kbd>}
@@ -392,6 +399,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                 className="btn btn--ghost btn--sm"
                 onClick={() => void showSolution()}
                 disabled={revealed !== null || revealing || restoring}
+                title={revealed ? undefined : "After seeing the solution, this question earns 0 points"}
               >
                 {revealing || (restoring && question.revealed) ? <Spinner size={14} label="Loading solution" /> : <Icon name="eye" size={15} />}{" "}
                 {revealed ? "Solution shown" : "Show solution"}
@@ -411,6 +419,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
           result={result}
           // The statements already show the key row by row.
           answerShown={tfKey !== null}
+          revealed={revealed !== null || question.revealed}
           before={task}
           onContinue={() => onContinue(result)}
           onSuggestion={(action) => onSuggestion(action, result)}

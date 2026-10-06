@@ -118,20 +118,6 @@ function LessonBodyV1({ lesson, kind, preview = false }: LessonBodyProps) {
                 </div>
               </details>
             )}
-            {lesson.common_mistakes.length > 0 && (
-              <details className="disclosure">
-                <summary>Common mistakes ({lesson.common_mistakes.length})</summary>
-                <div className="disclosure__body">
-                  <ul className="lesson__mistakes">
-                    {lesson.common_mistakes.map((mistake, i) => (
-                      <li key={i}>
-                        <Markdown>{mistake}</Markdown>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </details>
-            )}
             {preview && <KnowledgePointsPreview lesson={lesson} />}
           </div>
         </div>

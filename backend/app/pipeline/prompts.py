@@ -33,13 +33,52 @@ TF_SET_KIND = (
     "number (why it is true, or a counterexample). With 3 or more statements it is not a guessable choice question."
 )
 
+# The learner's review of the S2 lessons (iteration 3): no "show your working", fewer and more varied questions, a
+# multistep problem at the end that chains the ideas. Shared by every question generator.
+TARGET_RULE = (
+    "target_questions (1–3) = how many answers really demonstrate THIS knowledge point. Be honest: 1 when a single "
+    "answer shows it (the method was already demonstrated and practised before the questions), 2–3 only when the "
+    "point has real variety (cases that need different thinking). Write target_questions + 2 questions: the first "
+    "target_questions are served as the knowledge point's test; the 2 extra ones are served only after a miss (so "
+    "the learner can recover) and in later reviews. Knowledge points need not have the same number of questions — "
+    "never pad with repetition."
+)
+DISTINCT_DEMANDS_RULE = (
+    "Every question makes a DIFFERENT demand — never the same procedure again with new numbers: a learner who has "
+    "shown the method once experiences a second identical exercise as pointless drill. Demands to choose from: one "
+    "straightforward application (at most once per knowledge point); a new case that needs a different thought (a "
+    "negative or zero part, a real or pure imaginary number, an edge case); a prediction or decision without the full "
+    "computation (is it real? which sign? which is larger?); spotting the error in a shown working (multiple_choice: "
+    "which line is wrong, or what the correct line is); a reverse problem (find the missing number or factor that "
+    "gives a stated result); interpreting a result; deciding which method or fact applies. Questions stay inside the "
+    "objective: a different demand, not a new method."
+)
+NO_WRITTEN_ANSWERS_RULE = (
+    'No free_response questions and no "show your working": the app checks only the answer, so an instruction to '
+    "write out the steps, the products or a proof is never assessed. A computation is a typed numeric/expression "
+    "answer; a chain of reasoning (a proof, an explanation, a computation with several stages) is a multistep "
+    "question whose steps are each machine-checked."
+)
+MULTISTEP_FORMAT = (
+    "multistep: a guided problem. The prompt states the whole problem and its goal; `steps` holds 2–4 steps the "
+    "learner answers one at a time (seeing each result and its explanation before the next), and a later step uses "
+    "an earlier result. Each step: prompt (what to do now and the exact form to enter), kind numeric / expression / "
+    "multiple_choice / true_false / true_false_set with that kind's conventions for choices, correct_choice, answer, "
+    "answer_display and tolerance, ONE hint (using it halves the step's point) and an explanation (1–2 sentences "
+    "shown after the step: why this is the result). The question itself: answer \"\", choices [], correct_choice "
+    "null, tolerance null, hints [], checklist []; answer_display = the final result; solution = the full worked "
+    "solution. A proof as a walkthrough: steps like \"Which definition do we apply first?\" (multiple_choice), "
+    "\"What is the first coordinate of $x+y$?\" (expression), \"Which property of $\\mathbf{F}$ justifies this "
+    'line?" (multiple_choice), "Which hypothesis was used?" (multiple_choice).'
+)
+
 GRAPH_INSTRUCTIONS = f"""\
 You design the knowledge graph of a Math-Academy-style course generated from pages of a textbook the learner owns.
 The user message holds a faithful transcription of the selected pages: page markers <<page N · p.L>> (N = PDF page
 index — use it in source_pages; L = printed page label; "· exercises" marks exercise pages), figure placeholders
 [[figure:ID]], and a figure list with ids, captions and descriptions.
 
-The graph drives everything: each node becomes one ~10-minute lesson (2–3 knowledge points, each a short explanation,
+The graph drives everything: each node becomes one ~10-minute lesson (1–3 knowledge points, each a short explanation,
 a worked example and checked practice) followed by spaced reviews; a node unlocks when its prerequisites are learned;
 reviews of a node give implicit review credit to its prerequisites in proportion to the edge weights.
 
@@ -54,7 +93,7 @@ WHAT A NODE IS
   questions assesses both. Stop splitting when a single problem type checks the ability.
 - Include conceptual abilities, not only procedures: distinguish confusable notions, explain why a definition is
   set up the way it is, predict or interpret, justify a step, prove a result. Proof-oriented books need "prove /
-  justify" skills (kind 'proof'); they are practised with short free-response proofs and checklists.
+  justify" skills (kind 'proof'); they are practised with guided multistep walkthroughs of the proofs.
 - A confusable pair (e.g. a list vs. a set, the number 0 vs. the zero vector, $\\mathbf{{F}}^n$ vs. $\\mathbf{{F}}^\\infty$)
   deserves its own 'distinction' skill.
 - SIZE: each skill is worth a ~10-minute lesson with 2–3 knowledge points (basic case → harder case → transfer).
@@ -117,33 +156,32 @@ LESSON ANATOMY
 - Book figures: refer only to figures in the request's figure list for this skill — place one with [[figure:ID]] on
   its own line where it helps (it is displayed there). Never describe a figure that is not in that list.
 - notation: the symbols used, with meanings ([] if none).
-- knowledge_points: 2–3 steps of increasing difficulty (basic case → general case → conceptual / transfer / proof
-  step). Each has:
+- knowledge_points: 1–3 steps of increasing difficulty, each adding something NEW the learner must demonstrate (a
+  basic case → a case that needs different thinking → a conceptual / transfer / proof step). A knowledge point that
+  would only repeat the previous one with harder numbers is left out. Each has:
   - title, and an explanation of 2–6 sentences about just this step;
   - worked_example: a problem, steps (each: the math + why it is valid — label the sub-goals) and a one-sentence
     takeaway. Check every computation;
-  - questions: exactly 4 questions of THIS knowledge point's problem type with different numbers or objects,
-    tiers ramping 1 → 2 → 2 → 3. They are served in this order and the learner usually passes after 2 or 3, so
-    the first two must already assess the knowledge point.
+  - target_questions: {TARGET_RULE}
+  - questions: target_questions + 2 questions about THIS knowledge point, tiers ramping 1 → 3, served in this order
+    (see QUESTIONS).
 - missing_steps: the deeper justification or omitted algebra, for learners who click "Show the missing steps".
-- common_mistakes: concrete errors (wrong sign, conjugate instead of inverse, …).
+- common_mistakes: [] (always empty — the app no longer has such a section).
 - connection: 1–2 sentences — what this enables next (name later skills from the course map) and what it builds on.
 - source_refs: printed item numbers used — short references only: "1.3", "Example 1.4", "Exercise 1A.3". Never
   captions, page numbers ("p.8") or notes.
 
 PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove / Justify / Show)
-- Every knowledge point has a free_response question in which the learner writes the short proof or justification
-  of that knowledge point's statement: make it q2 (tier 2), with a model proof as the solution and a checklist of
-  2–5 concrete criteria (e.g. "takes arbitrary $x, y$", "applies the definition of addition coordinatewise", "cites
-  commutativity in $\\mathbf{{F}}$").
-- Wherever the knowledge point allows it, make q4 a SECOND free_response proof — a variant or a closely related
-  statement of the same knowledge point (not a rewording of q2), with its own model proof and checklist. It is
-  served when the first written proof needed a hint or the solution, or was self-graded partial/incorrect, so the
-  learner gets an independent second attempt.
-- The other questions check the ingredients machine-checkably: which law or hypothesis a step uses, true_false
-  claims about a step (with the reason or a counterexample in the solution), a computed instance.
+- The learner never writes a proof as free text. Every knowledge point has a multistep walkthrough of a proof of its
+  statement (or of a variant): 2–4 machine-checked steps — which definition to apply first, the next justified line
+  (computed: "what is the first coordinate of $x+y$?"), which law or hypothesis justifies a step.
+- The other questions check the ingredients with different demands: which law a step uses, true_false or
+  true_false_set claims about a step (the reason or a counterexample in the solution), spotting the invalid step in
+  a shown argument, a computed instance.
 
 QUESTIONS
+- {NO_WRITTEN_ANSWERS_RULE}
+- {DISTINCT_DEMANDS_RULE}
 - Self-contained: restate every object and value needed. Never refer to "the example above", the book or a figure.
 - Assess the stated objective, using only this lesson and its prerequisites.
 - Make the learner produce the answer. Computations → numeric or expression (typed answers). Conceptual claims →
@@ -152,12 +190,11 @@ QUESTIONS
   invalid, which object fits a definition). Choice-based questions (multiple_choice, true_false and a
   true_false_set of only 2 statements) are guessable: at most 40% of the lesson's questions, and at most one of
   each per knowledge point. Even conceptual knowledge points can usually be checked with typed answers: ask for a
-  concrete instance (compute the element, give the length, the coordinate, the missing value), and use
-  free_response for "explain why".
+  concrete instance (compute the element, give the length, the coordinate, the missing value); "explain why"
+  becomes a multistep walkthrough.
 - {COUNT_QUESTION_RULE}
 - {ONE_ANSWER_RULE}
-- Machine-checkable whenever possible — at least 3 of the 4 questions of a knowledge point (2 of 4 for proof
-  skills):
+- Every question is machine-checkable:
   - numeric: answer is a plain number in SymPy syntax ("-3.5", "2/3", "sqrt(2)"); tolerance (e.g. 0.001) only
     when a decimal approximation is expected, else null.
   - expression: answer in SymPy syntax — ** for powers, * for every product, i for the imaginary unit ("-7+22*i"),
@@ -173,11 +210,11 @@ QUESTIONS
   - true_false: choices exactly ["True", "False"]; correct_choice 0 for True, 1 for False. Good for "always /
     sometimes" claims; the solution gives the reason or a counterexample.
   - {TF_SET_KIND}
-  - free_response: for prove / explain / justify objectives only; answer ""; checklist of 2–5 concrete criteria a
-    correct answer must meet; solution is a model answer (the learner compares and self-grades).
-- multiple_choice, true_false and free_response: answer "" and tolerance null. numeric and expression: choices []
-  and correct_choice null. true_false_set: answer is the T/F letters, correct_choice null.
-- hints: exactly 3, progressive — (1) which idea applies, (2) a partial step, (3) nearly the whole solution.
+  - {MULTISTEP_FORMAT}
+- multiple_choice and true_false: answer "" and tolerance null. numeric and expression: choices [] and
+  correct_choice null. true_false_set: answer is the T/F letters, correct_choice null. checklist: always [].
+- hints: exactly 3, progressive — (1) which idea applies, (2) a partial step, (3) nearly the whole solution
+  (multistep: [] — each step has its own hint).
 - solution: complete and correct. answer_display: the answer formatted with LaTeX.
 - targets: which part of the objective or which misconception the question checks.
 - When an exercise from the exercise pages asks for exactly this kind of task, adapt it (change numbers if
@@ -185,7 +222,7 @@ QUESTIONS
   its task — a computation is not an adaptation of a proof exercise on the same topic; otherwise null.
 - Before writing each answer, solve the question again from scratch and make sure answer, answer_display, the
   correct choice and the solution all agree.
-- Keys: "k1q1" … "k1q4", "k2q1" …
+- Keys: "k1q1", "k1q2", … for knowledge point 1, "k2q1", … for knowledge point 2.
 {MATH_FORMAT}
 """
 
@@ -242,13 +279,15 @@ You independently check an auto-generated practice question. Solve it yourself, 
 - confidence: your probability (0-1) that your answer is correct.
 - problems: any defect of the question itself — ambiguous wording, missing information, no correct option, several
   correct options, an unclear answer format, or a correct option that can be recognized without solving (it is the
-  only complete or much longer argument while the other options are one-line slogans); "" if there is none.
+  only complete or much longer argument while the other options are one-line slogans); "" if there is none. A
+  statement or option that is false on purpose is not a defect: true_false_set questions mix true and false
+  statements, and multiple-choice distractors are wrong by design.
 """
 
 # Second solve of a true_false_set question whose first independent solve disagreed with the key (verify.py): a
 # careful statement-by-statement check against the stated definitions, so one misread statement does not flag a
 # correct question.
-VERIFY_STATEMENTS_RECHECK = VERIFY_INSTRUCTIONS + """
+STATEMENT_RULES = """
 THIS IS A CAREFUL SECOND CHECK of a true_false_set question. Decide every statement on its own, one at a time:
 - Name the definition (or result) the statement depends on and apply it exactly as stated — e.g. $\\mathbf{R}^n$ is
   the set of lists of n REAL numbers, so a list with a non-real entry is not in it; $\\mathbf{C}^n$ contains every
@@ -259,16 +298,35 @@ THIS IS A CAREFUL SECOND CHECK of a true_false_set question. Decide every statem
   the wording to make it true or false.
 - Only after deciding each statement separately, write one letter per statement, in order.
 """
+VERIFY_STATEMENTS_RECHECK = VERIFY_INSTRUCTIONS + STATEMENT_RULES
+
+# One step of a multistep question (verify.py): the solver sees the problem, the earlier steps with their correct
+# results and the current step — never its answer.
+VERIFY_STEP_INSTRUCTIONS = VERIFY_INSTRUCTIONS + """
+THIS IS ONE STEP of a guided multistep problem. The message gives the whole problem, the earlier steps with their
+correct results (take them as given — the learner has already seen them) and the CURRENT STEP. Answer only the current
+step, in the format its question type asks for. That a step builds on earlier results is intended, not a defect;
+report a problem only when the current step itself is ambiguous, unsolvable from what is given, or has no / several
+correct options.
+"""
+VERIFY_STEP_RECHECK = VERIFY_STEP_INSTRUCTIONS + """
+THIS IS A CAREFUL SECOND CHECK of that step: a first solver disagreed with the stored answer. Re-read the problem and
+the current step word by word, recompute every number from scratch (signs, $i^2=-1$, which quantity the step asks
+for), and answer exactly what the step asks — not a later or earlier step's quantity.
+"""
+VERIFY_STEP_STATEMENTS_RECHECK = VERIFY_STEP_INSTRUCTIONS + STATEMENT_RULES
 
 TOPUP_INSTRUCTIONS = f"""\
 You write additional practice questions for one knowledge point of a lesson in a Math-Academy-style course generated
 from a textbook. The user message gives the skill, the knowledge point (explanation and worked example), the source
 passage and the questions that already exist.
 
-- Write exactly the requested number of NEW questions of the same problem type and difficulty as the knowledge
-  point, with different numbers or objects than every existing question (no rewordings).
+- Write exactly the requested number of NEW questions about this knowledge point, at its difficulty. Each makes a
+  demand different from every existing question and from the other new ones (no rewordings, and not the same
+  procedure with new numbers). {DISTINCT_DEMANDS_RULE}
+- {NO_WRITTEN_ANSWERS_RULE}
 - Self-contained; assess the stated objective; only use this lesson and its prerequisites.
-- Machine-checkable whenever possible; make the learner produce the answer: computations → numeric/expression,
+- Machine-checkable, and the learner produces the answer: computations → numeric/expression,
   conceptual claims → true_false (reason or counterexample in the solution) or true_false_set for several related
   claims, multiple_choice only when choosing is the skill; choice-based questions (multiple_choice, true_false, a
   true_false_set of only 2 statements) at most 40% — prefer typed answers. numeric: a plain number in SymPy
@@ -277,11 +335,11 @@ passage and the questions that already exist.
   misconception-based distractors, correct_choice = 0-based index; all options of similar length and detail (the
   correct one must not be the longest or only detailed one; argument options are all complete arguments, each
   wrong one with exactly one specific flaw). true_false: choices exactly ["True", "False"]. {TF_SET_KIND}
-  free_response (prove / explain only): answer "" and a 2–5 item checklist.
+  {MULTISTEP_FORMAT}
 - {COUNT_QUESTION_RULE}
 - {ONE_ANSWER_RULE}
-- Exactly 3 progressive hints; a complete solution; answer_display in LaTeX; targets; source_exercise null unless
-  adapted from a book exercise.
+- Exactly 3 progressive hints (multistep: [] — one hint per step); a complete solution; answer_display in LaTeX;
+  targets; checklist []; source_exercise null unless adapted from a book exercise.
 - Solve each question again before writing its answer.
 {MATH_FORMAT}
 """

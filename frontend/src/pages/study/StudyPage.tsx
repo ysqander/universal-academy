@@ -53,6 +53,9 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const [confirmEnd, setConfirmEnd] = useState(false);
   // The last answer finished the task while its feedback is still on screen (task is replaced on "See results").
   const [finishedId, setFinishedId] = useState<string | null>(null);
+  // The plan of a task just before it finished (a halted lesson reports only what was answered).
+  const [planBefore, setPlanBefore] = useState<{ id: string; planned: number } | null>(null);
+  const taskRef = useRef<Task | null>(task);
   const bootPromise = useRef<Promise<Initial> | null>(null);
   const autoStarted = useRef<string | null>(null);
   const course = useResource(`course:${courseId}`, (signal) => getCourse(courseId, signal));
@@ -88,7 +91,15 @@ export default function StudyPage({ courseId }: { courseId: string }) {
     setAttempt((n) => n + 1);
   };
 
+  useEffect(() => {
+    taskRef.current = task;
+  }, [task]);
+
   const replaceTask = useCallback((next: Task) => {
+    const prev = taskRef.current;
+    if (prev && prev.id === next.id && prev.phase === "practice" && next.phase === "done") {
+      setPlanBefore({ id: prev.id, planned: prev.progress.planned ?? 0 });
+    }
     setTask(next);
     setFinishedId(null);
   }, []);
@@ -261,6 +272,7 @@ export default function StudyPage({ courseId }: { courseId: string }) {
       <CompletionScreen
         key={task.id}
         task={task}
+        plannedBefore={planBefore?.id === task.id ? planBefore.planned : 0}
         // The server's figure for the finished task: includes re-scoring after a flag, the lesson bonus, and 0 for a
         // voided or abandoned task (a local sum of answer XP would go stale).
         xpEarned={task.xp_value}

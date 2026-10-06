@@ -2,62 +2,56 @@ import { useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { stripStockVerdict } from "../../lib/feedback";
-import type { AnswerResult, Task } from "../../types";
+import { earnedSteps, stepsSummary } from "../../lib/multistep";
+import { pointsLabel, progressNote } from "../../lib/score";
+import type { AnswerResult, StepResult, Task } from "../../types";
 
 export type SuggestionAction = "easier" | "reread" | "map";
+
+/** A finished multistep question: its steps (the summary replaces the one-answer verdict). */
+export interface StepsSummary {
+  results: StepResult[];
+  total: number;
+  capstone: boolean;
+}
 
 interface FeedbackPanelProps {
   result: AnswerResult;
   /** The card already shows the correct answer in place (e.g. true/false statements marked one by one). */
   answerShown?: boolean;
+  /** The solution was shown before answering (the answer earns 0 points). */
+  revealed?: boolean;
+  /** Multistep: the steps answered. */
+  steps?: StepsSummary | null;
   before: Task;
   onContinue: () => void;
   onSuggestion: (action: SuggestionAction) => void;
 }
 
 interface Tone {
-  tone: "correct" | "incorrect" | "neutral";
+  tone: "correct" | "incorrect" | "partial" | "neutral";
   icon: IconName;
   title: string;
   note: string | null;
 }
 
-function toneOf(result: AnswerResult): Tone {
+function toneOf(result: AnswerResult, steps: StepsSummary | null): Tone {
   if (result.status === "voided") {
     return { tone: "neutral", icon: "flag", title: "Not counted", note: "This question was set aside and doesn't affect your progress." };
   }
-  if (result.correct) {
-    // Never "it isn't wrong" next to "this lesson pauses here": when the task just ended without passing, only
-    // say why the answer didn't count (E1 — keep the copy consistent).
-    const paused = result.task.phase === "done" && result.task.outcome === "failed";
-    return result.independent
-      ? { tone: "correct", icon: "check", title: "Correct", note: null }
-      : {
-          tone: "correct",
-          icon: "check",
-          title: "Correct — with help",
-          note: paused
-            ? "Answers after a hint or the solution don't count toward two in a row."
-            : "Answers after a hint or the solution don't count toward two in a row, but they aren't wrong either.",
-        };
+  if (steps) {
+    const earned = earnedSteps(steps.results);
+    if (earned >= steps.total) return { tone: "correct", icon: "check", title: `All ${steps.total} steps right`, note: null };
+    return earned > 0
+      ? { tone: "partial", icon: "steps", title: stepsSummary(steps.results, steps.total), note: null }
+      : { tone: "incorrect", icon: "x", title: stepsSummary(steps.results, steps.total), note: "Read the steps above once more — the full solution is below." };
   }
+  // Help used is said once, in the points line under the title ("½ point — with a hint").
+  if (result.correct) return { tone: "correct", icon: "check", title: "Correct", note: null };
   if (result.status === "self_graded") {
     return { tone: "incorrect", icon: "review", title: "Not there yet", note: "Compare your answer with the model solution below." };
   }
   return { tone: "incorrect", icon: "x", title: "Not quite", note: null };
-}
-
-function progressNote(before: Task, after: Task): string | null {
-  if (after.phase === "done") {
-    if (after.outcome === "passed") return before.type === "lesson" ? "That completes the lesson." : "That completes the review.";
-    if (after.outcome === "failed") return before.type === "lesson" ? "This lesson pauses here — it will come back later with fresh questions." : "That ends the review.";
-    return null;
-  }
-  if (after.type === "review") return null;
-  if (after.progress.kp_index > before.progress.kp_index) return "Knowledge point complete — on to the next step.";
-  if (after.progress.kp_index < before.progress.kp_index) return "Stepping back to an earlier knowledge point.";
-  if (after.progress.streak > 0) return `${after.progress.streak} of ${after.progress.needed_in_row} in a row.`;
-  return null;
 }
 
 const SUGGESTION_ACTIONS: Partial<Record<NonNullable<AnswerResult["suggestion"]>, { action: SuggestionAction; label: string; icon: IconName }>> = {
@@ -66,19 +60,21 @@ const SUGGESTION_ACTIONS: Partial<Record<NonNullable<AnswerResult["suggestion"]>
   review_prerequisite: { action: "map", label: "See what to review", icon: "graph" },
 };
 
-export function FeedbackPanel({ result, answerShown = false, before, onContinue, onSuggestion }: FeedbackPanelProps) {
+export function FeedbackPanel({ result, answerShown = false, revealed = false, steps = null, before, onContinue, onSuggestion }: FeedbackPanelProps) {
   const continueRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
-  const tone = toneOf(result);
+  const tone = toneOf(result, steps);
   // "Not quite." under the title "Not quite" only repeats the verdict: show what the grader adds to it, if anything.
-  const feedback = stripStockVerdict(result.feedback);
-  // The server's feedback already explains "with help" answers; don't say it twice.
-  const toneNote = tone.note && !(result.correct && !result.independent && feedback) ? tone.note : null;
-  const note = progressNote(before, result.task);
+  // Multistep: each step's feedback is in its step card and the summary is the title, so the server's
+  // question-level text (last step's feedback + a recap) would only repeat them.
+  const feedback = steps ? "" : stripStockVerdict(result.feedback);
+  const toneNote = tone.note;
+  const points = steps ? (steps.capstone ? "Counts double in your score" : null) : pointsLabel(result, revealed);
+  const note = progressNote(before, result.task, `${feedback} ${result.suggestion_text ?? ""}`);
   const suggestion = result.suggestion ? SUGGESTION_ACTIONS[result.suggestion] : undefined;
   const taskOngoing = result.task.phase !== "done";
   const suggestionAvailable = suggestion && (suggestion.action === "map" || taskOngoing);
-  const showAnswer = !answerShown && !result.correct && result.correct_answer.trim() && result.status !== "voided";
+  const showAnswer = !steps && !answerShown && !result.correct && result.correct_answer.trim() && result.status !== "voided";
 
   useEffect(() => {
     continueRef.current?.focus({ preventScroll: true });
@@ -93,6 +89,7 @@ export function FeedbackPanel({ result, answerShown = false, before, onContinue,
         </span>
         <div className="feedback__heading">
           <h3 className="feedback__title">{tone.title}</h3>
+          {points && <p className="feedback__points">{points}</p>}
           {note && <p className="feedback__progress">{note}</p>}
         </div>
       </header>
@@ -120,7 +117,7 @@ export function FeedbackPanel({ result, answerShown = false, before, onContinue,
       )}
 
       {result.solution.trim() && (
-        <details className="disclosure feedback__solution" open={!result.correct}>
+        <details className="disclosure feedback__solution" open={steps ? false : !result.correct}>
           <summary>Full solution</summary>
           <div className="disclosure__body">
             <Markdown>{result.solution}</Markdown>

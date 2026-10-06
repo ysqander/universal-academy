@@ -119,18 +119,6 @@
   gap: var(--space-4);
 }
 
-.lesson__mistakes {
-  margin: 0;
-  padding-left: 1.2em;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.lesson__mistakes li::marker {
-  color: var(--danger);
-}
-
 /* margin notes (notation, sources) */
 
 .margin-note {

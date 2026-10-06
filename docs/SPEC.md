@@ -146,10 +146,10 @@ Prefer the book's own figure when one fits. Never 3D. Interactivity only when mo
 | GET `/api/tasks/{tid}` | → `Task` |
 | GET `/api/settings` / PUT `/api/settings` | `{daily_goal}` |
 | POST `/api/tasks/{tid}/practice` | → `Task` (lesson read → practice phase, first question served) |
-| POST `/api/tasks/{tid}/answer` | `AnswerSubmit` → `AnswerResult` |
+| POST `/api/tasks/{tid}/answer` | `AnswerSubmit` → `AnswerResult` (multistep: one submission per step with `step`; 409 if it is not the current step) |
 | POST `/api/tasks/{tid}/easier` | → `Task` (swap current question for an unseen lower-tier one) |
 | POST `/api/tasks/{tid}/abandon` | → `Task` |
-| POST `/api/questions/{qid}/hint` | → `HintResponse` (next hint; recorded server-side for the current attempt) |
+| POST `/api/questions/{qid}/hint[?step=i]` | → `HintResponse` (next hint, or the hint of multistep step *i*; recorded server-side for the current attempt) |
 | POST `/api/questions/{qid}/reveal` | `RevealRequest` → `RevealResponse` (marks the current attempt as revealed, unless it is a free-response comparison after a committed answer) |
 | POST `/api/skills/{sid}/blocks/{i}/check` | `BlockCheckRequest` → `BlockCheckResult` (v2 inline check; formative, not recorded) |
 | POST `/api/skills/{sid}/blocks/{i}/feedback` | `BlockFeedbackRequest` → 204 ("This step isn't clear") |

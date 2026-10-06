@@ -3,7 +3,17 @@ revision. Written from the learner's own review of the first lessons."""
 
 from __future__ import annotations
 
-from .prompts import COUNT_QUESTION_RULE, MATH_FORMAT, ONE_ANSWER_RULE, TF_SET_KIND, UNORDERED_RULE
+from .prompts import (
+    COUNT_QUESTION_RULE,
+    DISTINCT_DEMANDS_RULE,
+    MATH_FORMAT,
+    MULTISTEP_FORMAT,
+    NO_WRITTEN_ANSWERS_RULE,
+    ONE_ANSWER_RULE,
+    TARGET_RULE,
+    TF_SET_KIND,
+    UNORDERED_RULE,
+)
 
 PRINCIPLE = """\
 PRINCIPLE: Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects
@@ -23,6 +33,18 @@ WHAT WENT WRONG IN THE FIRST LESSONS (the learner's review — never repeat thes
    the main path (or in an explicit prerequisite). Optional depth is only an alternative explanation, a deeper
    derivation or a reminder.
 5. Fixed headings ("Why this matters", "The idea", "See it") do not by themselves produce a teaching sequence."""
+
+V2_FEEDBACK = """\
+WHAT THE LEARNER SAID AFTER STUDYING THE SECOND ROUND (the v2 lessons) — never repeat these either
+6. "Show your working" questions: a free-response question ("Write a worked evaluation of $(3-2i)(-1+4i)$ … your
+   working must show all four products") cannot be checked by the app. Wanted instead: guided multistep questions
+   whose every step is checked, and ONE multistep problem at the end that builds on the simpler questions and shows
+   that the learner can chain several ideas and steps to solve a problem.
+7. Drill: in the powers lesson the learner had already shown they could multiply successively, and was still asked
+   to do it again ("Given $(1-i)^2=-2i$, evaluate $(1-i)^4$ by multiplying successively"). Balance practice with
+   thoughtful exercises: once a knowledge point has been demonstrated, stop — knowledge points need not have the
+   same number of questions, and every question must ask for something new.
+8. The "common mistakes" section was useless; it no longer exists."""
 
 SPLIT_TEST = """\
 SPLIT TEST: could someone succeed at one substantial part of this objective and fail another because the parts
@@ -99,19 +121,32 @@ gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=
 $4-4i+i^2=3-4i$, the same real part as $3+4i$ but the imaginary part has the wrong sign, so $2-i$ does not work — then
 the point: getting the real part right is not enough — the imaginary part, including its sign, must match too."""
 
+SERVED_SEQUENCE_RULE = (
+    "Read what the learner is actually served as ONE sequence: the first target_questions questions of knowledge "
+    "point 1, then those of knowledge point 2, …, then the capstone. In that sequence the lesson's main procedure "
+    "from scratch (e.g. a whole quotient) appears at most once before the capstone — the faded example already had "
+    "the learner carry it out. A later knowledge point leads with ITS new demand (for \"interpret an equation as a "
+    "quotient\": which quotient solves it, or whether a candidate satisfies it — not another full quotient in a new "
+    "wrapper); a plain repeat of the procedure may only be one of its spare questions. The capstone is where the "
+    "whole chain is carried out once more."
+)
+
 QUESTION_RULES = f"""\
 PRACTICE QUESTIONS (knowledge_points[].questions)
-- Exactly 4 questions per knowledge point, of THIS knowledge point's problem type, with different numbers or
-  objects; tiers 1 → 2 → 2 → 3. They are served in this order and the learner usually passes after 2 or 3, so the
-  first two must already assess the knowledge point.
+- {TARGET_RULE}
+- {DISTINCT_DEMANDS_RULE} The teaching sequence and the faded example already had the learner carry out the method
+  once — practice moves on from there.
+- {NO_WRITTEN_ANSWERS_RULE}
+- Tiers ramp 1 → 3 in serving order; the first target_questions questions must already assess the knowledge point.
+- {SERVED_SEQUENCE_RULE}
 - Self-contained: restate every object and value. Never refer to "the example above", the lesson, the book or a
   figure. Use ONLY methods the teaching sequence taught (or the stated prerequisites): no question may need a new
   method, and nothing listed as out of scope.
 - Make the learner produce the answer: computations → numeric or expression; conceptual claims → true_false (reason
-  or counterexample in the solution) or true_false_set; multiple_choice only when choosing IS the skill. Choice-based
-  questions (multiple_choice, true_false and a true_false_set of only 2 statements) are guessable: at most 40% of the
-  lesson's questions and at most one of each per knowledge point. At least 3 of the 4 questions machine-checkable
-  (2 of 4 for proof skills).
+  or counterexample in the solution) or true_false_set; spotting an error or choosing a method → multiple_choice; a
+  chain of reasoning → multistep. Choice-based questions (multiple_choice, true_false and a true_false_set of only 2
+  statements) are guessable: at most 40% of the lesson's questions and at most one of each per knowledge point
+  (choices inside a multistep step do not count).
 - {COUNT_QUESTION_RULE}
 - {ONE_ANSWER_RULE}
 - Formats:
@@ -124,22 +159,36 @@ PRACTICE QUESTIONS (knowledge_points[].questions)
     (vary the position); options of similar length and detail.
   - true_false: choices exactly ["True", "False"]; correct_choice 0 = True, 1 = False.
   - {TF_SET_KIND}
-  - free_response: prove / explain / justify only; answer ""; checklist of 2–5 concrete criteria; the solution is a
-    model answer.
-  - multiple_choice / true_false / free_response: answer "" and tolerance null; numeric / expression /
-    true_false_set: correct_choice null.
-- hints: exactly 3, progressive — which idea applies, a partial step, nearly the whole solution. solution: complete
-  and correct. answer_display: the answer in LaTeX. targets: what the question checks. source_exercise: the book
-  exercise it adapts ("Exercise 1A.7") or null.
-- Keys "k1q1" … "k1q4", "k2q1" …. Before writing each answer, solve the question again from scratch and make sure
-  answer, answer_display, the correct choice and the solution agree."""
+  - {MULTISTEP_FORMAT}
+  - multiple_choice / true_false / multistep: answer "" and tolerance null; numeric / expression / true_false_set /
+    multistep: correct_choice null. checklist: always [].
+- hints: exactly 3, progressive — which idea applies, a partial step, nearly the whole solution (multistep: [], each
+  step has its own hint). solution: complete and correct. answer_display: the answer in LaTeX. targets: the demand
+  the question makes (e.g. "reverse problem: find the missing factor"). source_exercise: the book exercise it adapts
+  ("Exercise 1A.7") or null.
+- Keys "k1q1", "k1q2", … for knowledge point 1, "k2q1", … for knowledge point 2. Before writing each answer, solve
+  the question again from scratch and make sure answer, answer_display, the correct choice and the solution agree."""
+
+CAPSTONE_RULE = """\
+CAPSTONE (`capstone`) — the lesson's final problem, served after the practice
+- ONE problem, key "cap", kind "multistep", tier 3, with 2–4 steps that build on each other: a later step uses an
+  earlier step's result. It chains THIS lesson's ideas with earlier skills (the assumed prerequisites) into one
+  meaningful result, and so shows the learner can combine several ideas and steps. Example for reciprocals and
+  quotients: compute a product, use it to get a quotient, then check the quotient by multiplying back.
+- Not more drill: no step repeats a practice question with new numbers; each step is a different move (compute,
+  use the result, decide, check or interpret). Use a fresh problem — not the running example, the worked examples or
+  a practice question.
+- Each step: one machine-checked answer, a hint, an explanation and answer_display (the multistep format above). The
+  question prompt states the whole problem and its goal; each step prompt says exactly what to do now and the form
+  to enter."""
 
 PROOF_RULE = """\
-PROOF SKILLS (kind 'proof', or an objective starting with Prove / Justify / Show): every knowledge point has a
-free_response question as its q2 in which the learner writes the short proof (model proof as the solution, checklist
-of 2–5 concrete criteria) and, wherever natural, a second free_response proof of a variant as q4. The other questions
-check ingredients machine-checkably (which law a step uses, true_false or true_false_set claims about a step, a
-computed instance)."""
+PROOF SKILLS (kind 'proof', or an objective starting with Prove / Justify / Show): the learner never writes a proof as
+free text. Each knowledge point practises its proof as a multistep walkthrough (2–4 machine-checked steps: which
+definition to apply first, the next justified line computed, which law or hypothesis justifies a step), and its
+other questions check ingredients with different demands (which law a step uses, true_false_set claims about a step,
+the invalid step in a shown argument, a computed instance). The capstone walks through the lesson's main proof or
+uses its result."""
 
 VISUAL_FORMAT_RULES = """\
 A block's `visual` (a VisualizationPlan) — only when a representation planned for this block earns its place:
@@ -165,6 +214,8 @@ page) and the figures on them.
 {PRINCIPLE}
 
 {V1_FAILURES}
+
+{V2_FEEDBACK}
 
 DECIDE FIRST: KEEP OR SPLIT
 {SPLIT_TEST}
@@ -203,13 +254,18 @@ FOR EACH SKILL (TeachingSpec)
   two skills (e.g. "each term of the first bracket multiplies each term of the second, giving
   four products"; "$(3i)(2i)$ has two factors of $i$, so it contains $i^2$"; "replacing $i^2$ by $-1$ turns that
   product into a real number"; "the real terms and the $i$ terms are collected separately").
-- success_check: what would demonstrate the objective without requiring a new method. When the objective is to decide
-  whether a supplied answer works, it includes a candidate that matches the target in exactly one coordinate.
+- success_check: what would demonstrate the objective without requiring a new method, written as the lesson's
+  CAPSTONE: one fresh problem of 2–4 guided steps, each using the previous result, that chains this skill with an
+  earlier one (e.g. compute a product, use it to get a quotient, check the quotient by multiplying back). When the
+  objective is to decide whether a supplied answer works, it includes a candidate that matches the target in exactly
+  one coordinate.
 - representations: 0–2, each finishing "This representation helps the learner notice ___" and saying how it is
   read; format 'none' is valid and often right (an annotated sequence of equations may be best). A representation
   comes after the question it answers is established.
 - practice_steps: 1–3 knowledge-point titles for the practice part, in increasing difficulty, all inside the
-  objective (no new method).
+  objective (no new method). Each one adds something NEW to demonstrate (a case that needs different thinking, a
+  decision, a reverse problem) — never the same procedure again on harder numbers. If a further knowledge point
+  would only repeat, plan fewer: one or two is fine.
 - source_pages: PDF page indexes (from the <<page N>> markers) where this is taught; source_refs: printed item
   numbers only ("1.1", "Example 1.2", "Exercise 1A.7"); difficulty 1–5; est_minutes 5–15; misconceptions: specific
   confusions for THIS skill.
@@ -226,6 +282,8 @@ neighbours in the graph and the figures you may use.
 {PRINCIPLE}
 
 {V1_FAILURES}
+
+{V2_FEEDBACK}
 
 THE TEACHING SEQUENCE (`blocks`)
 An ordered sequence of blocks, each with ONE job — not filled-in headings. Typically 5–10 blocks; each block is
@@ -272,7 +330,7 @@ RULES FOR THE SEQUENCE
   do not use (an identity, a general law, a special case) is at most a short `deeper` note — each extra idea in the
   main path is one more thing to handle at once. (The generalization of the running example to the book's own
   formula or statement is not extra: it is the generalize step.)
-- Respect out_of_scope: those ideas appear nowhere — not in blocks, practice, common mistakes or deeper. The
+- Respect out_of_scope: those ideas appear nowhere — not in blocks, practice, the capstone or deeper. The
   `connection` may name the later skill that covers them.
 - Use the book's notation and quote key definitions faithfully with their numbers ("Definition 1.1"); cite items.
 - goal_line: one sentence in learner language with a concrete example, WITHOUT the words "Your goal:" (the app adds
@@ -296,17 +354,20 @@ INLINE CHECKS (`check` of check / faded_example blocks; formative — graded by 
 - {ONE_ANSWER_RULE}
 
 PRACTICE AFTER THE SEQUENCE
-- knowledge_points: the spec's practice steps (1–3). Each: title; explanation (2–5 sentences: a short reminder of
-  the method the sequence taught — no new method); worked_example (a FRESH example, not the running example; each
-  step with the math and why it is valid; a one-sentence takeaway); 4 questions.
+- knowledge_points: the spec's practice steps (1–3), each adding something new to demonstrate — drop one that would
+  only repeat the previous one. Each: title; explanation (2–5 sentences: a short reminder of the method the sequence
+  taught — no new method); worked_example (a FRESH example, not the running example; each step with the math and
+  why it is valid; a one-sentence takeaway); target_questions; target_questions + 2 questions.
 {QUESTION_RULES}
 {PROOF_RULE}
+
+{CAPSTONE_RULE}
 
 OTHER FIELDS
 - title / objective: the spec's (you may tighten the wording).
 - notation: only symbols actually used, each introduced in the text before it is used ([] if none).
-- common_mistakes: concrete errors for this objective. connection: 1–2 sentences — what this enables next (name
-  later skills by key) and what it builds on. source_refs: printed item numbers only ("1.1", "Example 1.2").
+- connection: 1–2 sentences — what this enables next (name later skills by key) and what it builds on. source_refs:
+  printed item numbers only ("1.1", "Example 1.2"). There is no "common mistakes" section.
 - Book figures: refer only to figures listed in the request; place one with [[figure:ID]] on its own line in a
   block body, or use format book_figure. Never describe a figure that is not listed.
 
@@ -326,10 +387,12 @@ stated prerequisites (the spec's assumed_prerequisites) — nothing else from th
 
 {PRINCIPLE}
 
+{V2_FEEDBACK}
+
 HOW TO REVIEW: work through the lesson as that learner would, block by block. For each block, say to yourself what
 it asks the learner to accept or do, and check that the earlier blocks (or the stated prerequisites) give it. Solve
 every inline check and every practice question yourself and compare with the stored answer, answer format and
-solution. For each equation transition, new symbol, example, table and exercise, ask: is its meaning and the
+solution, and every step of the capstone. For each equation transition, new symbol, example, table and exercise, ask: is its meaning and the
 reasoning it requires already established at that point? Report each problem as: location (block number and heading, or the
 exercise key) → what the learner must infer → why the current explanation is insufficient → the smallest adequate
 repair. severity 'blocking' = the learner cannot follow, is misled, or cannot do the exercise with what was taught;
@@ -356,6 +419,26 @@ Look specifically for:
 - math errors anywhere: recompute every computation, every answer, every inline-check answer, every true/false
   letter and every multiple-choice key → math_errors (say what is wrong and the correct value);
 - "How many of these are true" style questions (they must be true_false_set);
+- a free_response question, or any question that asks the learner to show / write out their working (only the
+  answer is checked) → issue (blocking) at its key; repair: a typed numeric/expression answer, or a multistep
+  walkthrough;
+- drill without a new demand: a practice question that asks for the same procedure as an earlier question of the
+  lesson (the teaching checks and the faded example included) on new numbers → issue (blocking) at its key — ONE
+  straightforward independent application of the lesson's main procedure before the capstone is fine; repair:
+  replace it with a different demand (a new case, a prediction without the full computation, spotting the error in
+  a shown working, a reverse problem, interpreting a result, choosing the method) or drop it and lower
+  target_questions;
+- the served sequence (the first target_questions questions of each knowledge point in order, then the capstone)
+  asking for the lesson's main procedure from scratch more than once before the capstone — e.g. a later knowledge
+  point whose first question is the earlier computation in a new wrapper ("solve $(1+2i)z=4+3i$" after "compute
+  $(2+3i)/(1+2i)$") → issue (blocking) at that key; repair: lead that knowledge point with its own new demand
+  (reorder its questions or replace the question);
+- a knowledge point that demonstrates nothing new over the previous one, or a target_questions larger than the
+  point's real variety (the learner would repeat themselves) → issue (blocking for a repeating knowledge point,
+  minor for an inflated target); repair: drop / merge it, or lower target_questions;
+- the capstone: missing, not multistep, a step that only repeats a practice question, or steps that do not chain
+  (independent mini-questions instead of one problem whose later steps use earlier results) → issue (blocking) at
+  "cap"; a wrong step answer → math_errors;
 - main-path content the objective, the success check and the practice do not need (an extra identity or law, a
   digression) → an issue (minor, or blocking when it crowds out needed reasoning); repair: drop it or move it to
   'deeper';

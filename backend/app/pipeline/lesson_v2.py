@@ -7,10 +7,12 @@
                                                                                 → validate → persist → verify
 
 Stored as skills.lesson_json = {"format": "v2", title, objective, goal_line, blocks (inline checks with their answers —
-never sent to the browser), notation, knowledge_points (without questions), common_mistakes, connection, deeper,
-source_refs, plan (the TeachingSpec), review (the final LessonReview), initial_review (when revised),
-why_it_matters/idea/missing_steps: ""}. Practice questions use the v1 question path (validation, insert, retire,
-verification); viz_json = {"format": "none"} because visuals live in the blocks.
+never sent to the browser), notation, knowledge_points (without questions, with target_questions), common_mistakes
+(always [] — no such section any more), connection, deeper, source_refs, plan (the TeachingSpec), review (the final
+LessonReview), initial_review (when revised), why_it_matters/idea/missing_steps: ""}. Practice questions use the v1
+question path (validation, insert, retire, verification); the capstone (the final multistep problem, key 'cap') is
+a question with role 'capstone' and kp_index = the number of knowledge points; viz_json = {"format": "none"}
+because visuals live in the blocks.
 """
 
 from __future__ import annotations
@@ -53,13 +55,14 @@ from .lessons import (
     InvalidLesson,
     abandon_active_tasks,
     figures_for_skill,
+    free_response_problem,
     is_proof_skill,
     resolve_figures,
     retire_questions,
     validate_lesson,
 )
 from .prompts_v2 import PLANNER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, REVISION_NOTE, WRITER_INSTRUCTIONS
-from .questions import InvalidQuestion, clean_question, insert_questions
+from .questions import CAPSTONE_KEY, InvalidQuestion, clean_question, insert_questions
 from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
 from .verify import verify_skill
 from .visuals import FINALIZE_TIMEOUT, finalize_plan
@@ -469,8 +472,8 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
     else:
         lines += ["", "Book figures for this lesson: none — do not refer to any figure."]
     if is_proof_skill({"kind": spec.kind, "objective": spec.objective}):
-        lines += ["", "This is a PROOF skill: follow PROOF SKILLS in the instructions (free_response proof as q2 and, "
-                  "where natural, a second one as q4)."]
+        lines += ["", "This is a PROOF skill: follow PROOF SKILLS in the instructions (multistep walkthroughs of the "
+                  "proofs — never free_response)."]
     exercise_pages = [
         r["page_index"]
         for r in db.query("SELECT page_index FROM pages WHERE course_id = ? AND is_exercise_page = 1", (course.id,))
@@ -563,8 +566,37 @@ def _visual_lines(viz: dict[str, Any] | None, indent: str = "   ") -> list[str]:
     return lines
 
 
-def render_lesson(lesson: LessonV2Draft | dict[str, Any], questions: dict[int, list[QuestionDraft | dict]] | None = None) -> str:
-    """Readable text of a draft (or a stored v2 lesson dict + its question pools) for the reviewer and reports."""
+def _question_lines(q: QuestionDraft | dict[str, Any], indent: str = "  ") -> list[str]:
+    """A practice question or the capstone as text (multistep: every step with its answer, hint and explanation)."""
+    q = q.model_dump() if isinstance(q, QuestionDraft) else q
+    lines = [f"{indent}{q['key']} [{q['kind']}, tier {q['tier']}]: {q['prompt']}"]
+    if q["kind"] == "true_false_set":
+        lines += [f"{indent}    statement {i}. {s}" for i, s in enumerate(q.get("choices") or [], start=1)]
+    elif q.get("choices"):
+        lines += [f"{indent}    option {i}. {s}" for i, s in enumerate(q.get("choices") or [])]
+    for i, step in enumerate(q.get("steps") or [], start=1):
+        lines.append(f"{indent}    step {i} [{step['kind']}]: {step['prompt']}")
+        if step["kind"] == "true_false_set":
+            lines += [f"{indent}        statement {j}. {c}" for j, c in enumerate(step.get("choices") or [], start=1)]
+        elif step.get("choices"):
+            lines += [f"{indent}        option {j}. {c}" for j, c in enumerate(step.get("choices") or [])]
+        key = step.get("answer") or (f"option {step['correct_choice']}" if step.get("correct_choice") is not None else "")
+        lines.append(f"{indent}        answer: {key or '—'} · {step.get('answer_display', '')}")
+        lines.append(f"{indent}        hint: {step.get('hint', '')} · explanation: {step.get('explanation', '')}")
+    if q["kind"] != "multistep":
+        key = q.get("answer") or (f"option {q['correct_choice']}" if q.get("correct_choice") is not None else "")
+        lines.append(f"{indent}    answer: {key or '—'} · {q.get('answer_display', '')}")
+    lines.append(f"{indent}    solution: {q.get('solution', '')}")
+    return lines
+
+
+def render_lesson(
+    lesson: LessonV2Draft | dict[str, Any],
+    questions: dict[int, list[QuestionDraft | dict]] | None = None,
+    capstone: QuestionDraft | dict[str, Any] | None = None,
+) -> str:
+    """Readable text of a draft (or a stored v2 lesson dict + its question pools and capstone, see
+    stored_questions) for the reviewer and reports."""
     d = lesson.model_dump() if isinstance(lesson, LessonV2Draft) else lesson
     lines = [f"Title: {d.get('title', '')}", f"Your goal: {d.get('goal_line', '')}", "", "TEACHING SEQUENCE"]
     for i, b in enumerate(d.get("blocks") or [], start=1):
@@ -578,27 +610,46 @@ def render_lesson(lesson: LessonV2Draft | dict[str, Any], questions: dict[int, l
     if notation:
         lines += ["Notation: " + "; ".join(f"{n['symbol']} = {n['meaning']}" for n in notation)]
     lines += [f"Go deeper (optional section): {d.get('deeper') or '—'}"]
-    lines += ["Common mistakes: " + ("; ".join(d.get("common_mistakes") or []) or "—")]
     lines += [f"Connection: {d.get('connection', '')}", "", "PRACTICE (after the sequence)"]
     for k, kp in enumerate(d.get("knowledge_points") or []):
-        lines += [f"Knowledge point {k + 1}: {kp.get('title', '')}", f"  Reminder: {kp.get('explanation', '')}"]
+        lines += [
+            f"Knowledge point {k + 1}: {kp.get('title', '')} — target_questions {kp.get('target_questions', '?')} "
+            "(served first; the rest only after a miss and in reviews)",
+            f"  Reminder: {kp.get('explanation', '')}",
+        ]
         example = kp.get("worked_example") or {}
         lines.append(f"  Worked example: {example.get('problem', '')}")
         lines += [f"    · {s.get('math', '')}  — {s.get('why', '')}" for s in example.get("steps") or []]
         lines.append(f"    takeaway: {example.get('takeaway', '')}")
         pool = kp.get("questions") if questions is None else questions.get(k, [])
         for q in pool or []:
-            q = q.model_dump() if isinstance(q, QuestionDraft) else q
-            lines.append(f"  {q['key']} [{q['kind']}, tier {q['tier']}]: {q['prompt']}")
-            if q["kind"] == "true_false_set":
-                lines += [f"      statement {i}. {s}" for i, s in enumerate(q.get("choices") or [], start=1)]
-            elif q.get("choices"):
-                lines += [f"      option {i}. {s}" for i, s in enumerate(q.get("choices") or [])]
-            key = q.get("answer") or (f"option {q['correct_choice']}" if q.get("correct_choice") is not None else "")
-            lines.append(f"      answer: {key or '—'} · {q.get('answer_display', '')}")
-            lines.append(f"      solution: {q.get('solution', '')}")
+            lines += _question_lines(q)
         lines.append("")
+    cap = d.get("capstone") if capstone is None and questions is None else capstone
+    lines.append("CAPSTONE (the final multistep problem, after the practice)")
+    lines += _question_lines(cap) if cap else ["  (none)"]
     return "\n".join(lines)
+
+
+def stored_questions(skill_id: str) -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any] | None]:
+    """The skill's current (not retired) questions as render_lesson takes them: pools by KP and the capstone."""
+    rows = db.query(
+        "SELECT * FROM questions WHERE skill_id = ? AND key NOT LIKE 'old-%' ORDER BY kp_index, rowid", (skill_id,)
+    )
+    pools: dict[int, list[dict[str, Any]]] = {}
+    capstone = None
+    for r in rows:
+        q = {
+            **r,
+            "choices": db.loads(r["choices_json"], []),
+            "steps": db.loads(r.get("steps_json"), []) or [],
+            "key": r["key"] + (" (flagged)" if r["flagged"] else ""),
+        }
+        if r.get("role") == "capstone":
+            capstone = q
+        else:
+            pools.setdefault(r["kp_index"], []).append(q)
+    return pools, capstone
 
 
 def review_request(spec: TeachingSpec, draft: LessonV2Draft, *, key: str, revised: bool) -> str:
@@ -728,6 +779,7 @@ def clean_inline_check(check: InlineCheck) -> dict[str, Any]:
         checklist=[],
         targets="",
         source_exercise=None,
+        steps=[],
     )
     q = clean_question(draft)
     return {
@@ -741,19 +793,48 @@ def clean_inline_check(check: InlineCheck) -> dict[str, Any]:
     }
 
 
+def clean_capstone(q: QuestionDraft) -> QuestionDraft:
+    """The lesson's final problem: a valid multistep question (2-4 machine-checked steps, each with a hint and an
+    explanation), stored with key 'cap' and tier 3. Raises InvalidQuestion."""
+    if q.kind != "multistep":
+        raise InvalidQuestion(f"must be a multistep question (2–4 guided, machine-checked steps), not {q.kind}")
+    return clean_question(q).model_copy(update={"key": CAPSTONE_KEY, "tier": 3})
+
+
+def capstone_problem(draft: LessonV2Draft) -> str | None:
+    try:
+        clean_capstone(draft.capstone)
+    except InvalidQuestion as e:
+        return f"capstone: {e}"
+    return None
+
+
+def content_problems(draft: LessonV2Draft) -> list[str]:
+    """The content rules a strict validation may not reach after its first problem: no free_response anywhere, and a
+    valid multistep capstone."""
+    problems = [
+        free_response_problem(i, [q.key or "?" for q in kp.questions if q.kind == "free_response"])
+        for i, kp in enumerate(draft.knowledge_points)
+        if any(q.kind == "free_response" for q in kp.questions)
+    ]
+    cap = capstone_problem(draft)
+    return problems + ([cap] if cap else [])
+
+
 def clean_goal(text: str) -> str:
     return _GOAL_PREFIX.sub("", text or "", count=1).strip()
 
 
 async def validate_v2(
     draft: LessonV2Draft, spec: TeachingSpec, figures: list[FigureInfo], *, proof: bool = False, strict: bool = True
-) -> tuple[dict[str, Any], list[list[QuestionDraft]], list[str]]:
-    """Validate a draft: inline checks (rules of their kind), block visuals (finalized like v1 visual plans), and the
-    knowledge points + questions with the v1 machinery (proof rule, choice cap, refs). A faded_example's check must be
-    machine-checked (never 'reflect'). strict=True raises InvalidLesson on the first problem; strict=False repairs what
-    it can (a check block without a valid check becomes an explain/demonstrate block, a faded_example with a reflect
-    check a check block) and reports notes. Returns (lesson_json without plan/review, question pools
-    in serving order, notes)."""
+) -> tuple[dict[str, Any], list[list[QuestionDraft]], QuestionDraft | None, list[str]]:
+    """Validate a draft: inline checks (rules of their kind), block visuals (finalized like v1 visual plans), the
+    knowledge points + questions with the v1 machinery (targets, no free_response, choice cap, refs) and the capstone
+    (a multistep question). A faded_example's check must be machine-checked (never 'reflect'). strict=True raises
+    InvalidLesson on the first problem; strict=False repairs what it can (a check block without a valid check becomes
+    an explain/demonstrate block, a faded_example with a reflect check a check block, free_response questions are
+    dropped, an invalid capstone is left out) and reports notes. Returns (lesson_json without plan/review, question
+    pools in serving order, the capstone or None, notes)."""
     notes: list[str] = []
     if len(draft.blocks) > MAX_BLOCKS:
         notes.append(f"kept the first {MAX_BLOCKS} of {len(draft.blocks)} blocks")
@@ -828,12 +909,19 @@ async def validate_v2(
         notation=draft.notation,
         knowledge_points=draft.knowledge_points,
         missing_steps="",
-        common_mistakes=draft.common_mistakes,
+        common_mistakes=[],
         connection=draft.connection,
         source_refs=draft.source_refs or spec.source_refs,
     )
     base, pools, kp_notes = validate_lesson(as_v1, proof=proof, strict=strict)
-    notes += kp_notes
+    notes += [n for n in kp_notes if not n.startswith("proof skill without a multistep")]
+    try:
+        capstone: QuestionDraft | None = clean_capstone(draft.capstone)
+    except InvalidQuestion as e:
+        if strict:
+            raise InvalidLesson(f"capstone: {e}") from e
+        capstone = None
+        notes.append(f"no valid capstone (capstone: {e}) — the lesson ends after the practice")
     lesson = {
         "format": "v2",
         "title": spec.title,
@@ -842,7 +930,7 @@ async def validate_v2(
         "blocks": blocks,
         "notation": base["notation"],
         "knowledge_points": base["knowledge_points"],
-        "common_mistakes": [m.strip() for m in draft.common_mistakes if m.strip()],
+        "common_mistakes": [],
         "connection": draft.connection.strip(),
         "deeper": draft.deeper.strip(),
         "source_refs": base["source_refs"] or clean_source_refs(spec.source_refs),
@@ -850,16 +938,21 @@ async def validate_v2(
         "idea": "",
         "missing_steps": "",
     }
-    return lesson, pools, notes
+    return lesson, pools, capstone, notes
 
 
 async def draft_problems(draft: LessonV2Draft, spec: TeachingSpec, figures: list[FigureInfo], *, proof: bool) -> list[str]:
-    """Strict validation as a list of problems ([] = usable as is)."""
+    """Strict validation as a list of problems ([] = usable as is): the first problem the strict pass meets, plus the
+    content rules it may not have reached (free_response questions, the capstone) — one revision fixes them all."""
+    problems: list[str] = []
     try:
         await validate_v2(draft, spec, figures, proof=proof, strict=True)
     except (InvalidLesson, InvalidQuestion) as e:
-        return [str(e)]
-    return []
+        problems.append(str(e))
+    for problem in content_problems(draft):
+        if problem not in problems:
+            problems.append(problem)
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -874,10 +967,12 @@ def persist_v2_lesson(
     *,
     spec: TeachingSpec,
     figure_ids: list[str],
+    capstone: QuestionDraft | None = None,
 ) -> int:
     """Store a v2 lesson in one transaction, like persist_lesson: active tasks on the skill are abandoned, questions of
-    the previous version deleted (answered ones retired), the new questions inserted, and the skill row updated from
-    the spec (title, objective, kind, difficulty, minutes, pages, refs, misconceptions; summary = the goal line).
+    the previous version deleted (answered ones retired), the new questions inserted (the capstone with role
+    'capstone' and kp_index = the number of knowledge points), and the skill row updated from the spec (title,
+    objective, kind, difficulty, minutes, pages, refs, misconceptions; summary = the goal line).
     Returns the number of abandoned tasks."""
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -885,6 +980,8 @@ def persist_v2_lesson(
         retire_questions(conn, skill_id)
         for kp_index, pool in enumerate(pools):
             insert_questions(conn, skill_id, kp_index, pool)
+        if capstone is not None:
+            insert_questions(conn, skill_id, len(pools), [capstone], role="capstone")
         conn.execute(
             "UPDATE skills SET title = ?, objective = ?, kind = ?, difficulty = ?, est_minutes = ?, source_pages_json = ?, "
             "source_refs_json = ?, misconceptions_json = ?, summary = ?, figure_ids_json = ?, lesson_json = ?, "
@@ -960,7 +1057,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
                 final, result.revised = revised, True
                 final_review = await review_lesson(spec, revised, key=key, revised=True)
         result.final_review = final_review
-        lesson, pools, notes = await validate_v2(final, spec, figures, proof=proof, strict=False)
+        lesson, pools, capstone, notes = await validate_v2(final, spec, figures, proof=proof, strict=False)
         result.notes += notes
     except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
         log.exception("v2 lesson %s failed", key)
@@ -980,14 +1077,17 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
     result.notes += figure_notes
     visual_figures = [b["visual"]["book_figure_id"] for b in lesson["blocks"] if b.get("visual") and b["visual"].get("book_figure_id")]
     figure_ids = list(dict.fromkeys(figure_ids + visual_figures))
-    result.abandoned_tasks = persist_v2_lesson(skill_id, lesson, pools, spec=spec, figure_ids=figure_ids)
+    result.abandoned_tasks = persist_v2_lesson(skill_id, lesson, pools, spec=spec, figure_ids=figure_ids, capstone=capstone)
     ctx.abandoned_tasks += result.abandoned_tasks
     for note in result.notes:
         tracker.log(f"Lesson {key} (v2): {note}", level=logging.WARNING)
     n_checks = sum(1 for b in lesson["blocks"] if b.get("check"))
+    targets = "/".join(str(kp["target_questions"]) for kp in lesson["knowledge_points"])
     tracker.log(
-        f"Lesson {key} (v2) ready — {len(lesson['blocks'])} blocks, {n_checks} checks, {len(pools)} knowledge points, "
-        f"{sum(len(p) for p in pools)} questions · final review: {review_summary(final_review)}"
+        f"Lesson {key} (v2) ready — {len(lesson['blocks'])} blocks, {n_checks} checks, {len(pools)} knowledge points "
+        f"(targets {targets}), {sum(len(p) for p in pools)} questions, "
+        + (f"a {len(capstone.steps)}-step capstone" if capstone else "no capstone")
+        + f" · final review: {review_summary(final_review)}"
     )
     result.verify_notes = await verify_skill(skill_id)
     for note in result.verify_notes:
@@ -1027,6 +1127,8 @@ def is_v2(lesson_json: str | None) -> bool:
 __all__ = [
     "BridgeIssue",
     "InvalidPlan",
+    "clean_capstone",
+    "content_problems",
     "PlanGraph",
     "V2Result",
     "clean_inline_check",
@@ -1043,6 +1145,7 @@ __all__ = [
     "review_lesson",
     "review_lines",
     "review_summary",
+    "stored_questions",
     "stored_spec",
     "validate_plan",
     "validate_v2",

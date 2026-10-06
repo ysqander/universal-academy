@@ -113,7 +113,12 @@ async def _top_up(skill: dict[str, Any], lesson: dict[str, Any], kp: int, n: int
         label=f"top-up {skill['key']} KP{kp + 1}",
         stream=True,
     )
-    kept, dropped = clean_questions(draft.questions, f"top-up {skill['key']} KP {kp + 1}")
+    written = [q.key for q in draft.questions if q.kind == "free_response"]
+    if written:  # new content has no written answers (no "show your working"): SPEC §4.2b
+        log.warning("top-up %s KP %d: dropped free_response question(s) %s", skill["key"], kp + 1, ", ".join(written))
+    kept, dropped = clean_questions(
+        [q for q in draft.questions if q.kind != "free_response"], f"top-up {skill['key']} KP {kp + 1}"
+    )
     for reason in dropped:
         log.warning("dropped %s", reason)
     for q in kept:
@@ -227,11 +232,12 @@ def topup_request(
         lines += [
             "",
             (
-                "This is a proof skill: make at least one of the new questions a free_response proof of a statement "
-                "of this knowledge point, with a model proof as the solution and a checklist of 2–5 concrete criteria."
+                "This is a proof skill: make at least one of the new questions a multistep walkthrough of a proof of a "
+                "statement of this knowledge point (2–4 machine-checked steps: which definition applies, the next "
+                "justified line, which law justifies it)."
             ),
         ]
-    lines += ["", "Existing questions (do not repeat or reword):"]
+    lines += ["", "Existing questions (do not repeat or reword them, and do not make the same demand again):"]
     lines += [f"- [{r['kind']}, tier {r['tier']}] {r['prompt']}" for r in existing] or ["(none)"]
     if passages:
         lines += ["", "Source passage:"]

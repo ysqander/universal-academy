@@ -8,11 +8,15 @@ import sqlite3
 
 from .. import db
 from ..learning.grading import check_answer, parse_true_false_set
-from ..llm_schemas import QuestionDraft
+from ..llm_schemas import MultistepStep, QuestionDraft
 
 log = logging.getLogger("ua.pipeline.questions")
 
-MACHINE_CHECKABLE = {"multiple_choice", "true_false", "true_false_set", "numeric", "expression"}
+STEP_KINDS = {"multiple_choice", "true_false", "true_false_set", "numeric", "expression"}
+# multistep: every step is one of STEP_KINDS, so the whole question is machine-checked (and verified step by step)
+MACHINE_CHECKABLE = STEP_KINDS | {"multistep"}
+MULTISTEP_STEPS = (2, 4)  # a guided multistep problem has 2-4 steps
+CAPSTONE_KEY = "cap"
 TRUE_FALSE = ["True", "False"]
 MAX_CHOICES = 6
 MAX_CHECKLIST = 5
@@ -53,6 +57,19 @@ class InvalidQuestion(ValueError):
     pass
 
 
+# "Show your working" — only the typed answer is checked, so an instruction to show working is never assessed
+# (the learner's review of the S2 lessons: such questions are not wanted). Warned about in format_warnings.
+_SHOW_WORKING = re.compile(
+    r"\b(?:show|write\s+out|write\s+down)\s+(?:all\s+)?(?:of\s+)?(?:your|the)\s+(?:working|work|steps|products)\b"
+    r"|\byour\s+working\s+must\b|\bworked\s+evaluation\b",
+    re.IGNORECASE,
+)
+
+
+def asks_to_show_working(prompt: str) -> bool:
+    return bool(_SHOW_WORKING.search(prompt or ""))
+
+
 def is_machine_checkable(kind: str) -> bool:
     return kind in MACHINE_CHECKABLE
 
@@ -65,8 +82,30 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
         raise InvalidQuestion(
             "asks how many statements are true (hides which ones the learner got wrong) — use true_false_set"
         )
-    update: dict = {"tier": min(3, max(1, int(q.tier))), "hints": [h for h in q.hints if h.strip()][:3]}
-    if q.kind == "multiple_choice":
+    update: dict = {"tier": min(3, max(1, int(q.tier))), "hints": [h for h in q.hints if h.strip()][:3], "steps": []}
+    if q.kind == "multistep":
+        low, high = MULTISTEP_STEPS
+        if not low <= len(q.steps) <= high:
+            raise InvalidQuestion(f"multistep needs {low}-{high} guided steps, got {len(q.steps)}")
+        steps = []
+        for i, step in enumerate(q.steps, start=1):
+            try:
+                steps.append(clean_step(step))
+            except InvalidQuestion as e:
+                raise InvalidQuestion(f"step {i}: {e}") from e
+        solution = q.solution.strip() or "\n\n".join(f"**Step {i}.** {s.explanation}" for i, s in enumerate(steps, start=1))
+        update |= {
+            "steps": steps,
+            "answer": "",
+            "answer_display": q.answer_display.strip() or steps[-1].answer_display,
+            "choices": [],
+            "correct_choice": None,
+            "tolerance": None,
+            "checklist": [],
+            "hints": [],  # each step carries its own hint
+            "solution": solution,
+        }
+    elif q.kind == "multiple_choice":
         choices = [c for c in q.choices if c.strip()]
         if not 2 <= len(choices) <= MAX_CHOICES or len(choices) != len(q.choices):
             raise InvalidQuestion(f"multiple choice needs 2-{MAX_CHOICES} non-empty choices")
@@ -122,6 +161,46 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
     else:
         raise InvalidQuestion(f"unknown kind {q.kind}")
     return q.model_copy(update=update)
+
+
+def clean_step(step: MultistepStep) -> MultistepStep:
+    """Validate one step of a multistep question with the rules of its kind; hint, explanation and answer_display are
+    required (the hint halves the step's point, the explanation is shown after the step). Raises InvalidQuestion."""
+    if step.kind not in STEP_KINDS:
+        raise InvalidQuestion(f"unknown step kind {step.kind}")
+    for name in ("hint", "explanation", "answer_display"):
+        if not getattr(step, name).strip():
+            raise InvalidQuestion(f"empty {name}")
+    cleaned = clean_question(
+        QuestionDraft(
+            key="step",
+            tier=1,
+            kind=step.kind,
+            prompt=step.prompt,
+            choices=step.choices,
+            correct_choice=step.correct_choice,
+            answer=step.answer,
+            answer_display=step.answer_display,
+            tolerance=step.tolerance,
+            hints=[step.hint],
+            solution=step.explanation,
+            checklist=[],
+            targets="",
+            source_exercise=None,
+            steps=[],
+        )
+    )
+    return MultistepStep(
+        prompt=cleaned.prompt.strip(),
+        kind=step.kind,
+        choices=cleaned.choices,
+        correct_choice=cleaned.correct_choice,
+        answer=cleaned.answer,
+        answer_display=step.answer_display.strip(),
+        tolerance=cleaned.tolerance,
+        hint=step.hint.strip(),
+        explanation=step.explanation.strip(),
+    )
 
 
 # "Enter both roots in any order": the order of the ANSWERS does not matter, so a tuple key becomes a set. Only a
@@ -245,21 +324,13 @@ def format_warnings(pools: list[list[QuestionDraft]]) -> list[str]:
     cued = [q.key for q in mc if length_cue(q)]
     if cued:
         notes.append(f"correct option much longer than the distractors in {', '.join(cued)}")
+    working = [q.key for q in questions if asks_to_show_working(q.prompt)]
+    if working:
+        notes.append(f"asks the learner to show working (only the answer is checked) in {', '.join(working)}")
     longest = [q for q in mc if correct_is_longest(q)]
     if len(mc) >= 3 and len(longest) / len(mc) > 0.5:
         notes.append(f"the correct option is the longest in {len(longest)} of {len(mc)} multiple-choice questions")
     return notes
-
-
-def first_free_response_second(pool: list[QuestionDraft]) -> list[QuestionDraft]:
-    """Serving order is insertion order: put the pool's first free_response question at position 2 (it must be served
-    no later than the knowledge point's second question), keeping the others in their order."""
-    index = next((i for i, q in enumerate(pool) if q.kind == "free_response"), None)
-    if index is None or index <= 1:
-        return list(pool)
-    reordered = [q for i, q in enumerate(pool) if i != index]
-    reordered.insert(1, pool[index])
-    return reordered
 
 
 def insert_questions(
@@ -269,10 +340,12 @@ def insert_questions(
     questions: list[QuestionDraft],
     *,
     pending: bool = False,
+    role: str = "practice",
 ) -> list[str]:
     """Insert questions of one knowledge point; returns their ids. Free-response questions are marked as not
     needing verification. pending=True keeps machine-checkable questions out of serving (flagged 'verification:
-    pending') until verify_question records its verdict."""
+    pending') until verify_question records its verdict. role 'capstone' marks the lesson's final multistep problem
+    (stored with kp_index = the number of knowledge points); a multistep question stores its steps in steps_json."""
     ids = []
     now = db.now_iso()
     for q in questions:
@@ -283,8 +356,8 @@ def insert_questions(
         conn.execute(
             "INSERT INTO questions(id, skill_id, key, kp_index, tier, kind, prompt, choices_json, correct_choice, "
             "answer, answer_display, tolerance, hints_json, solution, checklist_json, targets, source_exercise, "
-            "flagged, flag_reason, verify_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "flagged, flag_reason, verify_json, created_at, steps_json, role) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 qid,
                 skill_id,
@@ -307,6 +380,8 @@ def insert_questions(
                 PENDING_REASON if hold else "",
                 db.dumps(verify),
                 now,
+                db.dumps([step.model_dump() for step in q.steps]),
+                role,
             ),
         )
         ids.append(qid)

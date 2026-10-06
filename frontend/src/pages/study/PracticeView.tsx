@@ -4,9 +4,11 @@ import { WorkedExampleView } from "../../components/lesson/WorkedExampleView";
 import { Markdown } from "../../components/Markdown";
 import { SourceRefs } from "../../components/SourceRefs";
 import { StateMessage } from "../../components/StateMessage";
-import type { AnswerResult, Task } from "../../types";
+import { kpPosition } from "../../lib/score";
+import type { AnswerResult, Task, TaskProgress } from "../../types";
 import type { SuggestionAction } from "./FeedbackPanel";
 import { KpStepper } from "./KpStepper";
+import { MultistepCard } from "./MultistepCard";
 import { QuestionCard } from "./QuestionCard";
 
 interface PracticeViewProps {
@@ -19,20 +21,22 @@ interface PracticeViewProps {
   onGoToMap: () => void;
 }
 
-/** A knowledge point is failed after this many questions (SPEC §6.3), however large its pool. */
-const MAX_KP_QUESTIONS = 5;
-
 /** Practice phase (lessons) and review sets: current knowledge point's explanation + one question at a time. */
 export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier, onGoToMap }: PracticeViewProps) {
   const lesson = task.lesson;
   const { progress, question } = task;
-  const kp = lesson?.knowledge_points[progress.kp_index];
+  const inCapstone = Boolean(progress.in_capstone) || question?.role === "capstone";
+  const kp = inCapstone ? undefined : lesson?.knowledge_points[progress.kp_index];
   const explainerRef = useRef<HTMLDetailsElement>(null);
   const [explainer, setExplainer] = useState<{ kp: number; open: boolean } | null>(null);
   const explainerOpen = explainer && explainer.kp === progress.kp_index ? explainer.open : progress.kp_questions_used <= 1;
+  // The latest answer's progress (score, answered) while its feedback is on screen; the task itself moves on with
+  // Continue. Only while the task it answered is still the one shown (Continue, a flag or an easier step replace it).
+  const [scored, setScored] = useState<{ base: Task; progress: TaskProgress } | null>(null);
+  const scoredProgress = scored && scored.base === task ? scored.progress : undefined;
   // The server decides whether POST /easier would succeed now (a miss in this knowledge point that wasn't voided,
   // and a strictly easier unseen question left), so the button survives reloads and never leads to a 409.
-  const easierAllowed = task.type === "lesson" && Boolean(progress.easier_available);
+  const easierAllowed = task.type === "lesson" && Boolean(progress.easier_available) && !inCapstone;
 
   const openExplainer = () => {
     setExplainer({ kp: progress.kp_index, open: true });
@@ -41,6 +45,11 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
 
   const easier = async () => {
     if (await onEasier()) openExplainer();
+  };
+
+  const answered = (result: AnswerResult) => {
+    setScored({ base: task, progress: result.task.progress });
+    onAnswered(result);
   };
 
   const onSuggestion = (action: SuggestionAction, result: AnswerResult) => {
@@ -53,19 +62,31 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
     else openExplainer();
   };
 
-  const questionNo = progress.kp_questions_used || 1;
-  const upTo = progress.kp_questions_available ? Math.max(Math.min(progress.kp_questions_available, MAX_KP_QUESTIONS), questionNo) : 0;
+  const total = Math.max(progress.total_questions, 1);
   const position =
     task.type === "review"
-      ? `Question ${Math.min(progress.answered + 1, Math.max(progress.total_questions, 1))} of ${Math.max(progress.total_questions, 1)}`
-      : `Question ${questionNo}${upTo ? ` of up to ${upTo}` : ""}`;
+      ? `Question ${Math.min(progress.answered + 1, total)} of ${total}`
+      : // Lessons: the stepper above says "Question n of target"; the card only says when this one is an extra.
+        kpPosition(progress, kp).extra
+        ? "Extra question"
+        : null;
+
+  const cardProps = {
+    task,
+    position,
+    onAnswered: answered,
+    onContinue: (result: AnswerResult) => onAdvance(result.task),
+    onSuggestion,
+    onEasier: easierAllowed ? easier : null,
+    onTaskReplaced: onFlagged,
+  };
 
   return (
     <div className="practice-view">
-      {task.type === "lesson" && lesson && <KpStepper points={lesson.knowledge_points} progress={progress} />}
+      {task.type === "lesson" && lesson && <KpStepper points={lesson.knowledge_points} progress={progress} scored={scoredProgress} />}
       {task.type === "review" && (
-        <div className="review-progress" aria-label={position}>
-          {Array.from({ length: Math.max(progress.total_questions, 1) }, (_, i) => (
+        <div className="review-progress" aria-label={position ?? undefined}>
+          {Array.from({ length: total }, (_, i) => (
             <span key={i} data-state={i < progress.answered ? "done" : i === progress.answered ? "current" : "todo"} />
           ))}
         </div>
@@ -95,17 +116,11 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
       )}
 
       {question ? (
-        <QuestionCard
-          key={question.id}
-          task={task}
-          question={question}
-          position={position}
-          onAnswered={onAnswered}
-          onContinue={(result) => onAdvance(result.task)}
-          onSuggestion={onSuggestion}
-          onEasier={easierAllowed ? easier : null}
-          onTaskReplaced={onFlagged}
-        />
+        question.kind === "multistep" ? (
+          <MultistepCard key={question.id} question={question} {...cardProps} />
+        ) : (
+          <QuestionCard key={question.id} question={question} {...cardProps} />
+        )
       ) : (
         <StateMessage
           icon="info"

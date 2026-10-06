@@ -221,8 +221,10 @@ export const abandonTask = (taskId: string) => post<Task>(`/api/tasks/${seg(task
 /** Show the model solution. Free response: pass the committed answer so this counts as a comparison, not as help. */
 export const revealSolution = (questionId: string, response: string | null = null) =>
   post<RevealResponse>(`/api/questions/${seg(questionId)}/reveal`, { response } satisfies RevealRequest);
-/** The next hint for the current attempt; recorded server-side, so it still counts after a reload. */
-export const getHint = (questionId: string) => post<HintResponse>(`/api/questions/${seg(questionId)}/hint`);
+/** The next hint for the current attempt; recorded server-side, so it still counts after a reload. A multistep
+ * question has one hint per step (`step`): using it makes that step worth ½ point. */
+export const getHint = (questionId: string, step?: number | null) =>
+  post<HintResponse>(`/api/questions/${seg(questionId)}/hint${typeof step === "number" ? `?step=${step}` : ""}`);
 export const flagQuestion = (questionId: string, reason: string) =>
   post<Task>(`/api/questions/${seg(questionId)}/flag`, { reason });
 

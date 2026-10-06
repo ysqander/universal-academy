@@ -36,10 +36,25 @@ def test_order_sensitive_score() -> None:
 
 @pytest.mark.parametrize(
     "credits,rating",
-    [([1, 1, 1], Rating.Good), ([0, 1, 1], Rating.Hard), ([1, 1, 0.5], Rating.Hard), ([1, 0, 1], Rating.Hard), ([1, 1, 0], Rating.Again), ([0, 0, 0], Rating.Again)],
+    [
+        ([1, 1, 1], Rating.Good),  # 1.0
+        ([0, 1, 1], Rating.Good),  # 5/6 >= 0.8
+        ([1, 1, 0.5], Rating.Hard),  # 0.75
+        ([1, 0, 1], Rating.Hard),  # 0.67
+        ([1, 1, 0], Rating.Again),  # 0.5
+        ([0, 0, 0], Rating.Again),
+    ],
 )
 def test_rating_mapping(credits: list[float], rating: Rating) -> None:
     assert scheduler.rating_for_score(scheduler.review_score(credits)) == rating
+
+
+def test_rating_thresholds_and_capstone_weight() -> None:
+    assert scheduler.rating_for_score(0.8) == Rating.Good and scheduler.rating_for_score(0.7999) == Rating.Hard
+    assert scheduler.rating_for_score(0.6) == Rating.Hard and scheduler.rating_for_score(0.5999) == Rating.Again
+    # a capstone (weight 2) in 3rd place: order weights 1, 2, 3 × 2
+    assert scheduler.review_score([1, 1, 0.5], [1, 1, 2]) == pytest.approx((1 + 2 + 6 * 0.5) / 9)
+    assert scheduler.review_score([1, 1, 0.5], [1, 1, 1]) == scheduler.review_score([1, 1, 0.5])
 
 
 def test_effective_weights_max_product_and_pruning() -> None:

@@ -8,11 +8,15 @@ import { Spinner } from "../../components/Spinner";
 import { TaskMenu } from "../../components/TaskMenu";
 import { useResource } from "../../hooks/useResource";
 import { plural } from "../../lib/format";
+import { lessonEndNote, percentLabel, scoreView } from "../../lib/score";
 import { prettyTitle } from "../../lib/markdown";
 import type { NextTaskResponse, Task, TaskOption } from "../../types";
+import { ScoreMeter } from "./ScoreMeter";
 
 interface CompletionScreenProps {
   task: Task;
+  /** Questions planned just before the last answer (a halted lesson reports only what was answered). */
+  plannedBefore?: number;
   xpEarned: number;
   onSession: (next: NextTaskResponse) => void;
   onContinue: () => void;
@@ -49,7 +53,7 @@ function headline(task: Task): { icon: IconName; title: string; tone: "success" 
   return { icon: "arrowRight", title: "Task set aside", tone: "neutral" };
 }
 
-export function CompletionScreen({ task, xpEarned, onSession, onContinue, onStart, pendingKey }: CompletionScreenProps) {
+export function CompletionScreen({ task, plannedBefore = 0, xpEarned, onSession, onContinue, onStart, pendingKey }: CompletionScreenProps) {
   const next = useResource(`after:${task.id}`, (signal) => getNext(task.course_id, signal));
   const xp = useCountUp(xpEarned);
   const head = headline(task);
@@ -60,6 +64,9 @@ export function CompletionScreen({ task, xpEarned, onSession, onContinue, onStar
   const options = next.data?.options ?? [];
   const courseHref = `/courses/${encodeURIComponent(task.course_id)}`;
   const { progress } = task;
+  const score = scoreView(progress);
+  const end = task.type === "lesson" && task.outcome === "failed" ? lessonEndNote(progress, plannedBefore) : null;
+  const showScore = task.type === "lesson" && score.hasScore && (task.outcome === "passed" || task.outcome === "failed");
 
   useEffect(() => {
     if (next.data) onSession(next.data);
@@ -82,18 +89,30 @@ export function CompletionScreen({ task, xpEarned, onSession, onContinue, onStar
           <p className="completion__xp" aria-label={`${xpEarned} XP earned`}>
             <span aria-hidden="true">+{xp}</span> <span className="completion__xp-unit">XP</span>
           </p>
-        ) : task.outcome === "failed" && task.type === "lesson" ? (
-          <p className="completion__note">
-            No XP this time. That's normal for hard steps: the lesson returns in a couple of hours with fresh questions, and
-            you'll have had time to let it settle.
-          </p>
         ) : null}
         {task.type === "review" && progress.answered > 0 && (
           <p className="completion__note">
-            {progress.correct} of {progress.answered} answered correctly.
+            {/* With half points and multistep questions, the score says more than a count of right answers. */}
+            {score.hasScore ? `Score ${percentLabel(score.fraction)}.` : `${progress.correct} of ${progress.answered} answered correctly.`}
           </p>
         )}
       </div>
+
+      {showScore && (
+        <section className="completion__score" data-outcome={task.outcome}>
+          <ScoreMeter
+            view={score}
+            size="lg"
+            aside={task.outcome === "passed" ? "Passed" : end?.halted ? `Stopped after ${plural(score.answered, "question")}` : "Below the pass mark"}
+          />
+          {end && (
+            <p className="completion__note completion__score-note">
+              {end.text} No XP this time — that's normal for a hard step, and the time in between helps it settle.
+            </p>
+          )}
+        </section>
+      )}
+      {!showScore && end && <p className="completion__note completion__score-note">{end.text}</p>}
 
       {unlocked.length > 0 && task.outcome === "passed" && (
         <section className="completion__section">

@@ -5,6 +5,12 @@ A true_false_set disagreement is re-solved once, statement by statement against 
 "graph"): a single misread statement of the first solver must not flag a correct question. When that careful second
 solve agrees with the key the question stays servable (status 'agree_on_recheck', both solves recorded, logged).
 
+A multistep question (a guided problem, e.g. the lesson's capstone) is verified step by step: the solver gets the
+problem, the earlier steps with their correct results and the current step — never its answer — and its answer is
+compared with the step's key by the learner-facing grader. A disagreeing step is re-solved once by the stronger model;
+a step that still disagrees (or reports a defect) flags the whole question. verify_json = {status, steps: [per-step
+records]}.
+
 Flags are shared with the learner: a question the learner reported (any flag whose reason does not start with
 'verification:') is never un-flagged or re-verified here — verification only manages its own flags."""
 
@@ -18,13 +24,20 @@ from typing import Any
 from .. import db, llm
 from ..learning.grading import check_answer
 from ..llm_schemas import IndependentAnswer
-from .prompts import VERIFY_INSTRUCTIONS, VERIFY_STATEMENTS_RECHECK
+from .lessons import LEGACY_TARGET, kp_targets
+from .prompts import (
+    VERIFY_INSTRUCTIONS,
+    VERIFY_STATEMENTS_RECHECK,
+    VERIFY_STEP_INSTRUCTIONS,
+    VERIFY_STEP_RECHECK,
+    VERIFY_STEP_STATEMENTS_RECHECK,
+)
 from .questions import is_machine_checkable
 
 log = logging.getLogger("ua.pipeline.verify")
 
 MIN_CONFIDENCE = 0.5
-MIN_UNFLAGGED_PER_KP = 2
+MIN_UNFLAGGED_PER_KP = LEGACY_TARGET  # a KP without a stored target keeps at least this many questions servable
 VERIFICATION_PREFIX = "verification:"
 RECHECK_KINDS = {"true_false_set"}  # a disagreement on these is re-solved once before the question is flagged
 _NO_PROBLEM = {"", "none", "none.", "n/a", "no", "no problems", "no problems.", "-"}
@@ -94,15 +107,16 @@ def _describe(row: dict[str, Any], independent: IndependentAnswer) -> str:
     return repr(independent.answer)
 
 
-async def recheck(row: dict[str, Any], first: Verdict) -> Verdict:
-    """Second, careful solve of a disagreement (true_false_set): statement by statement against the stated
-    definitions, by the stronger 'graph' model. Agreement with the key keeps the question servable; a failed call
-    keeps the first verdict."""
+async def recheck(
+    row: dict[str, Any], first: Verdict, *, text: str | None = None, instructions: str = VERIFY_STATEMENTS_RECHECK
+) -> Verdict:
+    """Second, careful solve of a disagreement (a true_false_set, or a step of a multistep question) by the stronger
+    'graph' model. Agreement with the key keeps the question servable; a failed call keeps the first verdict."""
     try:
         second = await llm.structured(
             role="graph",
-            instructions=VERIFY_STATEMENTS_RECHECK,
-            text=verify_request(row),
+            instructions=instructions,
+            text=text if text is not None else verify_request(row),
             schema=IndependentAnswer,
             max_output_tokens=32000,
             label=f"verify {row['key']} (re-check)",
@@ -127,36 +141,137 @@ async def recheck(row: dict[str, Any], first: Verdict) -> Verdict:
     return Verdict(True, verdict.reason, record)  # the re-check agreed but reported a defect or was unsure
 
 
-async def verify_question(row: dict[str, Any]) -> Verdict | None:
-    """Independent solve (retried once; a true_false_set disagreement is re-checked once). None when the call failed
-    — the question stays unverified."""
+async def _solve(row: dict[str, Any], text: str, *, instructions: str, label: str) -> IndependentAnswer | None:
+    """One independent solve (role 'verify'), retried once; None when both calls failed."""
     for attempt in range(2):
         try:
-            independent = await llm.structured(
+            return await llm.structured(
                 role="verify",
-                instructions=VERIFY_INSTRUCTIONS,
-                text=verify_request(row),
+                instructions=instructions,
+                text=text,
                 schema=IndependentAnswer,
                 max_output_tokens=16000,
-                label=f"verify {row['key']}",
+                label=label,
                 stream=True,
             )
         except Exception as e:  # noqa: BLE001 — retried once, then left unverified
             log.warning("verification of question %s failed (attempt %d): %s", row["id"], attempt + 1, e)
-            continue
-        verdict = judge(row, independent)
-        if verdict.record["status"] == "disagree" and row["kind"] in RECHECK_KINDS:
-            verdict = await recheck(row, verdict)
-        # The CASE reads the current row, so a learner flag set while the call was in flight is kept as well.
-        db.execute(
-            "UPDATE questions SET verify_json = ?, "
-            "flagged = CASE WHEN flagged = 1 AND flag_reason NOT LIKE 'verification:%' THEN 1 ELSE ? END, "
-            "flag_reason = CASE WHEN flagged = 1 AND flag_reason NOT LIKE 'verification:%' THEN flag_reason ELSE ? END "
-            "WHERE id = ?",
-            (db.dumps(verdict.record), int(verdict.flagged), verdict.reason, row["id"]),
-        )
-        return verdict
     return None
+
+
+async def _verify_single(row: dict[str, Any]) -> Verdict | None:
+    independent = await _solve(row, verify_request(row), instructions=VERIFY_INSTRUCTIONS, label=f"verify {row['key']}")
+    if independent is None:
+        return None
+    verdict = judge(row, independent)
+    if verdict.record["status"] == "disagree" and row["kind"] in RECHECK_KINDS:
+        verdict = await recheck(row, verdict)
+    return verdict
+
+
+# ---------------------------------------------------------------------------
+# Multistep questions: every step is solved independently, given the earlier steps' correct results
+# ---------------------------------------------------------------------------
+
+
+def step_row(row: dict[str, Any], steps: list[dict[str, Any]], index: int) -> dict[str, Any]:
+    """One step of a multistep question shaped like a question row (for judge / recheck / verify_request)."""
+    step = steps[index]
+    return {
+        "id": row["id"],
+        "key": f"{row['key']} step {index + 1}",
+        "kind": step["kind"],
+        "prompt": step.get("prompt", ""),
+        "choices_json": db.dumps(step.get("choices") or []),
+        "answer": step.get("answer", ""),
+        "correct_choice": step.get("correct_choice"),
+        "tolerance": step.get("tolerance"),
+    }
+
+
+def _step_result(step: dict[str, Any]) -> str:
+    """An earlier step's correct result, as the solver of a later step sees it."""
+    choices = step.get("choices") or []
+    index = step.get("correct_choice")
+    if step["kind"] in ("multiple_choice", "true_false") and index is not None and 0 <= index < len(choices):
+        return choices[index]
+    if step["kind"] == "true_false_set":
+        return f"{step.get('answer', '')} ({step.get('answer_display', '')})"
+    return step.get("answer_display") or step.get("answer", "")
+
+
+def step_request(row: dict[str, Any], steps: list[dict[str, Any]], index: int) -> str:
+    """The problem, the earlier steps with their correct results, and the current step — never its answer."""
+    lines = ["PROBLEM", row["prompt"]]
+    if index:
+        lines += ["", "EARLIER STEPS (already answered — these results are correct)"]
+        for j, step in enumerate(steps[:index], start=1):
+            lines.append(f"Step {j}: {step.get('prompt', '')}")
+            choices = step.get("choices") or []
+            if step["kind"] == "true_false_set":
+                lines += [f"   statement {k}. {c}" for k, c in enumerate(choices, start=1)]
+            elif choices:
+                lines += [f"   option {k}. {c}" for k, c in enumerate(choices)]
+            lines.append(f"   Correct result of step {j}: {_step_result(step)}")
+    lines += ["", f"CURRENT STEP {index + 1} of {len(steps)} — solve only this step", verify_request(step_row(row, steps, index))]
+    return "\n".join(lines)
+
+
+def _step_recheck_instructions(kind: str) -> str:
+    return VERIFY_STEP_STATEMENTS_RECHECK if kind == "true_false_set" else VERIFY_STEP_RECHECK
+
+
+async def verify_multistep(row: dict[str, Any]) -> Verdict | None:
+    """Verify every step (concurrently); a disagreeing step is re-checked once by the stronger model. Flagged when a
+    step still disagrees, reports a defect or is unsure. None when a solve failed twice (the question stays
+    unverified)."""
+    steps = db.loads(row.get("steps_json"), []) or []
+    if not steps:
+        return Verdict(True, f"{VERIFICATION_PREFIX} a multistep question without steps", {"status": "problem", "steps": []})
+    texts = [step_request(row, steps, i) for i in range(len(steps))]
+    answers = await asyncio.gather(
+        *(
+            _solve(row, text, instructions=VERIFY_STEP_INSTRUCTIONS, label=f"verify {row['key']} step {i + 1}")
+            for i, text in enumerate(texts)
+        )
+    )
+    if any(a is None for a in answers):
+        return None
+
+    async def judged(i: int, independent: IndependentAnswer) -> Verdict:
+        srow = step_row(row, steps, i)
+        verdict = judge(srow, independent)
+        if verdict.record["status"] == "disagree":
+            verdict = await recheck(srow, verdict, text=texts[i], instructions=_step_recheck_instructions(steps[i]["kind"]))
+        return verdict
+
+    verdicts = await asyncio.gather(*(judged(i, a) for i, a in enumerate(answers)))
+    records = [{"index": i, **v.record} for i, v in enumerate(verdicts)]
+    flagged = [(i, v) for i, v in enumerate(verdicts) if v.flagged]
+    if flagged:
+        reason = "; ".join(f"step {i + 1}: {v.reason.removeprefix(VERIFICATION_PREFIX).strip()}" for i, v in flagged)
+        status = "disagree" if any(v.record["status"] == "disagree" for _, v in flagged) else "problem"
+        return Verdict(True, f"{VERIFICATION_PREFIX} {reason}", {"status": status, "steps": records})
+    rechecked = any(v.record["status"] == "agree_on_recheck" for v in verdicts)
+    note = "; ".join(v.note for v in verdicts if v.note)
+    return Verdict(False, "", {"status": "agree_on_recheck" if rechecked else "agree", "steps": records}, note)
+
+
+async def verify_question(row: dict[str, Any]) -> Verdict | None:
+    """Independent solve (retried once; a true_false_set disagreement is re-checked once; a multistep question is
+    verified step by step). None when the call failed — the question stays unverified."""
+    verdict = await (verify_multistep(row) if row["kind"] == "multistep" else _verify_single(row))
+    if verdict is None:
+        return None
+    # The CASE reads the current row, so a learner flag set while the call was in flight is kept as well.
+    db.execute(
+        "UPDATE questions SET verify_json = ?, "
+        "flagged = CASE WHEN flagged = 1 AND flag_reason NOT LIKE 'verification:%' THEN 1 ELSE ? END, "
+        "flag_reason = CASE WHEN flagged = 1 AND flag_reason NOT LIKE 'verification:%' THEN flag_reason ELSE ? END "
+        "WHERE id = ?",
+        (db.dumps(verdict.record), int(verdict.flagged), verdict.reason, row["id"]),
+    )
+    return verdict
 
 
 async def verify_skill(skill_id: str) -> list[str]:
@@ -186,13 +301,19 @@ async def reverify_skill(skill_id: str) -> list[str]:
 
 
 def keep_kps_servable(skill_id: str) -> list[str]:
-    """Never leave a knowledge point with fewer than 2 unflagged questions: un-flag the most plausible verification
-    rejects (status 'disagree_kept'). Questions flagged by the learner are never un-flagged."""
+    """Never leave a knowledge point with fewer unflagged questions than its target (target_questions; 2 for legacy
+    lessons): un-flag the most plausible verification rejects (status 'disagree_kept'). Questions flagged by the
+    learner are never un-flagged; a flagged capstone stays flagged (the lesson then ends after the practice)."""
     notes = []
-    rows = db.query("SELECT * FROM questions WHERE skill_id = ? ORDER BY kp_index, key", (skill_id,))
+    skill = db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (skill_id,))
+    targets = kp_targets(db.loads(skill["lesson_json"], None) or {}) if skill else []
+    rows = db.query(
+        "SELECT * FROM questions WHERE skill_id = ? AND role != 'capstone' ORDER BY kp_index, key", (skill_id,)
+    )
     for kp in sorted({r["kp_index"] for r in rows}):
         pool = [r for r in rows if r["kp_index"] == kp]
-        missing = MIN_UNFLAGGED_PER_KP - sum(1 for r in pool if not r["flagged"])
+        need = targets[kp] if 0 <= kp < len(targets) else MIN_UNFLAGGED_PER_KP
+        missing = need - sum(1 for r in pool if not r["flagged"])
         if missing <= 0:
             continue
         candidates = [r for r in pool if r["flagged"] and r["flag_reason"].startswith(VERIFICATION_PREFIX)]

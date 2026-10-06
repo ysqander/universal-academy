@@ -371,7 +371,7 @@ export interface Lesson {
   notation: NotationItem[];
   knowledge_points: KnowledgePoint[];
   missing_steps: string;
-  common_mistakes: string[];
+  common_mistakes: string[]; // legacy: no longer shown (SPEC §6.3)
   connection: string;
   visualization: Visualization | null;
   source_refs: string[];
@@ -396,7 +396,9 @@ export type TaskType = "lesson" | "review";
 export type TaskPhase = "learn" | "practice" | "done";
 export type TaskOutcome = "passed" | "failed" | "abandoned";
 
-// Lesson: per knowledge point, 2 independent correct answers in a row pass the KP (Math Academy rule).
+// Lesson (SPEC §6.3): each knowledge point serves its target number of questions (+1 after a miss), then the
+// multistep capstone; points 1 / 0.5 with a hint / 0 wrong or revealed; pass at score >= pass_mark.
+// streak / needed_in_row are legacy (kept for older clients).
 export interface TaskProgress {
   kp_index: number;
   kp_total: number;
@@ -416,6 +418,7 @@ export interface TaskProgress {
   planned: number; // questions planned for the whole task (lesson: KP targets + capstone)
   pass_mark: number; // 0.8
   in_capstone: boolean; // the final multistep problem is being answered
+  has_capstone: boolean; // the task ends with (or includes) a capstone
 }
 
 export interface Task {

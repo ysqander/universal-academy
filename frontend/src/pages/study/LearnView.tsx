@@ -2,6 +2,7 @@ import { Icon } from "../../components/Icon";
 import { LessonBody } from "../../components/lesson/LessonBody";
 import { LessonV2Body } from "../../components/lesson/LessonV2Body";
 import { Spinner } from "../../components/Spinner";
+import { hasCapstone, passMarkOf, percentLabel } from "../../lib/score";
 import type { Lesson, Task } from "../../types";
 
 interface LearnViewProps {
@@ -14,13 +15,14 @@ interface LearnViewProps {
 /** Lesson phase "learn": the introduction (v1) or the teaching sequence (v2), then a clear start into practice. */
 export function LearnView({ task, lesson, onStart, starting }: LearnViewProps) {
   const kps = lesson.knowledge_points.length;
+  const capstone = hasCapstone(task.progress);
   const start = (
     <div className="learn-view__start card">
       <div>
         <h2 className="learn-view__start-title">Ready to practise?</h2>
         <p className="muted">
-          {kps > 0 ? `${kps} short ${kps === 1 ? "step" : "steps"}, each with a worked example. ` : ""}
-          Two correct answers in a row — without hints — complete a step. Worth {task.xp_value} XP.
+          {kps > 0 ? `${kps} short ${kps === 1 ? "step" : "steps"}, each with a worked example${capstone ? ", then one problem that puts them together" : ""}. ` : ""}
+          A right answer earns 1 point, ½ with a hint; {percentLabel(passMarkOf(task.progress))} passes. Worth {task.xp_value} XP.
         </p>
       </div>
       <button type="button" className="btn btn--primary btn--lg" onClick={onStart} disabled={starting}>

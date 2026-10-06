@@ -57,5 +57,9 @@ def test_xp_today_per_course_and_across_courses() -> None:
 
 
 def test_xp_rules() -> None:
-    assert xp.lesson_xp(1, 0) == 3 + 2 and xp.lesson_xp(50, 1) == 20 and xp.lesson_xp(12, 3) == 12
-    assert xp.review_xp(1.0) == 5 and xp.review_xp(0.73) == 4 and xp.review_xp(0.47) == 1
+    # lessons: round(est_minutes × score), clamped 3-20, +2 at 100 %
+    assert xp.lesson_xp(10, 1.0) == 12 and xp.lesson_xp(10, 0.8) == 8 and xp.lesson_xp(10, 0.85) == 9  # half up
+    assert xp.lesson_xp(12, 0.85) == 10 and xp.lesson_xp(1, 1.0) == 3 + 2 and xp.lesson_xp(50, 0.9) == 20
+    assert xp.lesson_xp(None, 0.9) == 3 and xp.lesson_xp_value(12) == 12 and xp.lesson_xp_value(45) == 20
+    # reviews: 4 (+1 perfect) at >= 0.8, 2 at >= 0.6, else 1
+    assert [xp.review_xp(s) for s in (1.0, 0.83, 0.8, 0.79, 0.6, 0.59, 0.0)] == [5, 4, 4, 2, 2, 1, 1]

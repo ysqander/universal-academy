@@ -23,7 +23,6 @@ from .context import (
 from .prompts import LESSON_INSTRUCTIONS
 from .questions import (
     clean_questions,
-    first_free_response_second,
     MAX_CHOICE_SHARE_HARD,
     choice_share,
     format_warnings,
@@ -36,14 +35,16 @@ log = logging.getLogger("ua.pipeline.lessons")
 
 MAX_KPS = 4
 MIN_QUESTIONS_PER_KP = 2
+TARGET_RANGE = (1, 3)  # knowledge_points[].target_questions: questions served to demonstrate the KP (SPEC §6.3)
+LEGACY_TARGET = 2  # lessons stored before targets existed
 ATTEMPTS = 2
 RETIRED_REASON = "retired: lesson regenerated"
 _PROOF_VERBS = re.compile(r"^\s*(prove|justify|show)\b", re.IGNORECASE)
 
 
 def is_proof_skill(skill: dict[str, Any]) -> bool:
-    """Proof / justify skills (E1): every knowledge point is practised with a free-response proof (q2), and where
-    natural a second one (q4) for when the first was assisted."""
+    """Proof / justify skills: practised with multistep walkthroughs of the proof (choose the justified next line, the
+    law used, the hypothesis needed — each step machine-checked), never with free-text proofs."""
     return skill.get("kind") == "proof" or bool(_PROOF_VERBS.match(skill.get("objective") or ""))
 
 
@@ -109,12 +110,32 @@ async def ensure_lesson(ctx: BuildContext, skill_id: str, prefix: str, *, force:
     return False
 
 
+def clamp_target(value: Any) -> int:
+    low, high = TARGET_RANGE
+    try:
+        return min(high, max(low, int(value)))
+    except (TypeError, ValueError):
+        return LEGACY_TARGET
+
+
+def free_response_problem(kp_index: int, keys: list[str]) -> str:
+    """The validation problem for free_response questions in new content (the same text from every check)."""
+    return (
+        f"knowledge point {kp_index + 1} has free_response question(s) {', '.join(keys)}: new lessons have no written "
+        "answers (no 'show your working') — make a computation a typed numeric/expression answer and a proof or "
+        "explanation a multistep walkthrough whose steps are machine-checked"
+    )
+
+
 def validate_lesson(
     draft: LessonDraft, *, proof: bool = False, strict: bool = True
 ) -> tuple[dict[str, Any], list[list[QuestionDraft]], list[str]]:
     """Clean the questions of every knowledge point. Returns (lesson_json dict without questions, question pools per
-    KP in serving order, notes). Raises InvalidLesson when a knowledge point would be unpassable (< 2 valid
-    questions) and — for a proof skill with strict=True — when a knowledge point has no free-response proof."""
+    KP in serving order, notes). Each KP keeps its target_questions (clamped to 1-3) and needs at least target + 1
+    valid questions (target + 2 are requested): the target plus one for after a miss. New content has no
+    free_response questions and no common mistakes. strict=True raises InvalidLesson on a free_response question or
+    a pool smaller than target + 1; strict=False drops free_response questions and lowers the target to fit the
+    pool. A KP with fewer than 2 valid questions is always invalid."""
     kps = draft.knowledge_points[:MAX_KPS]
     if not kps:
         raise InvalidLesson("lesson has no knowledge points")
@@ -122,37 +143,60 @@ def validate_lesson(
     if len(draft.knowledge_points) > MAX_KPS:
         notes.append(f"kept the first {MAX_KPS} of {len(draft.knowledge_points)} knowledge points")
     pools: list[list[QuestionDraft]] = []
+    targets: list[int] = []
     used_keys: set[str] = set()
     for i, kp in enumerate(kps):
-        kept, dropped = clean_questions(kp.questions, f"KP {i + 1}")
-        notes.extend(f"dropped {d}" for d in dropped)
-        if len(kept) < MIN_QUESTIONS_PER_KP:
-            raise InvalidLesson(f"knowledge point {i + 1} has only {len(kept)} valid questions")
-        if sum(1 for q in kept if is_machine_checkable(q.kind)) < 2:
-            notes.append(f"KP {i + 1} has fewer than 2 machine-checkable questions")
-        written = sum(1 for q in kept if q.kind == "free_response")
-        if proof and not written:
-            message = f"knowledge point {i + 1} of a proof skill has no free-response proof question"
+        written = [q.key or "?" for q in kp.questions if q.kind == "free_response"]
+        if written:
+            message = free_response_problem(i, written)
             if strict:
                 raise InvalidLesson(message)
-            notes.append(message)
-        elif proof and written == 1:  # an assisted first proof then waives the written requirement for this KP
-            notes.append(f"KP {i + 1} has a single free-response proof (no second attempt if the first is assisted)")
-        pools.append(first_free_response_second(_unique_keys(kept, i, used_keys)))
+            notes.append(f"{message} — dropped")
+        kept, dropped = clean_questions([q for q in kp.questions if q.kind != "free_response"], f"KP {i + 1}")
+        notes.extend(f"dropped {d}" for d in dropped)
+        target = clamp_target(kp.target_questions)
+        if target != kp.target_questions:
+            notes.append(f"KP {i + 1}: target_questions {kp.target_questions} clamped to {target}")
+        if len(kept) < MIN_QUESTIONS_PER_KP:
+            raise InvalidLesson(f"knowledge point {i + 1} has only {len(kept)} valid questions")
+        if len(kept) < target + 1:
+            message = (
+                f"knowledge point {i + 1} has {len(kept)} valid questions for target_questions {target} (at least "
+                f"{target + 1} are needed — the target plus one for after a miss; write {target + 2})"
+            )
+            if strict:
+                raise InvalidLesson(message)
+            target = len(kept) - 1
+            notes.append(f"{message} — target lowered to {target}")
+        if sum(1 for q in kept if is_machine_checkable(q.kind)) < 2:
+            notes.append(f"KP {i + 1} has fewer than 2 machine-checkable questions")
+        targets.append(target)
+        pools.append(_unique_keys(kept, i, used_keys))
+    if proof and not any(q.kind == "multistep" for pool in pools for q in pool):
+        notes.append("proof skill without a multistep walkthrough among its practice questions")
     share = choice_share(pools)
     if strict and share > MAX_CHOICE_SHARE_HARD:
         raise InvalidLesson(
             f"{share:.0%} of the questions are multiple choice or true/false (at most 40%); replace most of them with "
-            "typed numeric/expression questions (concrete instances) or free_response explanations"
+            "typed numeric/expression questions (concrete instances) or multistep walkthroughs"
         )
     notes += format_warnings(pools)
     lesson = draft.model_dump()
-    lesson["knowledge_points"] = [{k: v for k, v in kp.model_dump().items() if k != "questions"} for kp in kps]
+    lesson["knowledge_points"] = [
+        {**{k: v for k, v in kp.model_dump().items() if k != "questions"}, "target_questions": target}
+        for kp, target in zip(kps, targets)
+    ]
+    lesson["common_mistakes"] = []  # no "common mistakes" section in new lessons (the learner's review)
     refs = clean_source_refs(draft.source_refs)
     if len(refs) < len(draft.source_refs):
         notes.append(f"kept {len(refs)} of {len(draft.source_refs)} source refs (item numbers only)")
     lesson["source_refs"] = refs
     return lesson, pools, notes
+
+
+def kp_targets(lesson: dict[str, Any]) -> list[int]:
+    """target_questions of each stored knowledge point (legacy lessons: 2)."""
+    return [clamp_target(kp.get("target_questions", LEGACY_TARGET)) for kp in lesson.get("knowledge_points") or []]
 
 
 def _unique_keys(questions: list[QuestionDraft], kp_index: int, used: set[str]) -> list[QuestionDraft]:
@@ -364,9 +408,8 @@ def lesson_request(course: CourseInfo, skill: dict[str, Any]) -> str:
         lines += [
             "",
             (
-                "This is a PROOF skill: every knowledge point needs a free_response proof question as its q2 and, "
-                "wherever natural, a second free_response proof of a variant as its q4 (see PROOF SKILLS in the "
-                "instructions)."
+                "This is a PROOF skill: practise it with multistep walkthroughs of the proofs (see PROOF SKILLS in the "
+                "instructions) — never free_response."
             ),
         ]
     if exercise_pages:

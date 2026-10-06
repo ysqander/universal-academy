@@ -155,7 +155,7 @@ def test_faded_example_needs_a_machine_checked_check():
     index = next(i for i, b in enumerate(broken.blocks) if b.kind == "faded_example")
     with pytest.raises(InvalidLesson, match=f"block {index + 1}.*faded_example's check must be machine-checked.*not 'reflect'"):
         asyncio.run(validate_v2(broken, spec, []))
-    lesson, _, notes = asyncio.run(validate_v2(broken, spec, [], strict=False))
+    lesson, _, _, notes = asyncio.run(validate_v2(broken, spec, [], strict=False))
     assert lesson["blocks"][index]["kind"] == "check" and lesson["blocks"][index]["check"]["kind"] == "reflect"
     assert any("faded_example with a 'reflect' check shown as a check block" in n for n in notes)
     assert "no faded example" in notes
@@ -164,7 +164,7 @@ def test_faded_example_needs_a_machine_checked_check():
         ok = broken.model_copy(deep=True)
         ok.blocks[index].check = InlineCheck(**({"kind": kind, "prompt": "Finish it.", "choices": [], "correct_choice": None,
                                                  "answer": "", "answer_display": "", "explanation": "e"} | fields))
-        lesson, _, _ = asyncio.run(validate_v2(ok, spec, []))
+        lesson, _, _, _ = asyncio.run(validate_v2(ok, spec, []))
         assert lesson["blocks"][index]["kind"] == "faded_example"
 
 
@@ -246,7 +246,7 @@ ORDERED_PROMPTS = [
 def _expression(prompt: str, answer: str = "(1, 7)") -> QuestionDraft:
     return QuestionDraft(key="k1q1", tier=1, kind="expression", prompt=prompt, choices=[], correct_choice=None,
                          answer=answer, answer_display="", tolerance=None, hints=["a", "b", "c"], solution="s",
-                         checklist=[], targets="", source_exercise=None)
+                         checklist=[], targets="", source_exercise=None, steps=[])
 
 
 @pytest.mark.parametrize("prompt", UNORDERED_PROMPTS)

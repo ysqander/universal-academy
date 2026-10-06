@@ -1,4 +1,5 @@
-"""Lesson validation and the lesson view: proof skills, answer-format balance, source refs, figures, legacy repair."""
+"""Lesson validation and the lesson view: proof skills (walkthroughs), no written answers, knowledge-point targets,
+answer-format balance, source refs, figures, legacy repair."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from app import db, fake_llm
 from app.llm_schemas import LessonDraft, QuestionDraft
 from app.pipeline.context import FigureInfo
 from app.pipeline.lessons import InvalidLesson, is_proof_skill, resolve_figures, validate_lesson
-from app.pipeline.questions import first_free_response_second, format_warnings, length_cue
+from app.pipeline.questions import format_warnings, length_cue
 from app.pipeline.textutil import clean_source_refs
 from app.views import lesson_view, visualization_view
 
@@ -34,6 +35,7 @@ def mc(key: str, choices: list[str], correct: int) -> QuestionDraft:
         checklist=[],
         targets="t",
         source_exercise=None,
+        steps=[],
     )
 
 
@@ -70,52 +72,78 @@ def test_proof_skill_detection():
     assert not is_proof_skill({"kind": "computation", "objective": "Compute $(a+bi)(c+di)$."})
 
 
-def test_proof_lesson_needs_a_free_response_in_every_knowledge_point():
-    draft = fake_draft()  # a computation lesson: KP 1 has no free-response question
-    with pytest.raises(InvalidLesson, match="knowledge point 1 of a proof skill"):
-        validate_lesson(draft, proof=True)
-    _, _, notes = validate_lesson(draft, proof=True, strict=False)
-    assert any("no free-response proof" in n for n in notes)
-    _, pools, _ = validate_lesson(fake_draft("Write the lesson package for skill S2: Justify\nKind: proof"), proof=True)
-    assert all("free_response" in [q.kind for q in pool[:2]] for pool in pools)
+def free_response(key: str) -> QuestionDraft:
+    return QuestionDraft(
+        key=key, tier=2, kind="free_response",
+        prompt="Write a worked evaluation of $(3-2i)(-1+4i)$. Your working must show all four products.",
+        choices=[], correct_choice=None, answer="", answer_display="See the model answer.", tolerance=None,
+        hints=["a", "b", "c"], solution="model", checklist=["four products", "uses $i^2=-1$"], targets="t",
+        source_exercise=None, steps=[],
+    )
 
 
-def test_proof_lessons_ask_for_and_keep_a_second_written_proof_per_knowledge_point(tmp_path):
-    """E1: a second free_response (q4) lets an assisted first proof be retried instead of waived."""
+def test_new_lessons_have_no_free_response_questions():
+    """The learner's review of S2: no "show your working" questions — a draft with one is revised (strict) or loses it."""
+    draft = fake_draft()
+    draft.knowledge_points[0].questions.insert(1, free_response("k1q9"))
+    with pytest.raises(InvalidLesson, match="knowledge point 1 has free_response question.* k1q9"):
+        validate_lesson(draft)
+    lesson, pools, notes = validate_lesson(draft, strict=False)
+    assert all(q.kind != "free_response" for pool in pools for q in pool)
+    assert any("free_response" in n and n.endswith("dropped") for n in notes)
+    assert lesson["common_mistakes"] == []  # no common-mistakes section in new lessons
+
+
+def test_proof_lessons_are_practised_with_multistep_walkthroughs(tmp_path):
     from app.pipeline.context import load_course
     from app.pipeline.lessons import lesson_request
     from app.pipeline.prompts import LESSON_INSTRUCTIONS
 
-    assert "make q4 a SECOND free_response proof" in LESSON_INSTRUCTIONS
+    assert "free_response" not in LESSON_INSTRUCTIONS.split("PROOF SKILLS")[1].split("QUESTIONS")[0]
+    assert "multistep walkthrough" in LESSON_INSTRUCTIONS
     _, pools, notes = validate_lesson(fake_draft("Write the lesson package for skill S2: Justify\nKind: proof"), proof=True)
-    for pool in pools:
-        kinds = [q.kind for q in pool]
-        assert kinds[1] == "free_response" and kinds[3] == "free_response" and kinds.count("free_response") == 2
-    assert not any("single free-response proof" in n for n in notes)
-
-    single = fake_draft("Write the lesson package for skill S2: Justify\nKind: proof")
-    kps = [
-        kp.model_copy(update={"questions": [q for q in kp.questions if q.key not in ("k1q6", "k2q6")]})
-        for kp in single.knowledge_points
+    assert [q.kind for q in pools[0]][1] == "multistep" and not any("without a multistep" in n for n in notes)
+    walkthrough = pools[0][1]
+    assert 2 <= len(walkthrough.steps) <= 4 and walkthrough.hints == [] and walkthrough.answer == ""
+    no_walkthrough = fake_draft()
+    no_walkthrough.knowledge_points = [
+        kp.model_copy(update={"questions": [q for q in kp.questions if q.kind != "multistep"], "target_questions": 2})
+        for kp in no_walkthrough.knowledge_points
     ]
-    _, _, notes = validate_lesson(single.model_copy(update={"knowledge_points": kps}), proof=True)
-    assert sum("single free-response proof" in n for n in notes) == 2
+    _, _, notes = validate_lesson(no_walkthrough, proof=True)
+    assert any("proof skill without a multistep walkthrough" in n for n in notes)
 
     cid = tiny_course(tmp_path)
     build(cid)
     s2 = db.query_one("SELECT * FROM skills WHERE course_id = ? AND key = 'S2'", (cid,))
-    assert "second free_response proof" in lesson_request(load_course(cid), s2)
-    rows = db.query("SELECT kp_index, kind FROM questions WHERE skill_id = ? ORDER BY rowid", (s2["id"],))
-    for kp in {r["kp_index"] for r in rows}:
-        assert [r["kind"] for r in rows if r["kp_index"] == kp].count("free_response") == 2
+    assert "multistep walkthroughs" in lesson_request(load_course(cid), s2)
+    rows = db.query("SELECT kind, steps_json, role FROM questions WHERE skill_id = ? ORDER BY rowid", (s2["id"],))
+    assert not any(r["kind"] == "free_response" for r in rows)
+    multistep = [r for r in rows if r["kind"] == "multistep"]
+    assert multistep and all(len(db.loads(r["steps_json"])) == 3 and r["role"] == "practice" for r in multistep)
+    assert all(db.loads(r["steps_json"]) == [] for r in rows if r["kind"] != "multistep")
 
 
-def test_first_free_response_moves_to_second_position():
+def test_knowledge_point_targets_are_clamped_and_need_one_spare_question():
+    lesson, pools, _ = validate_lesson(fake_draft())
+    assert [kp["target_questions"] for kp in lesson["knowledge_points"]] == [2, 3]
+    assert [len(p) for p in pools] == [4, 5]
     draft = fake_draft()
-    pool = draft.knowledge_points[1].questions  # [expression, numeric, mc, numeric, free_response]
-    ordered = first_free_response_second(pool)
-    assert [q.kind for q in ordered] == ["expression", "free_response", "numeric", "multiple_choice", "numeric"]
-    assert first_free_response_second(ordered) == ordered
+    draft.knowledge_points[0].target_questions = 7  # clamped to 3; 4 questions = 3 + 1 spare: fine
+    draft.knowledge_points[1].target_questions = 0  # clamped to 1
+    lesson, _, notes = validate_lesson(draft)
+    assert [kp["target_questions"] for kp in lesson["knowledge_points"]] == [3, 1]
+    assert any("target_questions 7 clamped to 3" in n for n in notes)
+    short = fake_draft()
+    short.knowledge_points[1].questions = short.knowledge_points[1].questions[:3]  # target 3 needs at least 4
+    with pytest.raises(InvalidLesson, match="knowledge point 2 has 3 valid questions for target_questions 3"):
+        validate_lesson(short)
+    lesson, pools, notes = validate_lesson(short, strict=False)
+    assert lesson["knowledge_points"][1]["target_questions"] == 2 and len(pools[1]) == 3
+    assert any("target lowered to 2" in n for n in notes)
+    with pytest.raises(InvalidLesson, match="only 1 valid questions"):
+        short.knowledge_points[1].questions = short.knowledge_points[1].questions[:1]
+        validate_lesson(short, strict=False)
 
 
 # ---------------------------------------------------------------------------

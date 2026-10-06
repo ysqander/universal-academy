@@ -197,7 +197,7 @@ def print_lesson(skill: dict[str, Any]) -> None:
         print(f"  notation {n.symbol}: {n.meaning}")
     questions = db.query("SELECT * FROM questions WHERE skill_id = ? ORDER BY kp_index, key", (skill["id"],))
     for kp in lesson.knowledge_points:
-        print(f"\n## KP {kp.index + 1}: {kp.title}\n{kp.explanation}")
+        print(f"\n## KP {kp.index + 1}: {kp.title} (target {kp.target_questions})\n{kp.explanation}")
         we = kp.worked_example
         print(f"\nWorked example: {we.problem}")
         for step in we.steps:
@@ -212,6 +212,8 @@ def print_lesson(skill: dict[str, Any]) -> None:
                 print(f"      answer: {q['answer']}  ({q['answer_display']})")
             for item in db.loads(q["checklist_json"], []):
                 print(f"      ☐ {item}")
+            for n, step in enumerate(db.loads(q.get("steps_json"), []) or [], start=1):
+                print(f"      step {n} [{step['kind']}] {step['prompt']} → {step.get('answer') or step.get('correct_choice')} ({step['answer_display']})")
             print(f"      hints: {db.loads(q['hints_json'])}")
             print(f"      solution: {q['solution']}")
             if q["source_exercise"]:
@@ -222,7 +224,6 @@ def print_lesson(skill: dict[str, Any]) -> None:
                 + (f" · independent {independent.get('choice')}/{independent.get('answer')!r} conf {independent.get('confidence')}" if independent else "")
             )
     print("\nShow the missing steps:", lesson.missing_steps)
-    print("Common mistakes:", lesson.common_mistakes)
     print("Connection:", lesson.connection)
     print("Source refs:", lesson.source_refs, "pages", lesson.page_labels)
     viz = db.loads(skill["viz_json"], None)

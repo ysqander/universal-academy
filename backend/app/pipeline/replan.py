@@ -43,6 +43,7 @@ from .lesson_v2 import (
     plan_skill,
     review_lines,
     review_summary,
+    stored_questions,
     validate_plan,
 )
 from .lessons import lesson_prefix
@@ -339,6 +340,19 @@ async def replan(
 # ---------------------------------------------------------------------------
 
 
+def _one_line(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def _step_lines(q: dict[str, Any]) -> list[str]:
+    lines = []
+    for i, step in enumerate(q.get("steps") or [], start=1):
+        choices = step.get("choices") or []
+        key = step.get("answer") or (choices[step["correct_choice"]] if step.get("correct_choice") is not None and step["correct_choice"] < len(choices) else "")
+        lines.append(f"        step {i} [{step['kind']}] {_one_line(step['prompt'])} → {_one_line(key)}")
+    return lines
+
+
 def report_lines(report: ReplanReport) -> list[str]:
     lines = ["PLAN", *describe_plan(report.plan, report.key)]
     if report.plan_notes:
@@ -383,10 +397,19 @@ def report_lines(report: ReplanReport) -> list[str]:
                 answer = c.get("answer") or (f"option {c['correct_choice']}" if c.get("correct_choice") is not None else c.get("answer_display", ""))
                 lines.append(f"  - [{c['kind']}] {c['prompt']} → {answer}")
         questions = db.query("SELECT kp_index, kind, flagged FROM questions WHERE skill_id = ? ORDER BY kp_index, rowid", (result.skill_id,))
-        lines.append("Knowledge points:")
+        pools, capstone = stored_questions(result.skill_id)
+        lines.append("Knowledge points (target = questions served; the rest only after a miss and in reviews):")
         for k, kp in enumerate(lesson.get("knowledge_points") or []):
-            kinds = ", ".join(q["kind"] for q in questions if q["kp_index"] == k)
-            lines.append(f"  {k + 1}. {kp.get('title', '')} — {kinds}")
+            pool = pools.get(k, [])
+            lines.append(f"  {k + 1}. {kp.get('title', '')} — target {kp.get('target_questions', '?')} of {len(pool)}")
+            for q in pool:
+                lines.append(f"     {q['key']} [{q['kind']}] {_one_line(q['prompt'])} → {_one_line(q['answer_display'])}")
+                lines += _step_lines(q)
+        if capstone:
+            lines.append(f"Capstone ({len(capstone['steps'])} steps){' — FLAGGED' if capstone['flagged'] else ''}: {_one_line(capstone['prompt'])}")
+            lines += _step_lines(capstone)
+        else:
+            lines.append("Capstone: none")
         if lesson.get("deeper"):
             lines.append(f"Go deeper: {lesson['deeper'][:300]}{'…' if len(lesson['deeper']) > 300 else ''}")
         lines.append(f"Initial review: {review_summary(result.initial_review)}")

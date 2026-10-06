@@ -1,12 +1,18 @@
-"""Task engine: unlocking, lesson passing/failing, remediation, easier step, flags, reviews, XP (SPEC §6.2-§6.4)."""
+"""Task engine: unlocking, score-based lessons (KP targets, extra questions, capstone, 80 % pass, early stop),
+remediation, easier step, flags, legacy written proofs, reviews, XP (SPEC §6.2-§6.4)."""
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
 from test_learning_fixtures import (  # noqa: F401
+    CAPSTONE_STEPS,
     T0,
+    add_capstone,
+    add_question,
+    answer_fully,
     build_course,
     card,
     days,
@@ -15,7 +21,10 @@ from test_learning_fixtures import (  # noqa: F401
     question,
     right,
     set_due,
+    set_targets,
     status,
+    step_submit,
+    task_state,
     wrong,
 )
 
@@ -32,6 +41,24 @@ def start_practice(fx, key: str, now=T0):
 
 def xp_total(course_id: str) -> int:
     return db.query_one("SELECT COALESCE(SUM(xp), 0) AS n FROM xp_log WHERE course_id = ?", (course_id,))["n"]
+
+
+def lesson_rating(skill_id: str) -> int:
+    row = db.query_one("SELECT rating FROM review_log WHERE skill_id = ? AND implicit = 0 ORDER BY created_at, rowid", (skill_id,))
+    return row["rating"]
+
+
+def failures(skill_id: str) -> dict:
+    return db.loads(db.query_one("SELECT kp_failures_json FROM progress WHERE skill_id = ?", (skill_id,))["kp_failures_json"])
+
+
+def finish(task_id: str, task, now=T0):
+    """Answer everything left correctly; returns the last AnswerResult."""
+    result = None
+    while task.phase != "done":
+        result = answer_fully(task_id, task.question.id, now)
+        task = result.task
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -63,16 +90,18 @@ def test_failed_lesson_generation_does_not_gate_dependents() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lessons
+# Lessons: plan, points, score, pass
 # ---------------------------------------------------------------------------
 
 
-def test_lesson_phases_and_pass() -> None:
+def test_lesson_phases_and_perfect_pass() -> None:
     fx = build_course(est_minutes=12)
     task_id = engine.start_lesson(fx.sid("S1"), "Next new skill", T0)
     task = engine.get_task(task_id)
     assert task.phase == "learn" and task.question is None and task.lesson is not None
     assert len(task.lesson.knowledge_points) == 2 and task.xp_value == 12
+    p = task.progress
+    assert (p.planned, p.kp_target, p.score, p.points, p.max_points, p.pass_mark, p.in_capstone) == (4, 2, 0, 0, 0, 0.8, False)
     assert status(fx.sid("S1")) == "in_progress"
     with pytest.raises(engine.Conflict):
         engine.submit_answer(task_id, right(fx.questions["S1"][0][0]), T0)
@@ -80,163 +109,412 @@ def test_lesson_phases_and_pass() -> None:
     assert task.phase == "practice" and task.question.id == fx.questions["S1"][0][0]
     assert engine.begin_practice(task_id, T0).question.id == task.question.id  # idempotent
     r1 = engine.submit_answer(task_id, right(task.question.id), T0)
-    assert r1.correct and r1.independent and r1.task.progress.streak == 1 and r1.task.progress.kp_index == 0
+    assert r1.correct and r1.independent and r1.score == 1.0 and r1.question_done and r1.step_result is None
+    assert (r1.task.progress.points, r1.task.progress.max_points, r1.task.progress.score) == (1.0, 1.0, 1.0)
+    assert r1.task.progress.kp_index == 0 and r1.task.progress.kp_questions_used == 2
     assert r1.correct_answer and r1.solution
     r2 = engine.submit_answer(task_id, right(r1.task.question.id), T0)
-    assert r2.task.progress.kp_index == 1 and r2.task.progress.streak == 0  # KP 1 passed with 2 in a row
-    assert r2.task.question.kp_index == 1
+    assert r2.task.progress.kp_index == 1 and r2.task.question.kp_index == 1  # KP 1: its 2 planned questions done
     r3 = engine.submit_answer(task_id, right(r2.task.question.id), T0)
     r4 = engine.submit_answer(task_id, right(r3.task.question.id), T0)
     assert r4.task.phase == "done" and r4.task.outcome == "passed"
-    assert r4.xp_awarded == 12 + 2  # est_minutes + no-mistakes bonus
+    assert r4.xp_awarded == 12 + 2  # round(12 × 1.0) + perfect bonus
+    assert "Lesson passed with 100%" in r4.feedback
     assert xp_total(fx.course_id) == 14
-    assert status(fx.sid("S1")) == "learned"
-    assert card(fx.sid("S1")) is not None
-    assert r4.task.progress.answered == 4 and r4.task.progress.correct == 4
+    assert status(fx.sid("S1")) == "learned" and card(fx.sid("S1")) is not None
+    assert lesson_rating(fx.sid("S1")) == 3  # Good
+    assert (r4.task.progress.answered, r4.task.progress.correct, r4.task.progress.planned) == (4, 4, 4)
 
 
-def test_lesson_xp_is_clamped_and_bonus_needs_no_mistakes() -> None:
-    fx = build_course(est_minutes=45)
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    while task.phase != "done":
-        task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.outcome == "passed" and task.xp_value == 20  # clamped, no bonus after a wrong answer
-
-
-def test_hints_and_reveals_do_not_count_toward_the_streak() -> None:
+def test_hint_is_half_a_point_and_reveal_is_zero() -> None:
     fx = build_course()
     task_id, task = start_practice(fx, "S1")
-    hinted = engine.submit_answer(task_id, right(task.question.id, hints_used=1), T0)
-    assert hinted.correct and not hinted.independent and hinted.task.progress.streak == 0
-    assert hinted.suggestion is None  # assisted is not a miss
-    qid = hinted.task.question.id
-    revealed = engine.reveal(qid, T0)
-    assert revealed.solution and revealed.correct_answer
-    after_reveal = engine.submit_answer(task_id, right(qid), T0)
-    assert after_reveal.correct and not after_reveal.independent and after_reveal.task.progress.streak == 0
-    ok = engine.submit_answer(task_id, right(after_reveal.task.question.id), T0)
-    assert ok.independent and ok.task.progress.streak == 1
+    q0 = task.question.id
+    engine.hint(q0, T0)
+    hinted = engine.submit_answer(task_id, right(q0), T0)
+    assert hinted.correct and not hinted.independent and hinted.score == 0.5 and "half a point" in hinted.feedback
+    assert hinted.suggestion is None  # assisted is not a miss to recover from with an easier question
+    p = hinted.task.progress
+    assert (p.points, p.max_points, p.score, p.kp_target, p.planned) == (0.5, 1.0, 0.5, 3, 5)  # +1 after help
+    assert "One more question on this step" in hinted.feedback
+    q1 = hinted.task.question.id
+    shown = engine.reveal(q1, T0)
+    assert shown.solution and shown.correct_answer
+    after_reveal = engine.submit_answer(task_id, right(q1), T0)
+    assert after_reveal.correct and not after_reveal.independent and after_reveal.score == 0.0
+    assert "no points" in after_reveal.feedback
+    # 0.5 + 0 of 2, and at best 4 more → 4.5 / 6 = 0.75: 80 % is out of reach, the lesson stops right here
+    assert after_reveal.task.outcome == "failed" and after_reveal.suggestion == "retry_later"
     attempts = db.query("SELECT independent, revealed, hints_used FROM attempts WHERE task_id = ? ORDER BY rowid", (task_id,))
-    assert [(a["independent"], a["revealed"], a["hints_used"]) for a in attempts] == [(0, 0, 1), (0, 1, 0), (1, 0, 0)]
+    assert [(a["independent"], a["revealed"], a["hints_used"]) for a in attempts] == [(0, 0, 1), (0, 1, 0)]
 
 
-def test_invalid_input_is_not_counted() -> None:
+def test_extra_question_after_a_miss_and_a_pass_exactly_at_80_percent() -> None:
     fx = build_course()
     task_id, task = start_practice(fx, "S1")
-    with pytest.raises(engine.Invalid):
-        engine.submit_answer(task_id, AnswerSubmit(question_id=task.question.id, response="2(("), T0)
-    with pytest.raises(engine.Conflict):
-        engine.submit_answer(task_id, right(fx.questions["S1"][1][0]), T0)  # not the current question
-    assert not db.query("SELECT 1 FROM attempts WHERE task_id = ?", (task_id,))
-    assert engine.get_task(task_id).question.id == task.question.id
+    miss = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert not miss.correct and miss.score == 0.0 and miss.task.outcome is None
+    assert (miss.task.progress.kp_target, miss.task.progress.planned) == (3, 5)
+    assert "One more question on this step comes next" in miss.feedback
+    task = miss.task
+    for expected_kp in (0, 0, 1, 1):
+        assert task.progress.kp_index == expected_kp
+        task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.outcome == "passed" and task.progress.score == pytest.approx(0.8)  # 4 / 5
+    assert task.xp_value == 8  # round(10 × 0.8), no perfect bonus
+    assert lesson_rating(fx.sid("S1")) == 2  # Hard below 0.9
+    assert task_state(task_id)["result"]["score"] == pytest.approx(0.8)
 
 
-def _fail_kp0(fx, key="S1", now=T0):
-    task_id, task = start_practice(fx, key, now)
-    result = None
-    while task.phase != "done":
-        result = engine.submit_answer(task_id, wrong(task.question.id), now)
-        task = result.task
-    return task_id, result
-
-
-def test_kp_failure_halts_lesson_with_cooldown() -> None:
+def test_score_of_90_percent_starts_with_good() -> None:
     fx = build_course()
-    task_id, result = _fail_kp0(fx)
-    assert result.task.outcome == "failed" and result.xp_awarded == 0
-    assert result.suggestion == "retry_later" and "2 hours" in result.suggestion_text
-    # 4-question pool: after 3 misses two-in-a-row is impossible, so the lesson stops early
-    assert result.task.progress.answered == 3
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id, hints_used=1), T0).task  # 0.5, one extra question
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.9)  # 4.5 / 5
+    assert lesson_rating(fx.sid("S1")) == 3 and done.xp_awarded == 9
+
+
+def test_two_misses_halt_a_legacy_lesson_with_cooldown() -> None:
+    fx = build_course()
+    task_id, task = start_practice(fx, "S1")
+    first = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert first.task.phase == "practice"  # 4 / 5 is still possible
+    result = engine.submit_answer(task_id, wrong(first.task.question.id), T0)
+    assert result.task.outcome == "failed" and result.xp_awarded == 0  # 4 / 6 at best
+    assert result.suggestion == "retry_later" and "2 hours" in result.suggestion_text and "80%" in result.suggestion_text
+    assert result.task.progress.answered == 2
     progress = db.query_one("SELECT * FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
     assert db.loads(progress["kp_failures_json"]) == {"0": 1}
     assert db.parse_iso(progress["cooldown_until"]) == T0 + timedelta(hours=2)
-    assert progress["status"] == "in_progress"
-    assert xp_total(fx.course_id) == 0
-    # the selector re-offers it only after the cooldown
+    assert progress["status"] == "in_progress" and xp_total(fx.course_id) == 0
     offered = lambda now: {(c.skill["key"], c.type) for c in selector.rank(fx.course_id, now)}  # noqa: E731
     assert ("S1", "lesson") not in offered(T0 + timedelta(hours=1))
     assert ("S1", "lesson") in offered(T0 + timedelta(hours=2, minutes=1))
 
 
+def test_extra_questions_are_capped_at_two_per_kp() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [3, 3])
+    add_question(fx, "S1", 0)  # a 5th KP-1 question
+    add_capstone(fx, "S1")
+    task_id, task = start_practice(fx, "S1")
+    targets = []
+    for _ in range(4):
+        engine.hint(task.question.id, T0)
+        task = engine.submit_answer(task_id, right(task.question.id), T0).task
+        targets.append(task.progress.kp_target)
+    assert targets == [4, 5, 5, 5]  # 3 + at most 2
+    assert task.phase == "practice" and task.progress.kp_questions_available == 5
+    # 2 of 4 so far, at best 2 + 1 + 3 + 2 (capstone) of 10 = 0.8: still passable
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.8)
+    assert done.task.progress.answered == 9 and lesson_rating(fx.sid("S1")) == 2
+
+
+def test_no_extra_question_once_the_kp_pool_is_used_up() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    db.execute("DELETE FROM questions WHERE id IN (?, ?)", (kp0[2], kp0[3]))
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id, hints_used=1), T0).task
+    assert task.progress.kp_target == 2 and task.progress.planned == 4  # nothing unseen left for an extra
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.progress.kp_index == 1
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(3.5 / 4)
+
+
+def test_kp_targets_come_from_the_lesson() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 3])
+    task_id, task = start_practice(fx, "S1")
+    assert (task.progress.kp_target, task.progress.planned) == (1, 4)
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.progress.kp_index == 1 and task.progress.kp_target == 3
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.task.progress.answered == 4
+    assert engine._targets_from_lesson(
+        {"knowledge_points": [{"target_questions": 0}, {"target_questions": 7}, {}, {"target_questions": "x"}, {"target_questions": 2}]}
+    ) == {"0": 1, "1": 3, "2": 2, "3": 2, "4": 2}
+
+
+@pytest.mark.parametrize("with_capstone", [False, True])
+def test_early_stop_counts_every_remaining_question_and_the_capstone_twice(with_capstone: bool) -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    if with_capstone:
+        add_capstone(fx, "S1")
+    task_id, task = start_practice(fx, "S1")
+    first = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    if not with_capstone:
+        assert first.task.outcome == "failed"  # (0 + 1 + 1) / 3: out of reach after one miss
+        return
+    assert first.task.phase == "practice" and first.task.progress.kp_target == 2  # (0 + 1 + 1 + 2) / 5 = 0.8
+    second = engine.submit_answer(task_id, wrong(first.task.question.id), T0)
+    assert second.task.outcome == "failed" and second.task.progress.answered == 2  # 4 / 6
+
+
 def test_retry_prefers_unseen_questions() -> None:
     fx = build_course()
-    _fail_kp0(fx)
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    engine.submit_answer(task_id, wrong(task.question.id), T0)
     _, task = start_practice(fx, "S1", T0 + timedelta(hours=3))
-    assert task.question.id == fx.questions["S1"][0][3]  # the only KP-1 question not answered before
+    assert task.question.id == fx.questions["S1"][0][2]  # the first KP-1 question not answered before
 
 
-def test_second_failure_at_same_kp_triggers_remediation() -> None:
+def _fail_now(fx, key: str, now) -> object:
+    task_id, task = start_practice(fx, key, now)
+    result = None
+    while task.phase != "done":
+        result = engine.submit_answer(task_id, wrong(task.question.id), now)
+        task = result.task
+    return result
+
+
+def test_second_failure_of_the_same_lesson_triggers_remediation() -> None:
     fx = build_course()
     learn(fx, "S1", T0)
     learn(fx, "S2", T0)
     now = T0 + days(1)
     assert not scheduler.is_due(card(fx.sid("S1")), now)
-    _, first = _fail_kp0(fx, "S3", now)
+    first = _fail_now(fx, "S3", now)
     assert first.suggestion == "retry_later"
     later = now + timedelta(hours=3)
-    _, second = _fail_kp0(fx, "S3", later)
+    task_id, task = start_practice(fx, "S3", later)
+    task = engine.submit_answer(task_id, right(task.question.id), later).task
+    task = engine.submit_answer(task_id, right(task.question.id), later).task
+    assert task.progress.kp_index == 1
+    task = engine.submit_answer(task_id, wrong(task.question.id), later).task
+    second = engine.submit_answer(task_id, wrong(task.question.id), later)
+    assert second.task.outcome == "failed" and failures(fx.sid("S3")) == {"0": 1, "1": 1}  # a different KP this time
     assert second.suggestion == "review_prerequisite"
-    assert "S1" in second.suggestion_text and "S2" in second.suggestion_text
+    assert "S1" in second.suggestion_text and "S2" in second.suggestion_text and "twice" in second.suggestion_text
     assert scheduler.is_due(card(fx.sid("S1")), later) and scheduler.is_due(card(fx.sid("S2")), later)
     menu = selector.rank(fx.course_id, later)
     assert [(c.skill["key"], c.type) for c in menu[:2]] == [("S1", "review"), ("S2", "review")]
     assert menu[0].reason.startswith("Refresh before retrying S3")
 
 
-def test_easier_step_suggestion_and_swap() -> None:
+def test_a_failure_recorded_by_the_old_per_kp_rule_counts_toward_remediation() -> None:
     fx = build_course()
-    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (fx.questions["S1"][0][3],))
-    task_id, task = start_practice(fx, "S1")
-    first = engine.submit_answer(task_id, wrong(task.question.id), T0)
-    assert first.suggestion is None
-    second = engine.submit_answer(task_id, wrong(first.task.question.id), T0)
-    assert second.task.phase == "practice"  # still passable: two questions left
-    assert second.suggestion == "easier_step"
-    current = second.task.question
-    assert current.tier == 2
-    swapped = engine.easier_step(task_id, T0)
-    assert swapped.question.id == fx.questions["S1"][0][3] and swapped.question.tier == 1
-    assert swapped.progress.kp_questions_used == 3  # the swapped-in question replaces the skipped one
-    with pytest.raises(engine.Conflict):
-        engine.easier_step(task_id, T0)  # nothing unseen left in KP 1 (no previous KP)
-    # the skipped question is never served again in this task
-    nxt = engine.submit_answer(task_id, right(swapped.question.id), T0).task
-    assert nxt.phase == "done" and nxt.outcome == "failed"  # scaffolding doesn't count, pool exhausted
+    learn(fx, "S1", T0)
+    learn(fx, "S2", T0)
+    db.execute("UPDATE progress SET kp_failures_json = ? WHERE skill_id = ?", (db.dumps({"1": 1}), fx.sid("S3")))
+    result = _fail_now(fx, "S3", T0 + days(1))
+    assert result.suggestion == "review_prerequisite" and failures(fx.sid("S3")) == {"0": 1, "1": 1}
 
 
-def test_no_easier_question_suggests_rereading() -> None:
+# ---------------------------------------------------------------------------
+# Capstone: multistep, step hints, reveal, reload
+# ---------------------------------------------------------------------------
+
+
+def _to_capstone(fx, key="S1", now=T0):
+    set_targets(fx, key, [1, 1])
+    cap = add_capstone(fx, key)
+    task_id, task = start_practice(fx, key, now)
+    assert task.progress.planned == 3
+    task = engine.submit_answer(task_id, right(task.question.id), now).task
+    result = engine.submit_answer(task_id, right(task.question.id), now)
+    assert result.task.question.id == cap
+    return task_id, cap, result
+
+
+def test_capstone_steps_hints_and_reload() -> None:
     fx = build_course()
-    task_id, task = start_practice(fx, "S1")
-    first = engine.submit_answer(task_id, wrong(task.question.id), T0)
-    second = engine.submit_answer(task_id, wrong(first.task.question.id), T0)
-    assert second.task.question.tier == 2  # the only unseen one left is tier 3: harder, not easier
-    assert second.suggestion == "reread_example"
-    with pytest.raises(engine.Conflict):
+    task_id, cap, result = _to_capstone(fx)
+    assert "Last: one problem" in result.feedback and "counts double" in result.feedback
+    task = result.task
+    q = task.question
+    assert task.progress.in_capstone and (task.progress.kp_target, task.progress.kp_questions_used) == (1, 1)
+    assert q.role == "capstone" and q.kind == "multistep" and q.step_index == 0 and q.step_results == []
+    assert [s.prompt for s in q.steps][0] == "Step 1: compute $2+3$." and q.steps[1].choices == ["A", "B", "C"]
+    dumped = q.model_dump_json()
+    assert '"answer"' not in dumped and "Law C lets us regroup" not in dumped  # no answers or explanations leak
+    with pytest.raises(engine.Conflict, match="final problem"):
         engine.easier_step(task_id, T0)
+    with pytest.raises(engine.Conflict, match="step 1"):
+        engine.submit_answer(task_id, AnswerSubmit(question_id=cap, response="5"), T0)  # no step given
+    with pytest.raises(engine.Conflict):
+        engine.submit_answer(task_id, step_submit(cap, 1), T0)  # not the current step
+    with pytest.raises(engine.Invalid):
+        engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=0, response="2(("), T0)
+    with pytest.raises(engine.Invalid):
+        engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=0), T0)  # nothing submitted
+    s0 = engine.submit_answer(task_id, step_submit(cap, 0), T0)
+    assert s0.status == "step" and not s0.question_done and s0.correct and s0.independent and s0.score == 1.0
+    assert s0.step_result.index == 0 and s0.step_result.score == 1.0 and s0.step_result.explanation == "$2+3=5$."
+    assert s0.correct_answer == "$5$" and s0.xp_awarded == 0
+    assert s0.task.question.step_index == 1 and len(s0.task.question.step_results) == 1
+    assert s0.task.progress.answered == 2  # the capstone counts once all its steps are answered
+    assert not db.query("SELECT 1 FROM attempts WHERE question_id = ?", (cap,))
+    reloaded = engine.get_task(task_id)
+    assert reloaded.question.step_index == 1 and reloaded.question.step_results[0].correct
+    with pytest.raises(engine.Conflict):
+        engine.hint(cap, T0, step=0)  # an earlier step
+    h = engine.hint(cap, T0, step=1)
+    assert (h.hint, h.hints_used) == ("Not A.", 1)
+    assert engine.hint(cap, T0).hint == "Not A."  # default: the current step; still one hint
+    assert engine.get_task(task_id).question.hints_used == 1
+    s1 = engine.submit_answer(task_id, step_submit(cap, 1), T0)
+    assert s1.status == "step" and s1.step_result.score == 0.5 and "half a point" in s1.step_result.feedback
+    assert s1.correct_choice == 2 and s1.score == pytest.approx(0.75)  # running mean of the steps so far
+    assert engine.get_task(task_id).question.hints_used == 0  # the next step starts fresh
+    last = engine.submit_answer(task_id, step_submit(cap, 2), T0)
+    assert last.question_done and last.status == "incorrect" and not last.correct  # not every step was unaided
+    assert last.score == pytest.approx(2.5 / 3) and last.step_result.index == 2
+    assert "2 of 3 steps right" not in last.feedback and "3 of 3 steps right" in last.feedback
+    assert last.solution == "Whole worked solution."
+    # 1 + 1 + 2 × 0.833 of 4 = 0.917: passed, Good
+    assert last.task.outcome == "passed" and last.task.progress.score == pytest.approx((2 + 2 * 2.5 / 3) / 4)
+    assert lesson_rating(fx.sid("S1")) == 3 and last.xp_awarded == 9
+    row = db.query_one("SELECT * FROM attempts WHERE question_id = ?", (cap,))
+    assert (row["correct"], row["independent"], row["status"], row["hints_used"], row["revealed"]) == (0, 0, "incorrect", 1, 0)
+    assert [s["score"] for s in json.loads(row["response"])["steps"]] == [1.0, 0.5, 1.0]
 
 
-def test_easier_step_can_use_previous_kp() -> None:
+def test_capstone_reveal_and_wrong_steps_can_fail_the_lesson() -> None:
+    fx = build_course()
+    task_id, cap, _ = _to_capstone(fx)
+    s0 = engine.submit_answer(task_id, step_submit(cap, 0, correct=False), T0)
+    assert s0.status == "step" and not s0.correct and s0.step_result.score == 0 and s0.task.phase == "practice"
+    shown = engine.reveal(cap, T0)
+    assert (shown.correct_answer, shown.solution) == ("C", "Law C lets us regroup.")  # only the current step
+    assert engine.get_task(task_id).question.revealed is True
+    s1 = engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=1), T0)  # nothing typed after the reveal
+    assert s1.step_result.score == 0 and "Answer viewed" in s1.step_result.feedback
+    assert engine.get_task(task_id).question.revealed is False
+    last = engine.submit_answer(task_id, step_submit(cap, 2), T0)
+    assert last.score == pytest.approx(1 / 3) and last.status == "incorrect"
+    # (1 + 1 + 2/3) / 4 = 0.67 → failed in the capstone
+    assert last.task.outcome == "failed" and last.suggestion == "retry_later"
+    assert failures(fx.sid("S1")) == {"cap": 1}
+    row = db.query_one("SELECT revealed, hints_used FROM attempts WHERE question_id = ?", (cap,))
+    assert (row["revealed"], row["hints_used"]) == (1, 0)
+
+
+def test_flagged_capstone_is_replaced_then_skipped() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    first_cap, second_cap = add_capstone(fx, "S1"), add_capstone(fx, "S1")
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.question.id == first_cap
+    engine.submit_answer(task_id, step_submit(first_cap, 0), T0)
+    task = engine.flag(first_cap, "step 2 is ambiguous", T0)
+    assert task.question.id == second_cap and task.question.step_index == 0 and task.question.step_results == []
+    task = engine.flag(second_cap, "", T0)
+    assert task.phase == "done" and task.outcome == "passed"  # no capstone left: 2 / 2
+
+
+def test_multistep_practice_question_scores_the_mean_of_its_steps() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    for qid in fx.questions["S1"][0]:
+        db.execute("DELETE FROM questions WHERE id = ?", (qid,))
+    steps = [{**s, "prompt": f"Practice {s['prompt']}"} for s in CAPSTONE_STEPS]
+    ms = add_question(fx, "S1", 0, kind="multistep", answer="", tier=2, steps=steps)
+    task_id, task = start_practice(fx, "S1")
+    assert task.question.id == ms and task.question.role == "practice" and not task.progress.in_capstone
+    engine.submit_answer(task_id, step_submit(ms, 0), T0)
+    with pytest.raises(engine.Conflict, match="Finish this problem first"):
+        engine.easier_step(task_id, T0)
+    engine.submit_answer(task_id, step_submit(ms, 1), T0)
+    done = engine.submit_answer(task_id, step_submit(ms, 2, correct=False), T0)
+    assert done.question_done and done.score == pytest.approx(2 / 3)
+    assert "2 of 3 steps right" in done.feedback
+    assert task_state(task_id)["log"][0]["res"] == "partial"
+    final = finish(task_id, done.task)
+    assert final.task.outcome == "passed" and final.task.progress.score == pytest.approx((2 / 3 + 1) / 2)
+
+
+def test_step_must_be_current_after_another_tab_answered_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.learning import grading
+
+    fx = build_course()
+    task_id, cap, _ = _to_capstone(fx)
+    real = grading.check_answer
+    calls = []
+
+    def answer_meanwhile(*args, **kwargs):
+        if not calls:
+            calls.append(1)
+            engine.submit_answer(task_id, step_submit(cap, 0), T0)  # the other tab wins the race
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(grading, "check_answer", answer_meanwhile)
+    with pytest.raises(engine.Conflict):
+        engine.submit_answer(task_id, step_submit(cap, 0), T0)
+    assert len(task_state(task_id)["step_results"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Easier step
+# ---------------------------------------------------------------------------
+
+
+def test_easier_step_after_a_miss_is_scored_normally() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    db.execute("UPDATE questions SET tier = 2 WHERE id = ?", (kp0[1],))
+    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
+    task_id, task = start_practice(fx, "S1")
+    with pytest.raises(engine.Conflict, match="Try this question first"):
+        engine.easier_step(task_id, T0)
+    miss = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert miss.suggestion == "easier_step" and miss.task.progress.easier_available
+    assert miss.task.question.id == kp0[1] and miss.task.progress.kp_wrong == 1
+    swapped = engine.easier_step(task_id, T0)
+    assert swapped.question.id == kp0[3] and swapped.progress.kp_questions_used == 2  # replaces the skipped one
+    assert swapped.progress.easier_available is False  # nothing easier than tier 1
+    r = engine.submit_answer(task_id, right(kp0[3]), T0)
+    assert r.independent and r.score == 1.0 and r.task.question.id == kp0[2]  # the extra question of KP 1
+    done = finish(task_id, r.task)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.8)
+    assert not db.query("SELECT 1 FROM attempts WHERE question_id = ?", (kp0[1],))  # the skipped one never returns
+
+
+def test_easier_step_stays_in_the_current_kp() -> None:
     fx = build_course()
     kp0, kp1 = fx.questions["S1"]
-    for qid, tier in [(kp1[0], 2), (kp1[1], 3), (kp1[2], 3), (kp1[3], 3), (kp0[3], 1)]:
+    for qid, tier in [(kp1[0], 2), (kp1[1], 2), (kp1[2], 3), (kp1[3], 3), (kp0[3], 1)]:
         db.execute("UPDATE questions SET tier = ? WHERE id = ?", (tier, qid))
     task_id, task = start_practice(fx, "S1")
     task = engine.submit_answer(task_id, right(task.question.id), T0).task
     task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.progress.kp_index == 1 and task.question.tier == 2
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    assert task.question.tier == 3
-    swapped = engine.easier_step(task_id, T0)
-    assert swapped.question.id == kp0[3]  # lowest unseen tier across KP 1 and KP 2
-    after = engine.submit_answer(task_id, right(kp0[3]), T0).task
-    assert after.progress.kp_index == 1 and after.progress.streak == 0  # a KP-1 question never counts for KP 2
-    reviews = engine.start_review  # reviews have no easier step
+    assert task.progress.kp_index == 1
+    miss = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert miss.suggestion is None and miss.task.progress.easier_available is False
+    with pytest.raises(engine.Conflict, match="No easier question"):
+        engine.easier_step(task_id, T0)  # KP 1's unseen tier-1 question is not used for KP 2
     learn(fx, "S2", T0)
     engine.abandon(task_id, T0)
-    review_id = reviews(fx.sid("S2"), "test", T0 + days(5))
+    review_id = engine.start_review(fx.sid("S2"), "test", T0 + days(5))
     with pytest.raises(engine.Conflict):
-        engine.easier_step(review_id, T0 + days(5))
+        engine.easier_step(review_id, T0 + days(5))  # reviews have no easier step
+
+
+def test_two_misses_in_a_row_without_an_easier_question_suggest_rereading() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [3, 3])
+    add_question(fx, "S1", 0, tier=3)  # room for both extra questions
+    add_capstone(fx, "S1")
+    task_id, task = start_practice(fx, "S1")
+    first = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert first.suggestion is None  # the next question is tier 1: nothing easier
+    second = engine.submit_answer(task_id, wrong(first.task.question.id), T0)
+    assert second.task.phase == "practice"  # (0 + 3 + 3 + 2) / 10 = 0.8 is still possible
+    assert second.task.question.tier == 2 and second.suggestion == "reread_example"
+    with pytest.raises(engine.Conflict):
+        engine.easier_step(task_id, T0)
+
+
+# ---------------------------------------------------------------------------
+# Flags
+# ---------------------------------------------------------------------------
 
 
 def test_flag_current_question_serves_replacement() -> None:
@@ -246,37 +524,49 @@ def test_flag_current_question_serves_replacement() -> None:
     after = engine.flag(flagged_id, "answer key looks wrong", T0)
     assert after.question.id != flagged_id
     assert question(flagged_id)["flagged"] == 1
-    assert after.progress.kp_questions_available == 3 and after.progress.kp_questions_used == 1
+    assert after.progress.kp_questions_used == 1 and after.progress.kp_questions_available == 3
 
 
-def test_flag_voids_a_wrong_answer_and_restores_the_streak() -> None:
+def test_flag_voids_a_wrong_answer_and_its_extra_question() -> None:
     fx = build_course()
     task_id, task = start_practice(fx, "S1")
     task = engine.submit_answer(task_id, right(task.question.id), T0).task
     bad = task.question.id
     task = engine.submit_answer(task_id, wrong(bad), T0).task
-    assert task.progress.streak == 0
+    assert task.progress.kp_target == 3 and task.progress.score == 0.5
     after = engine.flag(bad, "", T0)
-    # the voided miss no longer breaks the streak; with 1 in a row the current question is still KP 1
-    assert after.progress.streak == 1 and after.progress.answered == 1
+    assert after.progress.answered == 1 and after.progress.kp_target == 2 and after.progress.score == 1.0
     assert db.query_one("SELECT status FROM attempts WHERE question_id = ?", (bad,))["status"] == "voided"
     final = engine.submit_answer(task_id, right(after.question.id), T0)
-    assert final.task.progress.kp_index == 1  # KP passed: ✔ (voided ✖) ✔
+    assert final.task.progress.kp_index == 1
 
 
 def test_flag_reopens_a_lesson_failed_because_of_that_question() -> None:
     fx = build_course()
     task_id, task = start_practice(fx, "S1")
     task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
     last = task.question.id
     failed = engine.submit_answer(task_id, wrong(last), T0)
     assert failed.task.outcome == "failed"
     reopened = engine.flag(last, "the expected answer is wrong", T0)
-    assert reopened.phase == "practice" and reopened.outcome is None
-    assert reopened.question is not None and reopened.progress.streak == 1
+    assert reopened.phase == "practice" and reopened.outcome is None and reopened.question is not None
+    assert reopened.progress.answered == 1
     progress = db.query_one("SELECT * FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
     assert db.loads(progress["kp_failures_json"]) == {} and progress["cooldown_until"] is None
+    done = finish(task_id, reopened)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.8)
+
+
+def test_flag_does_not_reopen_a_lesson_still_out_of_reach() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    task_id, task = start_practice(fx, "S1")
+    hinted = task.question.id
+    task = engine.submit_answer(task_id, right(hinted, hints_used=1), T0).task
+    failed = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert failed.task.outcome == "failed"  # (0.5 + 0 + 1 + 1) / 4
+    after = engine.flag(hinted, "", T0)  # without it: (0 + 1 + 1) / 3 — still below 80 %
+    assert after.outcome == "failed" and failures(fx.sid("S1")) == {"0": 1}
 
 
 def test_flag_requires_a_served_question() -> None:
@@ -285,6 +575,22 @@ def test_flag_requires_a_served_question() -> None:
         engine.flag(fx.questions["S1"][0][0], "", T0)
     with pytest.raises(engine.NotFound):
         engine.flag("nope", "", T0)
+
+
+def test_flag_after_a_passed_lesson_tops_up_xp() -> None:
+    fx = build_course()
+    task_id, task = start_practice(fx, "S1")
+    bad = task.question.id
+    task = engine.submit_answer(task_id, wrong(bad), T0).task
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.xp_awarded == 8
+    after = engine.flag(bad, "", T0)
+    assert after.xp_value == 12 and xp_total(fx.course_id) == 12  # 4 / 4 now: 10 + perfect bonus
+
+
+# ---------------------------------------------------------------------------
+# Written proofs (legacy lessons with free-response questions)
+# ---------------------------------------------------------------------------
 
 
 def _make_free_response(*qids: str) -> None:
@@ -298,7 +604,7 @@ def _make_free_response(*qids: str) -> None:
 PROOF = "Let z = a + bi; then z times its conjugate is a^2 + b^2."
 
 
-def test_free_response_self_grading() -> None:
+def test_free_response_self_grading_points() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     _make_free_response(kp0[0], kp0[2])
@@ -309,33 +615,27 @@ def test_free_response_self_grading() -> None:
         engine.submit_answer(task_id, AnswerSubmit(question_id=qid, response="proof"), T0)
     engine.reveal(qid, T0, response=PROOF)  # comparing a committed answer is part of self-assessment
     partial = engine.submit_answer(task_id, AnswerSubmit(question_id=qid, response=PROOF, self_grade="partial"), T0)
-    assert partial.status == "self_graded" and not partial.correct and partial.task.progress.streak == 0
-    nxt = partial.task.question
-    assert nxt.id == kp0[1]
-    good = engine.submit_answer(task_id, right(nxt.id), T0)
-    assert good.independent
-    # the KP's other written question comes next (the streak alone can't pass a KP with a written question)
-    assert good.task.question.id == kp0[2]
+    assert partial.status == "self_graded" and not partial.correct and partial.score == 0.5
+    assert partial.task.progress.kp_target == 3
+    good = engine.submit_answer(task_id, right(partial.task.question.id), T0)
+    assert good.independent and good.task.question.id == kp0[2]  # the KP's last planned question: the written one
     engine.reveal(kp0[2], T0, response=PROOF)
     proof = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[2], response=PROOF, self_grade="correct"), T0)
-    assert proof.independent and proof.task.progress.kp_index == 1
+    assert proof.independent and proof.score == 1.0 and proof.task.progress.kp_index == 1
 
 
-def test_free_response_revealed_before_answering_is_assisted() -> None:
-    """D1: 'Show solution' before writing an answer, then self-grading 'correct', is not independent."""
+def test_free_response_revealed_before_answering_scores_zero() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     _make_free_response(kp0[0], kp0[1])
-    task_id, task = start_practice(fx, "S1")
+    task_id, _ = start_practice(fx, "S1")
     engine.reveal(kp0[0], T0)  # no committed answer: a plain reveal
     copied = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[0], response=PROOF, self_grade="correct"), T0)
-    assert copied.correct and not copied.independent and copied.task.progress.streak == 0
-    assert "help" in copied.feedback
-    # the client flag alone also counts, and a too-short "commit" is not a comparison
+    assert copied.correct and not copied.independent and copied.score == 0 and "no points" in copied.feedback
     second = copied.task.question.id
-    engine.reveal(second, T0, response="tbd")
+    engine.reveal(second, T0, response="tbd")  # too short to be a committed answer
     short = engine.submit_answer(task_id, AnswerSubmit(question_id=second, response="tbd", self_grade="correct"), T0)
-    assert not short.independent
+    assert not short.independent and short.score == 0
     rows = db.query("SELECT independent, revealed FROM attempts WHERE task_id = ? ORDER BY rowid", (task_id,))
     assert [(r["independent"], r["revealed"]) for r in rows] == [(0, 1), (0, 1)]
 
@@ -348,7 +648,7 @@ def test_free_response_edited_after_comparing_is_assisted() -> None:
     engine.reveal(kp0[0], T0, response="My first attempt at the proof, quite short.")
     engine.reveal(kp0[0], T0)  # 'Show solution' after committing changes nothing
     edited = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[0], response=PROOF, self_grade="correct"), T0)
-    assert not edited.independent
+    assert not edited.independent and edited.score == 0
 
 
 def test_free_response_comparison_after_commit_is_independent() -> None:
@@ -359,7 +659,7 @@ def test_free_response_comparison_after_commit_is_independent() -> None:
     engine.reveal(kp0[0], T0, response=PROOF)
     engine.reveal(kp0[0], T0)  # a later plain reveal (e.g. 'Show solution') doesn't undo the commit
     ok = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[0], response="  " + PROOF + " ", self_grade="correct"), T0)
-    assert ok.independent and ok.task.progress.streak == 1
+    assert ok.independent and ok.score == 1.0
 
 
 def test_free_response_revealed_review_gets_no_credit() -> None:
@@ -367,59 +667,35 @@ def test_free_response_revealed_review_gets_no_credit() -> None:
     learn(fx, "S1", T0)
     now = T0 + days(3)
     task_id = engine.start_review(fx.sid("S1"), "Review due", now)
-    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
+    st = task_state(task_id)
     _make_free_response(st["set"][0])
     engine.reveal(st["set"][0], now)
     result = engine.submit_answer(task_id, AnswerSubmit(question_id=st["set"][0], response=PROOF, self_grade="correct"), now)
-    assert not result.independent and "no credit" in result.feedback
-    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
-    assert st["log"][0]["credit"] == 0.0
+    assert not result.independent and "no points" in result.feedback
+    assert task_state(task_id)["log"][0]["credit"] == 0.0
 
 
-def _lesson_rating(skill_id: str) -> int:
-    row = db.query_one("SELECT rating FROM review_log WHERE skill_id = ? AND implicit = 0 ORDER BY created_at, rowid", (skill_id,))
-    return row["rating"]
-
-
-def _finish_lesson(task_id: str, task):
-    result = None
-    while task.phase != "done":
-        result = engine.submit_answer(task_id, right(task.question.id), T0)
-        task = result.task
-    return result
-
-
-def test_proof_kp_serves_free_response_by_second_question_and_waives_it_after_a_miss() -> None:
-    """E1: a KP's only written question self-graded 'incorrect' no longer fails the lesson: the requirement is
-    waived, the KP passes on two in a row, and the lesson starts with an earlier first review (Hard)."""
+def test_proof_kp_serves_the_written_question_second_and_waives_it_after_a_miss() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     _make_free_response(kp0[3])  # last in pool order
     task_id, task = start_practice(fx, "S1")
     first = engine.submit_answer(task_id, right(task.question.id), T0)
     assert first.task.question.id == kp0[3]  # served no later than the KP's 2nd question
-    assert first.task.progress.streak == 1
     miss = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[3], response=PROOF, self_grade="incorrect"), T0)
-    assert miss.task.phase == "practice" and miss.task.outcome is None  # not failed: 3 of 5 questions are left
-    assert miss.task.progress.streak == 0 and "then try the next one" in miss.feedback
-    assert "can still pass on two in a row" in miss.feedback and "first review" in miss.feedback
-    task = engine.submit_answer(task_id, right(miss.task.question.id), T0).task
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.progress.kp_index == 1  # passed on the plain two-in-a-row rule
-    done = _finish_lesson(task_id, task)
+    assert miss.task.phase == "practice" and miss.task.outcome is None
+    assert "then try the next one" in miss.feedback and "first review" in miss.feedback
+    done = finish(task_id, miss.task)
     assert done.task.outcome == "passed" and done.suggestion is None
     assert done.suggestion_text == engine.PROOF_WAIVED_TEXT
-    assert _lesson_rating(fx.sid("S1")) == 2  # Hard: an earlier first review
-    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
+    assert lesson_rating(fx.sid("S1")) == 2
+    st = task_state(task_id)
     assert st["proof_waived"] == [0] and st["result"]["proof_waived"] is True
-    progress = db.query_one("SELECT * FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
-    assert db.loads(progress["kp_failures_json"], {}) == {}
+    assert failures(fx.sid("S1")) == {}
 
 
 @pytest.mark.parametrize("how", ["hint", "reveal", "short", "partial"])
-def test_written_answer_with_help_never_fails_the_lesson(how: str) -> None:
-    """E1 (QA): a hint, 'Show solution', a too-short committed answer or 'Partly' on the KP's only written question
-    used to end the lesson at question 2 of 5 while the feedback said 'it isn't a miss'."""
+def test_written_answer_with_help_does_not_end_the_lesson_and_waives_the_proof(how: str) -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     _make_free_response(kp0[1])  # the KP's only written question, served 2nd
@@ -435,16 +711,13 @@ def test_written_answer_with_help_never_fails_the_lesson(how: str) -> None:
         engine.reveal(kp0[1], T0, response="zz̄ = |z|²" if how == "short" else PROOF)
     response = "zz̄ = |z|²" if how == "short" else PROOF
     result = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[1], response=response, self_grade=grade), T0)
-    assert not result.independent
+    # a "short" commit is no commitment: it is a plain reveal (0 points)
+    assert not result.independent and result.score == (0.0 if how in ("reveal", "short") else 0.5)
     assert result.task.phase == "practice" and result.task.outcome is None and result.suggestion is None
-    if how != "partial":
-        assert "isn't a miss" in result.feedback  # consistent: the lesson really goes on
     assert "pauses" not in result.feedback
-    task = engine.submit_answer(task_id, right(result.task.question.id), T0).task
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.progress.kp_index == 1
-    done = _finish_lesson(task_id, task)
-    assert done.task.outcome == "passed" and _lesson_rating(fx.sid("S1")) == 2
+    done = finish(task_id, result.task)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.8 if how in ("reveal", "short") else 0.9)
+    assert lesson_rating(fx.sid("S1")) == 2  # Hard: the written proof was waived, even at 90 %
     progress = db.query_one("SELECT * FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
     assert db.loads(progress["kp_failures_json"], {}) == {} and progress["cooldown_until"] is None
 
@@ -459,64 +732,47 @@ def test_assisted_written_answer_serves_another_written_question_if_one_is_left(
     engine.hint(kp0[1], T0)
     helped = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[1], response=PROOF, self_grade="correct"), T0)
     assert "another written question comes up soon" in helped.feedback
-    task = engine.submit_answer(task_id, right(helped.task.question.id), T0).task  # kp0[2]
-    assert task.question.id == kp0[3] and task.progress.streak == 1  # the requirement still counts
+    assert helped.task.question.id == kp0[3]  # the KP's extra question is the written one
     engine.reveal(kp0[3], T0, response=PROOF)
     proof = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[3], response=PROOF, self_grade="correct"), T0)
     assert proof.independent and proof.task.progress.kp_index == 1
-    done = _finish_lesson(task_id, proof.task)
+    done = finish(task_id, proof.task)
     assert done.task.outcome == "passed" and done.suggestion_text is None
-    assert _lesson_rating(fx.sid("S1")) == 3  # Good: the proof was written unaided
+    assert lesson_rating(fx.sid("S1")) == 3  # Good: 4.5 / 5 and the proof was written unaided
 
 
-def test_too_short_written_answer_is_not_independent_even_without_a_reveal() -> None:
+def test_too_short_written_answer_is_half_a_point_even_without_a_reveal() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     _make_free_response(kp0[0])
     task_id, _ = start_practice(fx, "S1")
     short = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[0], response="z = z", self_grade="correct"), T0)
-    assert short.correct and not short.independent and "too short" in short.feedback and "With help" not in short.feedback
+    assert short.correct and not short.independent and short.score == 0.5
+    assert "too short" in short.feedback and "hint" not in short.feedback
     assert short.task.phase == "practice"
 
 
-def test_assisted_answer_that_ends_the_lesson_does_not_claim_it_isnt_a_miss() -> None:
-    fx = build_course()
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    assert task.phase == "practice"  # two left: still passable
-    last = engine.submit_answer(task_id, right(task.question.id, hints_used=1), T0)
-    assert last.task.outcome == "failed" and last.suggestion == "retry_later"
-    assert "With help" in last.feedback and "isn't a miss" not in last.feedback
-
-
-def test_proof_kp_two_in_a_row_without_the_written_answer_is_not_a_pass() -> None:
-    fx = build_course()
-    kp0 = fx.questions["S1"][0]
-    _make_free_response(kp0[1], kp0[3])
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.question.id == kp0[1]
-    engine.reveal(kp0[1], T0, response=PROOF)
-    task = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[1], response=PROOF, self_grade="incorrect"), T0).task
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task  # kp0[2]
-    assert task.progress.streak == 1
-    assert task.question.id == kp0[3]  # the next correct answer must be the written one
-    engine.reveal(kp0[3], T0, response=PROOF)
-    done = engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[3], response=PROOF, self_grade="correct"), T0)
-    assert done.independent and done.task.progress.kp_index == 1
-
-
-def test_proof_note_when_streak_is_reached_without_the_written_answer() -> None:
+def test_proof_kp_needs_the_written_answer_beyond_its_plan() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
     task_id, task = start_practice(fx, "S1")
     task = engine.submit_answer(task_id, right(task.question.id), T0).task
     _make_free_response(kp0[3])  # e.g. a top-up added a written question to the pool mid-lesson
     result = engine.submit_answer(task_id, right(task.question.id), T0)
-    assert result.task.progress.kp_index == 0 and result.task.progress.streak == 1  # one more (the written one)
-    assert "written question" in result.feedback
-    assert result.task.question.id == kp0[3]
+    assert result.task.progress.kp_index == 0 and result.task.progress.kp_target == 3
+    assert "written question" in result.feedback and result.task.question.id == kp0[3]
+
+
+def test_easier_step_never_swaps_out_the_needed_written_question() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    _make_free_response(kp0[2])  # tier 2: the KP's only written question
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    assert task.question.id == kp0[2] and task.progress.kp_wrong == 1  # served as the KP's 2nd question
+    assert task.progress.easier_available is False
+    with pytest.raises(engine.Conflict, match="written answer is needed"):
+        engine.easier_step(task_id, T0)
 
 
 # ---------------------------------------------------------------------------
@@ -532,13 +788,14 @@ def test_hints_are_recorded_server_side_and_survive_a_reload() -> None:
     assert (first.hint, first.hints_used) == ("h1", 1)
     second = engine.hint(qid, T0)
     assert (second.hint, second.hints_used) == ("h2", 2)
+    assert engine.get_task(task_id).question.hints_used == 2
     # a reload resets the client's counter to 0: the server still knows
     result = engine.submit_answer(task_id, right(qid, hints_used=0), T0)
-    assert result.correct and not result.independent and result.task.progress.streak == 0
+    assert result.correct and not result.independent and result.score == 0.5
     assert db.query_one("SELECT hints_used FROM attempts WHERE task_id = ?", (task_id,))["hints_used"] == 2
-    # the next question starts with no hints; the client-reported count still counts too (max of both)
-    nxt = result.task.question.id
-    assert engine.submit_answer(task_id, right(nxt, hints_used=1), T0).independent is False
+    nxt = result.task.question
+    assert nxt.hints_used == 0  # the next question starts with no hints; the client's count still counts too
+    assert engine.submit_answer(task_id, right(nxt.id, hints_used=1), T0).independent is False
 
 
 def test_hints_run_out_and_need_a_current_question() -> None:
@@ -566,92 +823,45 @@ def test_review_hint_recorded_server_side_gives_half_credit() -> None:
     qid = engine.get_task(task_id).question.id
     engine.hint(qid, now)
     result = engine.submit_answer(task_id, right(qid), now)
-    assert result.correct and not result.independent and "half credit" in result.feedback
+    assert result.correct and not result.independent and "half a point" in result.feedback and result.score == 0.5
 
 
-# ---------------------------------------------------------------------------
-# Easier step (D5) and the "question N of up to M" count (D7)
-# ---------------------------------------------------------------------------
-
-
-def test_easier_step_needs_a_wrong_answer_in_the_current_kp() -> None:
-    fx = build_course()
-    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (fx.questions["S1"][0][3],))
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    with pytest.raises(engine.Conflict, match="Try this question first"):
-        engine.easier_step(task_id, T0)
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    assert task.question.tier == 2
-    swapped = engine.easier_step(task_id, T0)
-    assert swapped.question.tier == 1
-
-
-def test_scaffold_and_previous_kp_answers_never_pass_the_current_kp() -> None:
-    """QA scenario: KP1 tiers [1,1,2,3], KP2 [2,2,3,3]; wrong, wrong, easier -> a KP1 question, right, one KP2
-    right must not pass the lesson."""
-    fx = build_course()
-    kp0, kp1 = fx.questions["S1"]
-    for qid, tier in [(kp1[0], 2), (kp1[1], 2), (kp1[2], 3), (kp1[3], 3)]:
-        db.execute("UPDATE questions SET tier = ? WHERE id = ?", (tier, qid))
-    db.execute(  # a 5th KP-2 question keeps the KP passable after the swap
-        "INSERT INTO questions(id, skill_id, key, kp_index, tier, kind, prompt, choices_json, correct_choice, answer,"
-        " answer_display, hints_json, solution, created_at) VALUES (?,?,'k2q5',1,3,'numeric','extra','[]',NULL,'5','5','[]','s',?)",
-        (db.new_id(), fx.sid("S1"), scheduler.iso(T0)),
-    )
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.progress.kp_index == 1
-    with pytest.raises(engine.Conflict):
-        engine.easier_step(task_id, T0)  # no wrong answer in KP 2 yet
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    swapped = engine.easier_step(task_id, T0)
-    assert question(swapped.question.id)["kp_index"] == 0
-    task = engine.submit_answer(task_id, right(swapped.question.id), T0).task
-    assert task.progress.kp_index == 1 and task.progress.streak == 0 and task.phase == "practice"
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.phase == "practice" and task.progress.streak == 1  # not passed
-
-
-def test_same_kp_scaffold_does_not_advance_the_streak() -> None:
+def test_task_restores_hints_reveal_and_committed_answer_after_a_reload() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
-    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
+    _make_free_response(kp0[1])
+    task_id, task = start_practice(fx, "S1")
+    assert (task.question.hints_used, task.question.revealed, task.question.committed_response) == (0, False, None)
+    engine.hint(task.question.id, T0)
+    engine.hint(task.question.id, T0)
+    reloaded = engine.get_task(task_id)
+    assert reloaded.question.hints_used == 2 and reloaded.question.revealed is False
+    assert reloaded.question.role == "practice" and reloaded.question.steps == []
+    engine.reveal(task.question.id, T0)
+    assert engine.get_task(task_id).question.revealed is True
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task  # 0 points: the lesson goes on (0.8)
+    assert task.question.id == kp0[1] and task.question.hints_used == 0 and task.question.revealed is False
+    typed = "Let z = a + bi.\n\nThen z times its conjugate is a^2 + b^2."
+    engine.reveal(kp0[1], T0, response=typed)
+    reloaded = engine.get_task(task_id)
+    assert reloaded.question.committed_response == typed.strip()  # as typed, line breaks kept
+    assert reloaded.question.revealed is False  # a comparison after a committed answer is not a reveal
+
+
+def test_progress_reports_kp_wrong_and_whether_an_easier_step_is_available() -> None:
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
     db.execute("UPDATE questions SET tier = 2 WHERE id = ?", (kp0[1],))
+    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
     task_id, task = start_practice(fx, "S1")
+    assert (task.progress.kp_wrong, task.progress.easier_available) == (0, False)  # no miss yet
     task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task  # streak 1
-    assert task.progress.streak == 1 and task.question.tier == 2
+    assert task.question.tier == 2 and task.progress.kp_wrong == 1 and task.progress.easier_available is True
+    assert engine.get_task(task_id).progress.easier_available is True  # survives a reload
     swapped = engine.easier_step(task_id, T0)
-    assert swapped.question.id == kp0[3]
-    after = engine.submit_answer(task_id, right(kp0[3]), T0).task
-    assert after.progress.streak == 1 and after.progress.kp_index == 0  # neither advanced nor broken
-
-
-def test_easier_step_never_swaps_out_the_needed_written_question() -> None:
-    fx = build_course()
-    kp0 = fx.questions["S1"][0]
-    _make_free_response(kp0[2])  # tier 2: the KP's only written question
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    assert task.question.id == kp0[2]  # served as the KP's 2nd question
-    with pytest.raises(engine.Conflict, match="written answer is needed"):
-        engine.easier_step(task_id, T0)
-
-
-def test_question_count_is_capped_at_the_kp_limit() -> None:
-    fx = build_course()
-    sid = fx.sid("S1")
-    for n in range(3):
-        db.execute(
-            "INSERT INTO questions(id, skill_id, key, kp_index, tier, kind, prompt, choices_json, correct_choice, answer,"
-            " answer_display, hints_json, solution, created_at) VALUES (?,?,?,0,1,'numeric','extra','[]',NULL,'5','5','[]','s',?)",
-            (db.new_id(), sid, f"extra{n}", scheduler.iso(T0)),
-        )
-    _, task = start_practice(fx, "S1")
-    assert task.progress.kp_questions_available == engine.MAX_KP_QUESTIONS  # pool of 7, but at most 5 are served
+    assert swapped.progress.easier_available is False
+    task = engine.submit_answer(task_id, right(swapped.question.id), T0).task
+    assert task.phase == "practice" and task.progress.kp_wrong == 1
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +932,7 @@ def test_abandon() -> None:
 def _review(fx, key: str, now, pattern: str):
     task_id = engine.start_review(fx.sid(key), "Review due", now)
     task = engine.get_task(task_id)
-    assert task.phase == "practice" and task.progress.total_questions == 3
+    assert task.phase == "practice" and task.progress.total_questions == 3 and task.progress.planned == 3
     result = None
     for mark in pattern:
         result = engine.submit_answer(task_id, (right if mark == "1" else wrong)(task.question.id), now)
@@ -734,7 +944,7 @@ def test_review_set_mixes_kps_and_prefers_unseen() -> None:
     fx = build_course()
     learn(fx, "S1", T0)
     task_id = engine.start_review(fx.sid("S1"), "Review due", T0 + days(3))
-    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
+    st = task_state(task_id)
     kps = [question(q)["kp_index"] for q in st["set"]]
     assert sorted(set(kps)) == [0, 1] and len(st["set"]) == 3
     seen = {a["question_id"] for a in db.query("SELECT question_id FROM attempts WHERE skill_id = ?", (fx.sid("S1"),))}
@@ -743,7 +953,13 @@ def test_review_set_mixes_kps_and_prefers_unseen() -> None:
 
 @pytest.mark.parametrize(
     "pattern,outcome,xp_awarded,rating",
-    [("111", "passed", 5, 3), ("011", "passed", 4, 2), ("110", "failed", 1, 1), ("010", "failed", 1, 1)],
+    [
+        ("111", "passed", 5, 3),  # 1.0
+        ("011", "passed", 4, 3),  # 5/6: a strong finish counts more
+        ("101", "failed", 2, 2),  # 4/6: Hard
+        ("110", "failed", 1, 1),  # 3/6: Again
+        ("010", "failed", 1, 1),
+    ],
 )
 def test_review_scoring_rating_and_xp(pattern: str, outcome: str, xp_awarded: int, rating: int) -> None:
     fx = build_course()
@@ -758,8 +974,10 @@ def test_review_scoring_rating_and_xp(pattern: str, outcome: str, xp_awarded: in
     assert scheduler.utc(after.last_review) == now and after.due != before.due
     progress = db.query_one("SELECT reviews, lapses FROM progress WHERE skill_id = ?", (fx.sid("S1"),))
     assert progress["reviews"] == 1 and progress["lapses"] == int(rating == 1)
+    assert result.task.progress.score == pytest.approx(task_state(task_id)["result"]["score"], abs=1e-4)
     if outcome == "failed":
         assert result.suggestion == "reread_example"
+        assert ("a little shaky" in result.suggestion_text) == (rating == 2)
 
 
 def test_review_hint_gives_half_credit_and_reveal_none() -> None:
@@ -770,12 +988,69 @@ def test_review_hint_gives_half_credit_and_reveal_none() -> None:
     task = engine.get_task(task_id)
     first = engine.submit_answer(task_id, right(task.question.id), now)
     hinted = engine.submit_answer(task_id, right(first.task.question.id, hints_used=2), now)
-    assert hinted.correct and not hinted.independent and "half credit" in hinted.feedback
+    assert hinted.correct and not hinted.independent and "half a point" in hinted.feedback
+    assert (hinted.task.progress.points, hinted.task.progress.max_points) == (2.0, 3.0)  # 1×1 + 2×0.5 of 1 + 2
     engine.reveal(hinted.task.question.id, now)
     last = engine.submit_answer(task_id, right(hinted.task.question.id), now)
-    assert "no credit" in last.feedback
+    assert "no points" in last.feedback
     # credits 1, 0.5, 0 -> (1 + 1 + 0) / 6 = 0.33 -> Again
     assert last.task.outcome == "failed" and last.xp_awarded == 1
+
+
+def test_review_includes_a_capstone_on_every_second_review_weighted_double() -> None:
+    fx = build_course()
+    cap = add_capstone(fx, "S1")
+    learn(fx, "S1", T0)  # the lesson's capstone answered
+    now = T0 + days(3)
+    first_id = engine.start_review(fx.sid("S1"), "Review due", now)
+    assert cap not in task_state(first_id)["set"]  # the first review after the lesson: short questions only
+    task = engine.get_task(first_id)
+    while task.phase != "done":
+        task = answer_fully(first_id, task.question.id, now).task
+    later = now + days(10)
+    task_id = engine.start_review(fx.sid("S1"), "Review due", later)
+    st = task_state(task_id)
+    assert len(st["set"]) == 3 and st["set"][-1] == cap  # it replaces one question and comes last
+    task = engine.get_task(task_id)
+    for _ in range(2):
+        assert not task.progress.in_capstone
+        task = engine.submit_answer(task_id, right(task.question.id), later).task
+    assert task.progress.in_capstone and task.question.role == "capstone"
+    engine.submit_answer(task_id, step_submit(cap, 0), later)
+    engine.hint(cap, later, step=1)
+    engine.submit_answer(task_id, step_submit(cap, 1), later)
+    last = engine.submit_answer(task_id, step_submit(cap, 2, correct=False), later)
+    assert last.score == pytest.approx(0.5)
+    # order weights 1, 2, 3 × 2: (1 + 2 + 6 × 0.5) / 9 = 0.67 → Hard, 2 XP
+    assert last.task.outcome == "failed" and last.xp_awarded == 2
+    assert task_state(task_id)["log"][-1]["w"] == 2
+    assert lesson_rating(fx.sid("S1")) == 3
+    rows = db.query("SELECT rating FROM review_log WHERE skill_id = ? AND implicit = 0 ORDER BY created_at, rowid", (fx.sid("S1"),))
+    assert [r["rating"] for r in rows][-1] == 2
+
+
+def test_a_never_answered_capstone_joins_the_first_review() -> None:
+    fx = build_course()
+    learn(fx, "S1", T0)
+    cap = add_capstone(fx, "S1")  # e.g. added after the lesson was passed
+    task_id = engine.start_review(fx.sid("S1"), "Review due", T0 + days(3))
+    assert task_state(task_id)["set"][-1] == cap
+
+
+def test_flagged_review_capstone_is_replaced_by_a_question() -> None:
+    fx = build_course()
+    learn(fx, "S1", T0)
+    cap = add_capstone(fx, "S1")
+    now = T0 + days(3)
+    task_id = engine.start_review(fx.sid("S1"), "Review due", now)
+    task = engine.get_task(task_id)
+    for _ in range(2):
+        task = engine.submit_answer(task_id, right(task.question.id), now).task
+    assert task.question.id == cap
+    task = engine.flag(cap, "", now)
+    assert task.question.id != cap and task.question.role == "practice"
+    done = engine.submit_answer(task_id, right(task.question.id), now)
+    assert done.task.outcome == "passed" and done.xp_awarded == 5
 
 
 def test_failed_review_penalizes_dependents_and_success_credits_ancestors() -> None:
@@ -799,7 +1074,7 @@ def test_flag_in_active_review_replaces_question() -> None:
     now = T0 + days(3)
     task_id = engine.start_review(fx.sid("S1"), "Review due", now)
     task = engine.submit_answer(task_id, wrong(engine.get_task(task_id).question.id), now).task
-    first_q = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])["set"][0]
+    first_q = task_state(task_id)["set"][0]
     task = engine.flag(first_q, "ambiguous", now)
     assert task.progress.answered == 0 and task.progress.total_questions == 3
     for _ in range(3):
@@ -813,18 +1088,16 @@ def test_flag_after_finished_review_rescores_it() -> None:
     now = T0 + days(3)
     task_id, result = _review(fx, "S1", now, "110")
     assert result.task.outcome == "failed"
-    last_q = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])["set"][2]
+    last_q = task_state(task_id)["set"][2]
     task = engine.flag(last_q, "", now + timedelta(minutes=1))
     assert task.outcome == "passed" and task.xp_value == 5
-    assert xp_total(fx.course_id) == 12 + 5  # lesson (10 + no-mistakes bonus) + re-scored review
+    assert xp_total(fx.course_id) == 12 + 5  # lesson (10 + perfect bonus) + re-scored review
     rows = db.query("SELECT rating FROM review_log WHERE skill_id = ? AND implicit = 0 ORDER BY created_at", (fx.sid("S1"),))
     assert [r["rating"] for r in rows] == [3, 3]  # lesson pass + the re-scored review (the Again row is gone)
     assert db.query_one("SELECT lapses FROM progress WHERE skill_id = ?", (fx.sid("S1"),))["lapses"] == 0
 
 
 def test_rescored_review_undoes_stale_fire_effects() -> None:
-    """A review failed only because of a broken question: once re-scored to a pass, the penalty it put on a
-    dependent is undone (and the credit of the new result applied)."""
     fx = build_course()
     for key in ("S1", "S2", "S3"):
         learn(fx, key, T0)
@@ -838,8 +1111,7 @@ def test_rescored_review_undoes_stale_fire_effects() -> None:
         "SELECT rating FROM review_log WHERE skill_id = ? AND implicit = 1", (fx.sid("S3"),)
     )
     assert [r["rating"] for r in implicit()] == [1]
-    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
-    for qid in st["set"][1:]:
+    for qid in task_state(task_id)["set"][1:]:
         task = engine.flag(qid, "the answer key is wrong", now + timedelta(minutes=1))
     assert task.outcome == "passed"
     assert scheduler.utc(card(fx.sid("S3")).due) == s3_due  # the stale penalty is gone
@@ -852,6 +1124,22 @@ def test_review_requires_learned_skill() -> None:
         engine.start_review(fx.sid("S1"), "x", T0)
 
 
+def test_review_of_a_proof_skill_includes_one_written_question() -> None:
+    fx = build_course()
+    learn(fx, "S1", T0)
+    kp0, kp1 = fx.questions["S1"]
+    _make_free_response(kp0[1], kp1[1], kp1[2])
+    now = T0 + days(3)
+    plain = engine.start_review(fx.sid("S1"), "Review due", now)  # not a proof skill: no rule
+    engine.abandon(plain, now)
+    db.execute("UPDATE skills SET kind = 'proof' WHERE id = ?", (fx.sid("S1"),))
+    task_id = engine.start_review(fx.sid("S1"), "Review due", now)
+    st = task_state(task_id)
+    kinds = [question(q)["kind"] for q in st["set"]]
+    assert kinds.count("free_response") == 1 and len(st["set"]) == 3
+    assert {question(q)["kp_index"] for q in st["set"]} == {0, 1}
+
+
 # ---------------------------------------------------------------------------
 # Question top-ups
 # ---------------------------------------------------------------------------
@@ -859,8 +1147,8 @@ def test_review_requires_learned_skill() -> None:
 
 def test_top_up_requested_when_unseen_questions_run_low(isolated_engine) -> None:
     fx = build_course()
-    _fail_kp0(fx)
-    assert (fx.sid("S1"), 0) in isolated_engine  # only 1 unseen question left in KP 1
+    _fail_now(fx, "S1", T0)  # 2 answered: 2 unseen left in KP 1 < target + 1
+    assert (fx.sid("S1"), 0) in isolated_engine
     learn(fx, "S2", T0)
     isolated_engine.clear()
     engine.start_review(fx.sid("S2"), "Review due", T0 + days(3))
@@ -880,73 +1168,112 @@ def test_top_up_wrapper_calls_pipeline_once_per_window(monkeypatch: pytest.Monke
 
 
 # ---------------------------------------------------------------------------
-# E3: the server's per-attempt record is handed back to the client
+# Tasks written by earlier versions keep working (in-flight state of a real course)
 # ---------------------------------------------------------------------------
 
 
-def test_task_restores_hints_reveal_and_committed_answer_after_a_reload() -> None:
+def _insert_task(fx, key: str, type_: str, phase: str, st: dict, now=T0) -> str:
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, phase, reason, state_json, created_at)"
+        " VALUES (?, ?, ?, ?, 'active', ?, 'old', ?, ?)",
+        (task_id, fx.course_id, fx.sid(key), type_, phase, st if isinstance(st, str) else db.dumps(st), scheduler.iso(now)),
+    )
+    return task_id
+
+
+def _old_attempt(fx, key: str, task_id: str, qid: str, *, correct: int, independent: int, hints: int = 0, revealed: int = 0) -> None:
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, independent, response, hints_used,"
+        " revealed, seconds, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (db.new_id(), task_id, qid, fx.sid(key), correct, "correct" if correct else "incorrect", independent, "x", hints,
+         revealed, 3.0, scheduler.iso(T0)),
+    )  # fmt: skip
+
+
+def _old_lesson_state(**overrides) -> dict:
+    st = {
+        "kp_total": 2, "kp": 0, "playable": [0, 1], "served": [], "slots": {}, "easier": [], "log": [], "wrong_run": 0,
+        "self_grades": {}, "fail": None, "result": {}, "current": None, "revealed": False, "hints": 0,
+        "compared": None, "compared_raw": None,
+    }  # fmt: skip
+    st.update(overrides)
+    return st
+
+
+def test_old_active_lesson_state_is_scored_from_its_attempts() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
-    _make_free_response(kp0[1])
-    task_id, task = start_practice(fx, "S1")
-    assert (task.question.hints_used, task.question.revealed, task.question.committed_response) == (0, False, None)
-    engine.hint(task.question.id, T0)
-    engine.hint(task.question.id, T0)
-    reloaded = engine.get_task(task_id)
-    assert reloaded.question.hints_used == 2 and reloaded.question.revealed is False
-    engine.reveal(task.question.id, T0)
-    assert engine.get_task(task_id).question.revealed is True
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.question.id == kp0[1] and task.question.hints_used == 0 and task.question.revealed is False
-    typed = "Let z = a + bi.\n\nThen z times its conjugate is a^2 + b^2."
-    engine.reveal(kp0[1], T0, response=typed)
-    reloaded = engine.get_task(task_id)
-    assert reloaded.question.committed_response == typed.strip()  # as typed, line breaks kept
-    assert reloaded.question.revealed is False  # a comparison after a committed answer is not a reveal
+    st = _old_lesson_state(
+        served=[kp0[0], kp0[1], kp0[2]], slots={"0": [kp0[0], kp0[1], kp0[2]]}, current=kp0[2],
+        log=[
+            {"q": kp0[0], "kp": 0, "res": "assisted", "void": False, "scaffold": False},
+            {"q": kp0[1], "kp": 0, "res": "correct", "void": False, "scaffold": False},
+        ],
+    )
+    task_id = _insert_task(fx, "S1", "lesson", "practice", st)
+    _old_attempt(fx, "S1", task_id, kp0[0], correct=1, independent=0, hints=1)
+    _old_attempt(fx, "S1", task_id, kp0[1], correct=1, independent=1)
+    task = engine.get_task(task_id)
+    p = task.progress
+    assert task.question.id == kp0[2] and task.question.step_index == 0
+    assert (p.points, p.max_points, p.kp_target, p.planned, p.answered) == (1.5, 2.0, 3, 5, 2)
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.9)
+    assert lesson_rating(fx.sid("S1")) == 3
 
 
-def test_progress_reports_kp_wrong_and_whether_an_easier_step_is_available() -> None:
+def test_old_state_with_a_revealed_answer_scores_zero_and_can_halt() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
-    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
-    task_id, task = start_practice(fx, "S1")
-    assert (task.progress.kp_wrong, task.progress.easier_available) == (0, False)  # no miss yet
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    assert task.question.tier == 1 and task.progress.kp_wrong == 1
-    assert task.progress.easier_available is False  # nothing strictly easier than a tier-1 question
-    task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.question.tier == 2 and task.progress.kp_wrong == 1
-    assert task.progress.easier_available is True  # an unseen tier-1 question is left
-    assert engine.get_task(task_id).progress.easier_available is True  # survives a reload
-    swapped = engine.easier_step(task_id, T0)
-    assert swapped.progress.easier_available is False  # nothing easier than the swapped-in question
-    task = engine.submit_answer(task_id, right(swapped.question.id), T0).task
-    assert task.phase == "done" and (task.progress.kp_wrong, task.progress.easier_available) == (0, False)
+    st = _old_lesson_state(
+        served=[kp0[0], kp0[1]], slots={"0": [kp0[0], kp0[1]]}, current=kp0[1],
+        log=[{"q": kp0[0], "kp": 0, "res": "assisted", "void": False, "scaffold": False}],
+    )
+    task_id = _insert_task(fx, "S1", "lesson", "practice", st)
+    _old_attempt(fx, "S1", task_id, kp0[0], correct=1, independent=0, revealed=1)
+    assert engine.get_task(task_id).progress.points == 0.0
+    result = engine.submit_answer(task_id, wrong(kp0[1]), T0)
+    assert result.task.outcome == "failed"  # 0 + 0, at best 4 / 6
 
 
-def test_easier_step_is_not_available_for_the_needed_written_question() -> None:
+def test_old_learn_phase_lesson_state_takes_the_lesson_targets() -> None:
     fx = build_course()
-    kp0 = fx.questions["S1"][0]
-    _make_free_response(kp0[2])
-    task_id, task = start_practice(fx, "S1")
-    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
-    assert task.question.id == kp0[2] and task.progress.kp_wrong == 1
-    assert task.progress.easier_available is False
-    with pytest.raises(engine.Conflict, match="won't count as a miss"):
-        engine.easier_step(task_id, T0)
+    set_targets(fx, "S3", [1, 1])
+    st = {"kp_total": 2, "kp": 0, "playable": [0, 1], "served": [], "slots": {}, "easier": [], "log": [],
+          "wrong_run": 0, "self_grades": {}, "fail": None, "result": {}, "current": None, "revealed": False, "hints": 0}  # fmt: skip
+    task_id = _insert_task(fx, "S3", "lesson", "learn", st)
+    assert engine.get_task(task_id).progress.planned == 2
+    task = engine.begin_practice(task_id, T0)
+    assert task.question.kp_index == 0
+    done = finish(task_id, task)
+    assert done.task.outcome == "passed" and done.task.progress.answered == 2
 
 
-def test_review_of_a_proof_skill_includes_one_written_question() -> None:
+@pytest.mark.parametrize("raw", ["{}", "not json", "[]", '{"log": [{"q": null}], "slots": [], "served": null}'])
+def test_broken_or_empty_old_state_never_crashes(raw: str) -> None:
+    fx = build_course()
+    task_id = _insert_task(fx, "S1", "lesson", "learn", raw)
+    task = engine.get_task(task_id)
+    assert task.question is None and task.progress.answered == 0
+    task = engine.begin_practice(task_id, T0)
+    assert task.question is not None
+    assert engine.abandon(task_id, T0).outcome == "abandoned"
+    review_id = _insert_task(fx, "S2", "review", "practice", raw)
+    assert engine.get_task(review_id).progress.answered == 0
+
+
+def test_old_review_state_in_progress_finishes_with_the_new_scoring() -> None:
     fx = build_course()
     learn(fx, "S1", T0)
-    kp0, kp1 = fx.questions["S1"]
-    _make_free_response(kp0[1], kp1[1], kp1[2])
     now = T0 + days(3)
-    plain = engine.start_review(fx.sid("S1"), "Review due", now)  # not a proof skill: no rule
-    engine.abandon(plain, now)
-    db.execute("UPDATE skills SET kind = 'proof' WHERE id = ?", (fx.sid("S1"),))
-    task_id = engine.start_review(fx.sid("S1"), "Review due", now)
-    st = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])
-    kinds = [question(q)["kind"] for q in st["set"]]
-    assert kinds.count("free_response") == 1 and len(st["set"]) == 3
-    assert {question(q)["kp_index"] for q in st["set"]} == {0, 1}
+    kp0, kp1 = fx.questions["S1"]
+    st = {
+        "set": [kp0[2], kp1[2], kp1[3]], "pos": 2, "served": [kp0[2], kp1[2], kp1[3]], "self_grades": {}, "result": {},
+        "log": [{"q": kp0[2], "res": "wrong", "credit": 0.0, "void": False}, {"q": kp1[2], "res": "correct", "credit": 1.0, "void": False}],
+        "current": kp1[3], "revealed": False, "hints": 0, "compared": None, "compared_raw": None,
+    }  # fmt: skip
+    task_id = _insert_task(fx, "S1", "review", "practice", st, now)
+    assert engine.get_task(task_id).progress.points == 2.0  # 1×0 + 2×1
+    done = engine.submit_answer(task_id, right(kp1[3]), now)
+    assert done.task.outcome == "passed" and done.xp_awarded == 4  # (0 + 2 + 3) / 6 = 0.83 → Good

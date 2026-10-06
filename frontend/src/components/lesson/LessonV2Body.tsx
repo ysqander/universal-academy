@@ -172,20 +172,6 @@ function Sequence({ lesson, kind, preview = false, footer, fingerprint }: Lesson
                     </div>
                   </section>
                 )}
-                {lesson.common_mistakes.length > 0 && (
-                  <details className="disclosure">
-                    <summary>Common mistakes ({lesson.common_mistakes.length})</summary>
-                    <div className="disclosure__body">
-                      <ul className="lesson__mistakes">
-                        {lesson.common_mistakes.map((mistake, i) => (
-                          <li key={i}>
-                            <Markdown>{mistake}</Markdown>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </details>
-                )}
                 {lesson.deeper.trim() && (
                   <details className="disclosure lesson-deeper">
                     <summary>

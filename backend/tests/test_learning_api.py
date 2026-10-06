@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from test_learning_fixtures import build_course, isolated_engine, question, wrong_response  # noqa: F401
+from test_learning_fixtures import (  # noqa: F401
+    add_capstone,
+    build_course,
+    isolated_engine,
+    question,
+    set_targets,
+    wrong_response,
+)
 
 from app import db
 from app.api import study
@@ -52,20 +59,25 @@ def test_full_study_loop(client: TestClient) -> None:
     result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"])).json()
     assert result["correct"] and not result["independent"]  # the solution was revealed first
 
+    assert result["score"] == 0 and result["question_done"] is True and result["step_result"] is None
     task = result["task"]
+    progress = task["progress"]
+    assert (progress["kp_target"], progress["planned"], progress["pass_mark"], progress["score"]) == (3, 5, 0.8, 0)
     xp_awarded = 0
     while task["phase"] != "done":
         result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"])).json()
-        assert result["status"] == "correct" and result["feedback"]
+        assert result["status"] == "correct" and result["feedback"] and result["score"] == 1
         task = result["task"]
         xp_awarded += result["xp_awarded"]
-    assert task["outcome"] == "passed" and xp_awarded == 12 and task["skill"]["status"] == "learned"
+    # 0 + 1 + 1 + 1 + 1 of 5 = 80 %: passed exactly at the mark, round(10 × 0.8) XP
+    assert task["outcome"] == "passed" and xp_awarded == 8 and task["skill"]["status"] == "learned"
+    assert task["progress"]["score"] == pytest.approx(0.8)
 
     again = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(fx.questions["S1"][0][0]))
     assert again.status_code == 409
 
     nxt = client.get(f"/api/courses/{cid}/next").json()
-    assert nxt["session"]["xp_today"] == 12 and nxt["task"] is None
+    assert nxt["session"]["xp_today"] == 8 and nxt["task"] is None
     assert [o["skill"]["key"] for o in nxt["options"]] == ["S2"]
 
 
@@ -89,12 +101,12 @@ def test_manual_start_flag_easier_and_abandon(client: TestClient) -> None:
     assert done["phase"] == "done" and done["outcome"] == "abandoned"
 
     kp0 = fx.questions["S1"][0]
+    db.execute("UPDATE questions SET tier = 2 WHERE id = ?", (kp0[1],))
     db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
     task = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S1")}).json()
     task = client.post(f"/api/tasks/{task['id']}/practice").json()
-    for _ in range(2):
-        result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"], correct=False)).json()
-        task = result["task"]
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"], correct=False)).json()
+    task = result["task"]
     assert result["suggestion"] == "easier_step" and result["suggestion_text"]
     easier = client.post(f"/api/tasks/{task['id']}/easier")
     assert easier.status_code == 200 and easier.json()["question"]["id"] == kp0[3]
@@ -136,13 +148,9 @@ def test_hint_reveal_and_task_switching_over_http(client: TestClient) -> None:
     assert client.post(f"/api/questions/{qid}/hint").status_code == 409  # no longer the current question
     assert client.post("/api/questions/nope/hint").status_code == 404
 
-    # D1: a reveal with a body; a non-free-response question is always marked revealed
+    assert result["score"] == 0.5
     task = result["task"]
-    q2 = task["question"]["id"]
-    revealed = client.post(f"/api/questions/{q2}/reveal", json={"response": "a long enough committed answer"})
-    assert revealed.status_code == 200 and revealed.json()["solution"]
-    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(q2)).json()
-    assert result["correct"] and not result["independent"]
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"])).json()
 
     # choice questions report the right option
     task = result["task"]
@@ -161,6 +169,14 @@ def test_hint_reveal_and_task_switching_over_http(client: TestClient) -> None:
     forced = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S3"), "replace_active": True, "force": True})
     assert forced.status_code == 200 and forced.json()["skill"]["key"] == "S3"
     assert client.get(f"/api/tasks/{task['id']}").json()["outcome"] == "abandoned"
+
+    # D1: a reveal with a body; a non-free-response question is always marked revealed
+    task = client.post(f"/api/tasks/{forced.json()['id']}/practice").json()
+    q = task["question"]["id"]
+    revealed = client.post(f"/api/questions/{q}/reveal", json={"response": "a long enough committed answer"})
+    assert revealed.status_code == 200 and revealed.json()["solution"]
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(q)).json()
+    assert result["correct"] and not result["independent"] and result["score"] == 0
 
 
 def test_unsimplified_answer_is_asked_again_over_http(client: TestClient) -> None:
@@ -198,3 +214,37 @@ def test_learn_anyway_then_resume_without_force_and_reload_restores_state(client
     assert reloaded["question"]["committed_response"] is None
     assert reloaded["progress"]["kp_wrong"] == 1
     assert reloaded["progress"]["easier_available"] is False  # the current question is tier 1: nothing easier
+
+
+def test_multistep_capstone_over_http(client: TestClient) -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    cap = add_capstone(fx, "S1")
+    task = client.post(f"/api/courses/{fx.course_id}/tasks", json={"skill_id": fx.sid("S1")}).json()
+    assert task["progress"]["planned"] == 3
+    task = client.post(f"/api/tasks/{task['id']}/practice").json()
+    for _ in range(2):
+        task = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"])).json()["task"]
+    q = task["question"]
+    assert q["id"] == cap and q["role"] == "capstone" and q["kind"] == "multistep" and task["progress"]["in_capstone"]
+    assert [s["index"] for s in q["steps"]] == [0, 1, 2] and all("answer" not in s for s in q["steps"])
+    url = f"/api/tasks/{task['id']}/answer"
+    no_step = client.post(url, json={"question_id": cap, "response": "5"})
+    assert no_step.status_code == 409
+    assert client.post(url, json={"question_id": cap, "step": 1, "choice": 2}).status_code == 409
+    step0 = client.post(url, json={"question_id": cap, "step": 0, "response": "5"}).json()
+    assert step0["status"] == "step" and step0["question_done"] is False and step0["step_result"]["score"] == 1
+    assert step0["task"]["question"]["step_index"] == 1 and step0["xp_awarded"] == 0
+    assert client.post(f"/api/questions/{cap}/hint?step=0").status_code == 409
+    hint = client.post(f"/api/questions/{cap}/hint?step=1")
+    assert hint.status_code == 200 and hint.json() == {"hint": "Not A.", "hints_used": 1}
+    reloaded = client.get(f"/api/tasks/{task['id']}").json()["question"]
+    assert reloaded["step_index"] == 1 and reloaded["hints_used"] == 1 and len(reloaded["step_results"]) == 1
+    step1 = client.post(url, json={"question_id": cap, "step": 1, "choice": 2}).json()
+    assert step1["step_result"]["score"] == 0.5 and step1["correct_choice"] == 2
+    shown = client.post(f"/api/questions/{cap}/reveal", json={}).json()
+    assert shown["correct_answer"] == "$3+4i$"
+    last = client.post(url, json={"question_id": cap, "step": 2, "response": "3+4i"}).json()
+    assert last["question_done"] is True and last["status"] == "incorrect" and last["score"] == pytest.approx(0.5)
+    # (1 + 1 + 2 × 0.5) / 4 = 0.75 < 80 %
+    assert last["task"]["outcome"] == "failed" and last["suggestion"] == "retry_later"

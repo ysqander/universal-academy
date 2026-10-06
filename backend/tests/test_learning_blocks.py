@@ -440,24 +440,23 @@ def test_lesson_with_true_false_set_questions() -> None:
 
     missed = engine.submit_answer(task_id, AnswerSubmit(question_id=first.id, response="T T T"), T0)
     assert not missed.correct and missed.status == "incorrect" and not missed.independent
-    assert missed.feedback == "Statement 1 is actually false."
+    assert missed.feedback.startswith("Statement 1 is actually false.") and "One more question" in missed.feedback
     assert missed.correct_answer == "False, true, true" and missed.correct_choice is None and missed.solution
 
+    assert missed.score == 0 and missed.task.progress.kp_target == 3  # one extra question after the miss
+
     second = missed.task.question
-    hinted = engine.submit_answer(task_id, right(second.id, hints_used=1), T0)  # with help: not independent
-    assert hinted.correct and not hinted.independent and hinted.correct_answer == "1 True · 2 False · 3 True"
-    third = hinted.task.question
-    a = engine.submit_answer(task_id, right(third.id), T0)
-    assert a.correct and a.independent and a.task.progress.streak == 1
+    a = engine.submit_answer(task_id, right(second.id), T0)
+    assert a.correct and a.independent and a.correct_answer == "1 True · 2 False · 3 True" and a.score == 1
     b = engine.submit_answer(task_id, right(a.task.question.id), T0)
-    assert b.independent and b.task.progress.kp_index == 1  # two independent true/false sets in a row pass the KP
+    assert b.independent and b.task.progress.kp_index == 1  # the KP's 3 planned questions are done
     task = b.task
     while task.phase != "done":
         task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.outcome == "passed"
+    assert task.outcome == "passed" and task.progress.score == pytest.approx(0.8)
     attempts = db.query("SELECT response, correct, independent FROM attempts WHERE task_id = ? ORDER BY created_at, rowid", (task_id,))
-    assert [(r["response"], r["correct"], r["independent"]) for r in attempts[:4]] == [
-        ("T T T", 0, 0), ("TFT", 1, 0), ("TTF", 1, 1), ("FFT", 1, 1)
+    assert [(r["response"], r["correct"], r["independent"]) for r in attempts[:3]] == [
+        ("T T T", 0, 0), ("TFT", 1, 1), ("TTF", 1, 1)
     ]
 
 
@@ -465,14 +464,13 @@ def test_wrong_true_false_sets_count_as_misses_and_lead_to_the_easier_step() -> 
     fx = build_course()
     _all_true_false_sets(fx, "S1")
     kp0 = fx.questions["S1"][0]
-    db.execute("UPDATE questions SET tier = 3 WHERE id = ?", (kp0[2],))  # served third ...
+    db.execute("UPDATE questions SET tier = 3 WHERE id = ?", (kp0[1],))  # served second ...
     db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))  # ... with an easier one left
     task_id = engine.start_lesson(fx.sid("S1"), "test", T0)
     task = engine.begin_practice(task_id, T0)
     r1 = engine.submit_answer(task_id, wrong(task.question.id), T0)
-    r2 = engine.submit_answer(task_id, wrong(r1.task.question.id), T0)
-    assert not r1.correct and not r2.correct and r2.task.progress.kp_wrong == 2
-    assert r2.suggestion == "easier_step" and r2.task.progress.easier_available
+    assert not r1.correct and r1.score == 0 and r1.task.progress.kp_wrong == 1 and r1.task.question.id == kp0[1]
+    assert r1.suggestion == "easier_step" and r1.task.progress.easier_available
     swapped = engine.easier_step(task_id, T0)
     assert swapped.question.id == kp0[3] and swapped.question.kind == "true_false_set"
     assert engine.submit_answer(task_id, right(kp0[3]), T0).correct

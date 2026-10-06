@@ -91,8 +91,10 @@ def abandon_task(tid: str) -> Task:
 
 
 @router.post("/api/questions/{qid}/hint", response_model=HintResponse)
-def show_hint(qid: str) -> HintResponse:
-    return _run(lambda: engine.hint(qid, _now()))
+def show_hint(qid: str, step: int | None = None) -> HintResponse:
+    """Next hint for the current attempt (recorded server-side). Multistep: `?step=i` (the current step) returns
+    that step's single hint; using it halves the step's point."""
+    return _run(lambda: engine.hint(qid, _now(), step))
 
 
 @router.post("/api/questions/{qid}/reveal", response_model=RevealResponse)

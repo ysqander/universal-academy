@@ -20,6 +20,7 @@ from .schemas import (
     InlineCheckPublic,
     KnowledgePoint,
     Lesson,
+    MultistepStepPublic,
     NotationItem,
     PlotCurve,
     QuestionPublic,
@@ -65,7 +66,12 @@ def figure_view(row: dict[str, Any], labels: list[str]) -> Figure:
     )
 
 
+LEGACY_TARGET_QUESTIONS = 2  # knowledge points stored before target_questions existed
+
+
 def question_public(row: dict[str, Any]) -> QuestionPublic:
+    """A question as the learner sees it. Multistep: the steps without their answers or explanations (step_index and
+    step_results of the current attempt are filled in by the learning engine)."""
     return QuestionPublic(
         id=row["id"],
         skill_id=row["skill_id"],
@@ -79,7 +85,24 @@ def question_public(row: dict[str, Any]) -> QuestionPublic:
         checklist=db.loads(row["checklist_json"], []),
         source_exercise=row["source_exercise"],
         flagged=bool(row["flagged"]),
+        role="capstone" if row.get("role") == "capstone" else "practice",
+        steps=public_steps(row),
     )
+
+
+def public_steps(row: dict[str, Any]) -> list[MultistepStepPublic]:
+    if row.get("kind") != "multistep":
+        return []
+    return [
+        MultistepStepPublic(
+            index=i,
+            prompt=step.get("prompt", ""),
+            kind=step.get("kind", "expression"),
+            choices=list(step.get("choices") or []),
+            hint=step.get("hint", ""),
+        )
+        for i, step in enumerate(db.loads(row.get("steps_json"), []) or [])
+    ]
 
 
 def skill_status(skill_id: str) -> str:
@@ -151,6 +174,7 @@ def lesson_view(skill_id: str) -> Lesson | None:
         kps.append(
             KnowledgePoint(
                 index=i,
+                target_questions=_target(kp.get("target_questions")),
                 title=kp.get("title", f"Step {i + 1}"),
                 explanation=kp.get("explanation", ""),
                 worked_example=WorkedExample(**kp["worked_example"]),
@@ -192,7 +216,7 @@ def lesson_view(skill_id: str) -> Lesson | None:
         notation=[NotationItem(**n) for n in data.get("notation", [])],
         knowledge_points=kps,
         missing_steps=data.get("missing_steps", ""),
-        common_mistakes=data.get("common_mistakes", []),
+        common_mistakes=[] if v2 else data.get("common_mistakes", []),  # no such section in new lessons
         connection=data.get("connection", ""),
         visualization=None if v2 else visualization_view(db.loads(skill["viz_json"], None), course_id, labels),
         source_refs=clean_source_refs(data.get("source_refs") or db.loads(skill["source_refs_json"], [])),
@@ -203,6 +227,13 @@ def lesson_view(skill_id: str) -> Lesson | None:
         unlocks=[skill_ref(r) for r in unlocks],
         question_count=sum(1 for q in questions if not q["flagged"]),
     )
+
+
+def _target(value: Any) -> int:
+    try:
+        return min(3, max(1, int(value)))
+    except (TypeError, ValueError):
+        return LEGACY_TARGET_QUESTIONS
 
 
 def block_view(index: int, block: dict[str, Any], course_id: str, labels: list[str]) -> TeachingBlockView:

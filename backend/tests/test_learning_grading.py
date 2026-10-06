@@ -637,3 +637,21 @@ def test_other_shape_mismatches_stay_wrong_with_the_right_example() -> None:
     assert not grade("1+2*i", "(1, 2, 3)").invalid  # three components for one value: wrong, as before
     assert grade("(1/5, 2/5)", "(1/5, 2/5)").correct and grade("1/5+2*i/5", "1/5+2/5i").correct
     assert grade("1", "1+0i").correct
+
+
+@pytest.mark.parametrize("typed", ["(h+k+m, j+ell+n)", "(h+k+m, j+\\ell+n)", "(h+k+m, j+ℓ+n)", "(h+k+m, j+l+n)"])
+def test_ell_is_the_variable_l(typed):
+    """ℓ typed as 'ell' or '\\ell' is the variable l (verifier comparison 2026-10-06: 'ell' was read as e·l·l)."""
+    result = grading.check_answer(
+        "expression", answer="(h+k+m, j+l+n)", correct_choice=None, tolerance=None, response=typed, choice=None,
+        require_simplified=False,
+    )
+    assert result.correct
+
+
+def test_explicit_e_l_l_product_is_not_ell():
+    result = grading.check_answer(
+        "expression", answer="(h+k+m, j+l+n)", correct_choice=None, tolerance=None, response="(h+k+m, j+e*l*l+n)",
+        choice=None, require_simplified=False,
+    )
+    assert not result.correct

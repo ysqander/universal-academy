@@ -66,7 +66,7 @@ Per page, in PDF points:
 | graph | one high-reasoning call over the whole chapter markdown (`<<page N · p.L>>` markers, figure list) → `KnowledgeGraphDraft`; then validation | `skills`, `edges`, `foundations`, course.big_picture/excluded |
 | lessons | per skill (concurrent): `LessonDraft` from skill spec + its source pages (±1 page) + prerequisite/dependent skills + book exercises on those pages | skills.lesson_json, `questions` |
 | visuals | per skill: separate **visualization planner** call → `VisualizationPlan`; function plots are pre-sampled with SymPy (≤ 21 parameter values × 200 points) | skills.viz_json |
-| verify | per machine-checkable question: independent solve (`IndependentAnswer`) with a different prompt; compare with the grader (§6.1). Disagreement or reported problem → `flagged=1` (kept out of scoring) | questions.verify_json/flagged |
+| verify | per machine-checkable question: first a no-model check that the answer key agrees with the question's own displayed answer (else `key_mismatch` → flagged); then an independent solve (`IndependentAnswer`, model `gpt-6-luna`, given the course's notation such as "F: R or C" and told to work inside it); compare with the grader (§6.1). Disagreement or reported problem → `flagged=1` (kept out of scoring) | questions.verify_json/flagged |
 | finalize | initialize `progress` rows (available if no in-chapter prerequisites, else locked), course.status=ready | progress |
 
 Rules:

@@ -329,6 +329,9 @@ You independently check an auto-generated practice question. Solve it yourself, 
   choice = null.
 - true_false_set (mark each numbered statement true or false): answer = one letter per statement in order, T or F,
   e.g. "FTT"; choice = null.
+- Work inside the course's setting: the message may start with the textbook's notation and conventions. Do not
+  report a defect for cases that setting excludes — e.g. when F means R or C, a claim that would fail over other
+  fields (finite fields, characteristic 2) is not a defect, and an answer that relies on F being R or C is correct.
 - confidence: your probability (0-1) that your answer is correct.
 - problems: any defect of the question itself — ambiguous wording, missing information, no correct option, several
   correct options, an unclear answer format, or a correct option that can be recognized without solving (it is the

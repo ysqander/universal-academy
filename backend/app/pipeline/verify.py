@@ -11,6 +11,10 @@ compared with the step's key by the learner-facing grader. A disagreeing step is
 a step that still disagrees (or reports a defect) flags the whole question. verify_json = {status, steps: [per-step
 records]}.
 
+Before any model call, a question whose answer key contradicts its own displayed answer is flagged (status
+'key_mismatch'; questions.display_mismatch). The solver gets the course's notation (course_setting, e.g. "F: R or C")
+as a cached prefix and is told to work inside it, so it does not object about cases the textbook excludes.
+
 Flags are shared with the learner: a question the learner reported (any flag whose reason does not start with
 'verification:') is never un-flagged or re-verified here — verification only manages its own flags."""
 
@@ -18,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,7 +37,7 @@ from .prompts import (
     VERIFY_STEP_RECHECK,
     VERIFY_STEP_STATEMENTS_RECHECK,
 )
-from .questions import is_machine_checkable
+from .questions import display_mismatch, is_machine_checkable
 
 log = logging.getLogger("ua.pipeline.verify")
 
@@ -41,6 +46,9 @@ MIN_UNFLAGGED_PER_KP = LEGACY_TARGET  # a KP without a stored target keeps at le
 VERIFICATION_PREFIX = "verification:"
 RECHECK_KINDS = {"true_false_set"}  # a disagreement on these is re-solved once before the question is flagged
 _NO_PROBLEM = {"", "none", "none.", "n/a", "no", "no problems", "no problems.", "-"}
+SETTING_MAX_SYMBOLS = 60
+SETTING_TTL_SECONDS = 60.0
+_setting_cache: dict[str, tuple[float, str]] = {}
 
 
 @dataclass
@@ -58,6 +66,60 @@ def learner_flagged(row: dict[str, Any]) -> bool:
 
 def needs_verification(row: dict[str, Any]) -> bool:
     return is_machine_checkable(row["kind"]) and not db.loads(row["verify_json"], {}) and not learner_flagged(row)
+
+
+def course_setting(course_id: str) -> str:
+    """The textbook's notation as the course's lessons introduce it (first meaning of each symbol, in learning order),
+    e.g. "F: either R or C". The independent solver works inside this setting instead of objecting about cases the
+    book excludes (fields of characteristic 2 when F means R or C). Cached briefly per course."""
+    cached = _setting_cache.get(course_id)
+    if cached and time.monotonic() - cached[0] < SETTING_TTL_SECONDS:
+        return cached[1]
+    meanings: dict[str, str] = {}
+    rows = db.query(
+        "SELECT lesson_json FROM skills WHERE course_id = ? AND lesson_json IS NOT NULL ORDER BY order_index", (course_id,)
+    )
+    for r in rows:
+        for item in db.loads(r["lesson_json"], {}).get("notation", []) or []:
+            symbol, meaning = str(item.get("symbol", "")).strip(), str(item.get("meaning", "")).strip()
+            if symbol and meaning and symbol not in meanings and len(meanings) < SETTING_MAX_SYMBOLS:
+                meanings[symbol] = meaning
+    text = ""
+    if meanings:
+        lines = "\n".join(f"- {symbol}: {meaning}" for symbol, meaning in meanings.items())
+        text = f"COURSE SETTING — the textbook's notation and conventions (work inside them):\n{lines}"
+    _setting_cache[course_id] = (time.monotonic(), text)
+    return text
+
+
+def _setting_for(row: dict[str, Any]) -> str:
+    skill = db.query_one("SELECT course_id FROM skills WHERE id = ?", (row.get("skill_id"),)) if row.get("skill_id") else None
+    return course_setting(skill["course_id"]) if skill else ""
+
+
+def key_mismatch(row: dict[str, Any]) -> str | None:
+    """The question's answer key contradicts its own displayed answer (no model call) — the reason, or None."""
+    if row["kind"] == "multistep":
+        for i, step in enumerate(db.loads(row.get("steps_json"), []) or [], start=1):
+            mismatch = display_mismatch(
+                step["kind"],
+                answer=step.get("answer", ""),
+                answer_display=step.get("answer_display", ""),
+                choices=step.get("choices") or [],
+                correct_choice=step.get("correct_choice"),
+                tolerance=step.get("tolerance"),
+            )
+            if mismatch:
+                return f"step {i}: {mismatch}"
+        return None
+    return display_mismatch(
+        row["kind"],
+        answer=row.get("answer") or "",
+        answer_display=row.get("answer_display") or "",
+        choices=db.loads(row.get("choices_json"), []) or [],
+        correct_choice=row.get("correct_choice"),
+        tolerance=row.get("tolerance"),
+    )
 
 
 def verify_request(row: dict[str, Any]) -> str:
@@ -117,6 +179,7 @@ async def recheck(
             role="graph",
             instructions=instructions,
             text=text if text is not None else verify_request(row),
+            shared_prefix=_setting_for(row) or None,
             schema=IndependentAnswer,
             max_output_tokens=32000,
             label=f"verify {row['key']} (re-check)",
@@ -149,6 +212,7 @@ async def _solve(row: dict[str, Any], text: str, *, instructions: str, label: st
                 role="verify",
                 instructions=instructions,
                 text=text,
+                shared_prefix=_setting_for(row) or None,
                 schema=IndependentAnswer,
                 max_output_tokens=16000,
                 label=label,
@@ -179,6 +243,7 @@ def step_row(row: dict[str, Any], steps: list[dict[str, Any]], index: int) -> di
     step = steps[index]
     return {
         "id": row["id"],
+        "skill_id": row.get("skill_id"),
         "key": f"{row['key']} step {index + 1}",
         "kind": step["kind"],
         "prompt": step.get("prompt", ""),
@@ -260,7 +325,12 @@ async def verify_multistep(row: dict[str, Any]) -> Verdict | None:
 async def verify_question(row: dict[str, Any]) -> Verdict | None:
     """Independent solve (retried once; a true_false_set disagreement is re-checked once; a multistep question is
     verified step by step). None when the call failed — the question stays unverified."""
-    verdict = await (verify_multistep(row) if row["kind"] == "multistep" else _verify_single(row))
+    mismatch = key_mismatch(row)
+    if mismatch:
+        reason = f"{VERIFICATION_PREFIX} answer key and displayed answer disagree — {mismatch}"
+        verdict: Verdict | None = Verdict(True, reason, {"status": "key_mismatch"})
+    else:
+        verdict = await (verify_multistep(row) if row["kind"] == "multistep" else _verify_single(row))
     if verdict is None:
         return None
     # The CASE reads the current row, so a learner flag set while the call was in flight is kept as well.

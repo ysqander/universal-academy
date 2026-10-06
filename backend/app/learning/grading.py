@@ -441,7 +441,10 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     s = _replace_superscripts(s)
     s = _replace_subscripts(s)
     s = _replace_vulgar_fractions(s)
-    s = unicodedata.normalize("NFKC", s)
+    s = unicodedata.normalize("NFKC", s)  # also turns the script letter ℓ into l
+    # ℓ typed as "\ell" or spelled "ell" is the variable l, not e·l·l.
+    s = re.sub(r"\\ell(?![A-Za-z])", " l ", s)
+    s = re.sub(r"(?<![A-Za-z\\])ell(?![A-Za-z])", " l ", s)
     for src, dst in _UNICODE_OPS.items():
         s = s.replace(src, dst)
     for src, dst in _GREEK_CHARS.items():

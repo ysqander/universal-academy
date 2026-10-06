@@ -160,7 +160,102 @@ def clean_question(q: QuestionDraft) -> QuestionDraft:
         update |= {"checklist": checklist, "answer": "", "tolerance": None, "choices": [], "correct_choice": None}
     else:
         raise InvalidQuestion(f"unknown kind {q.kind}")
-    return q.model_copy(update=update)
+    cleaned = q.model_copy(update=update)
+    mismatch = display_mismatch(
+        cleaned.kind,
+        answer=cleaned.answer,
+        answer_display=cleaned.answer_display,
+        choices=cleaned.choices,
+        correct_choice=cleaned.correct_choice,
+        tolerance=cleaned.tolerance,
+    )
+    if mismatch:
+        raise InvalidQuestion(f"answer key and displayed answer disagree: {mismatch}")
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Key vs. displayed answer (no model call): a key that contradicts the question's own displayed answer is wrong in
+# one of the two places. Conservative — only a display that clearly reads as an answer is compared.
+# ---------------------------------------------------------------------------
+
+_KNOWN_WORDS = {"sqrt", "pi", "sin", "cos", "tan", "exp", "log", "ln", "re", "im", "arg", "abs"}
+# Inequalities, ± and text in a display: not a single value.
+_NOT_A_VALUE = re.compile(r"[<>]|\\(?:le|ge|ne|leq|geq|neq|pm|mp|text|in|notin)(?![A-Za-z])")
+
+
+def _displayed_value(shown: str) -> str | None:
+    """The value a numeric/expression answer_display shows ('$h(x)=(-x-1)+(x+2)i$.' -> '(-x-1)+(x+2)i'), or None
+    when the display is not just a value (prose, several alternatives, an inequality)."""
+    text = shown.strip().rstrip(".").strip()
+    text = re.sub(r"\\boxed\{(.*)\}", r"\1", text)
+    text = text.replace("$", "").strip().rstrip(".,;").strip()
+    if not text or _NOT_A_VALUE.search(text):
+        return None
+    # Words outside LaTeX commands ("or", "and", "both", "coordinates", …) mean prose, not a single value.
+    words = re.findall(r"[A-Za-z]{2,}", re.sub(r"\\[A-Za-z]+", " ", text))
+    if any(w.lower() not in _KNOWN_WORDS for w in words):
+        return None
+    if "=" in text:
+        text = text.rsplit("=", 1)[1].strip()  # "z = 3-2i" / "h(x) = …" -> the value after the last "="
+    return text or None
+
+
+def _symbol_names(text: str) -> set[str] | None:
+    try:
+        node = parse_answer(text)
+    except (AnswerParseError, ValueError, TypeError):
+        return None
+    return {str(sym) for scalar in node.scalars() if scalar.expr is not None for sym in scalar.expr.free_symbols}
+
+
+def _same_symbols(shown_value: str, answer: str) -> bool:
+    """The display uses only the key's variables. A question may ask the learner to type renamed variables (λ, x_k
+    typed as l, u), and then the display (in the book's symbols) cannot be compared with the key."""
+    shown, key = _symbol_names(shown_value), _symbol_names(answer)
+    return shown is not None and key is not None and shown <= key
+
+
+def display_mismatch(
+    kind: str,
+    *,
+    answer: str,
+    answer_display: str,
+    choices: list[str],
+    correct_choice: int | None,
+    tolerance: float | None,
+) -> str | None:
+    """Why the answer key contradicts the question's own displayed answer, or None (consistent or not comparable)."""
+    shown = (answer_display or "").strip()
+    if not shown:
+        return None
+    if kind == "true_false":
+        word = re.sub(r"[^a-z]", "", re.sub(r"\\text\{([^}]*)\}", r"\1", shown).lower())
+        if word in ("true", "false") and correct_choice in (0, 1) and (word == "true") != (correct_choice == 0):
+            return f"the key says {TRUE_FALSE[correct_choice]} but the answer shown is {shown!r}"
+        return None
+    if kind == "multiple_choice":
+        matches = [i for i, c in enumerate(choices) if _norm(_strip_math(c)) == _norm(_strip_math(shown))]
+        if len(matches) == 1 and matches[0] != correct_choice:
+            return f"the answer shown is option {matches[0]} but the key is option {correct_choice}"
+        return None
+    if kind == "true_false_set":
+        letters = parse_true_false_set(_strip_math(shown))
+        if letters and len(letters) == len(answer) and letters != answer:
+            return f"the answer shown reads {letters} but the key is {answer}"
+        return None
+    if kind in ("numeric", "expression"):
+        value = _displayed_value(shown)
+        if not value or not _same_symbols(value, answer):
+            return None
+        result = check_answer(
+            kind, answer=answer, correct_choice=None, tolerance=tolerance, response=value, choice=None,
+            require_simplified=False,
+        )
+        if result.invalid or result.correct:
+            return None
+        return f"the answer shown {shown!r} does not equal the key {answer!r}"
+    return None
 
 
 def clean_step(step: MultistepStep) -> MultistepStep:

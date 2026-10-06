@@ -63,6 +63,19 @@
   color: var(--status-due);
 }
 
+.task-option[data-type="quiz"] {
+  border-color: color-mix(in srgb, var(--quiz) 35%, var(--line));
+}
+
+.task-option[data-type="quiz"] .task-option__icon {
+  background: var(--quiz-bg);
+  color: var(--quiz);
+}
+
+.task-option[data-type="quiz"] .task-option__xp {
+  color: var(--quiz);
+}
+
 .task-option__body {
   display: flex;
   flex-direction: column;

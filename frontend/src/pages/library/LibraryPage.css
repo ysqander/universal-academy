@@ -175,6 +175,17 @@
   color: color-mix(in srgb, var(--status-due) 80%, var(--ink));
 }
 
+/* Quizzes (SPEC §6.7): "Quiz in 40 XP", and the forced "Quiz due". */
+.chip--quiz {
+  color: color-mix(in srgb, var(--quiz) 80%, var(--ink));
+}
+
+.chip--quiz-due {
+  background: var(--quiz-bg);
+  border-color: color-mix(in srgb, var(--quiz) 45%, transparent);
+  color: var(--quiz);
+}
+
 /* ----- books + import ----- */
 
 .library__books {

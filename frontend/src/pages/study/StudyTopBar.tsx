@@ -2,8 +2,10 @@ import { Link } from "react-router-dom";
 import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { ProgressBar } from "../../components/ProgressBar";
+import { TASK_ICON } from "../../components/taskIcon";
 import { TASK_LABEL } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
+import { clockTone, formatCountdown, taskTitle } from "../../lib/quiz";
 import type { SessionInfo, Task } from "../../types";
 
 interface StudyTopBarProps {
@@ -11,9 +13,12 @@ interface StudyTopBarProps {
   task: Task | null;
   session: SessionInfo | null;
   onEndTask: (() => void) | null;
+  /** A running quiz's countdown (seconds left), and what to announce when it crosses a minute / zero. */
+  clock?: { secondsLeft: number; announcement: string | null } | null;
 }
 
-export function StudyTopBar({ courseId, task, session, onEndTask }: StudyTopBarProps) {
+export function StudyTopBar({ courseId, task, session, onEndTask, clock = null }: StudyTopBarProps) {
+  const tone = clock ? clockTone(clock.secondsLeft) : null;
   return (
     <header className="study-bar">
       <div className="study-bar__inner">
@@ -26,10 +31,10 @@ export function StudyTopBar({ courseId, task, session, onEndTask }: StudyTopBarP
           {task ? (
             <>
               <span className="study-bar__type" data-type={task.type}>
-                <Icon name={task.type === "lesson" ? "lesson" : "review"} size={13} /> {TASK_LABEL[task.type]}
+                <Icon name={TASK_ICON[task.type]} size={13} /> {TASK_LABEL[task.type]}
               </span>
               <span className="study-bar__title">
-                <Markdown inline>{prettyTitle(task.skill.title)}</Markdown>
+                <Markdown inline>{prettyTitle(taskTitle(task))}</Markdown>
               </span>
               {task.reason && <span className="study-bar__reason">{task.reason}</span>}
             </>
@@ -37,6 +42,18 @@ export function StudyTopBar({ courseId, task, session, onEndTask }: StudyTopBarP
             <span className="study-bar__title muted">Study session</span>
           )}
         </div>
+
+        {clock && (
+          <div className="quiz-clock" data-tone={tone} role="timer" aria-label={`Time left ${formatCountdown(clock.secondsLeft)}`}>
+            <Icon name="stopwatch" size={16} strokeWidth={2} />
+            <span className="quiz-clock__time" aria-hidden="true">
+              {formatCountdown(clock.secondsLeft)}
+            </span>
+            <span className="visually-hidden" role="status">
+              {clock.announcement ?? ""}
+            </span>
+          </div>
+        )}
 
         {session && (
           <div className="study-bar__xp" title="XP today toward your daily goal">

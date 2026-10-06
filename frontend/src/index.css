@@ -35,6 +35,10 @@
   --status-due: #e0661b;
   --status-due-bg: #fde9da;
 
+  /* Quizzes (timed checks): a distinct, serious violet */
+  --quiz: #6a3696;
+  --quiz-bg: #efe6f6;
+
   /* Feedback */
   --success: #2f7d48;
   --success-bg: #e5f2e8;
@@ -124,6 +128,9 @@
     --status-mastered-bg: #1d4f4b;
     --status-due: #f28c45;
     --status-due-bg: #432614;
+
+    --quiz: #c7a3e6;
+    --quiz-bg: #2e2140;
 
     --success: #6cb883;
     --success-bg: #1e3326;
@@ -441,6 +448,18 @@ kbd {
 .btn--primary:hover {
   --btn-bg: var(--accent-strong);
   --btn-border: var(--accent-strong);
+}
+
+/* Quizzes: the timed check gets its own colour so it never looks like an ordinary lesson. */
+.btn--quiz {
+  --btn-bg: var(--quiz);
+  --btn-fg: var(--paper);
+  --btn-border: var(--quiz);
+}
+
+.btn--quiz:hover {
+  --btn-bg: color-mix(in srgb, var(--quiz) 86%, var(--ink));
+  --btn-border: color-mix(in srgb, var(--quiz) 86%, var(--ink));
 }
 
 .btn--ghost {

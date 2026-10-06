@@ -6,6 +6,7 @@ import { ProgressBar } from "../../components/ProgressBar";
 import { Spinner } from "../../components/Spinner";
 import { pageRangeLabel, percent, plural, relativeTime, TASK_LABEL } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
+import { isRetakeOption, optionMinutes, quizChipLabel, quizMinutes, taskTitle, type QuizGate } from "../../lib/quiz";
 import type { Course, NextTaskResponse } from "../../types";
 
 interface CourseHeaderProps {
@@ -15,10 +16,13 @@ interface CourseHeaderProps {
   idleMessage: string;
   onContinue: () => void;
   continuing: boolean;
-  onEditGoal: () => void;
+  /** Study settings (daily goal, quiz time). */
+  onEditSettings: () => void;
+  /** Quiz state (SPEC §6.7): the chip, and "Start quiz" when one is due. */
+  quiz: QuizGate;
 }
 
-export function CourseHeader({ course, next, idleMessage, onContinue, continuing, onEditGoal }: CourseHeaderProps) {
+export function CourseHeader({ course, next, idleMessage, onContinue, continuing, onEditSettings, quiz }: CourseHeaderProps) {
   const { stats } = course;
   const [expanded, setExpanded] = useState(false);
   // The daily goal counts XP across all courses: only the session total (from /next) is shown against it, never the
@@ -30,6 +34,20 @@ export function CourseHeader({ course, next, idleMessage, onContinue, continuing
   const top = next?.options[0];
   const canContinue = Boolean(active || top);
   const learnedFraction = stats.total_skills ? stats.learned / stats.total_skills : 0;
+  const quizChip = quizChipLabel(quiz);
+  // /continue resumes an open task first, then starts a due quiz (the menu then offers only the quiz) — or the optional
+  // retake when it is the only thing left on the menu (not forced: it is worded as an offer).
+  const quizNext = !active && top?.type === "quiz";
+  const retakeNext = quizNext && top !== undefined && isRetakeOption(top);
+  const activeRetake = active?.type === "quiz" && active.quiz?.kind === "retake";
+  const quizMin = active?.type === "quiz" && active.quiz ? quizMinutes(active.quiz) : quizNext && top ? optionMinutes(top) : null;
+  const continueLabel = active
+    ? activeRetake
+      ? "Resume retake"
+      : `Resume ${TASK_LABEL[active.type].toLowerCase()}`
+    : quizNext
+      ? `${retakeNext ? "Retake the quiz" : "Start quiz"}${quizMin ? ` · about ${quizMin} min` : ""}`
+      : "Continue learning";
 
   return (
     <header className="course-header">
@@ -76,10 +94,24 @@ export function CourseHeader({ course, next, idleMessage, onContinue, continuing
           <span className={`chip${stats.due_reviews ? " chip--due" : ""}`}>
             <Icon name="review" size={14} /> {stats.due_reviews ? `${plural(stats.due_reviews, "review")} due` : "No reviews due"}
           </span>
+          {quizChip && (
+            <span
+              className={`chip chip--quiz${quiz.due ? " chip--quiz-due" : ""}`}
+              title={
+                quiz.due
+                  ? "A timed quiz comes before new lessons and reviews"
+                  : quiz.optionalRetake
+                    ? "The optional retake is open but not started — you can start something else instead"
+                    : "A timed quiz on what you've learned comes about every 150 XP (with at least 5 new skills)"
+              }
+            >
+              <Icon name="stopwatch" size={14} /> {quizChip}
+            </span>
+          )}
           <button
             type="button"
             className={`chip chip--button${goalReached ? " chip--goal" : ""}`}
-            onClick={onEditGoal}
+            onClick={onEditSettings}
             title="Change your daily goal"
           >
             <Icon name="spark" size={14} /> {session ? session.xp_today : "–"}/{goal} XP today
@@ -94,21 +126,31 @@ export function CourseHeader({ course, next, idleMessage, onContinue, continuing
               <Icon name="check" size={14} /> {stats.mastered} mastered
             </span>
           )}
+          <button type="button" className="chip chip--button chip--icon" onClick={onEditSettings} aria-label="Study settings" title="Study settings: daily goal, quiz time">
+            <Icon name="sliders" size={14} />
+          </button>
         </div>
 
         <button
           type="button"
-          className="btn btn--primary btn--lg btn--block course-header__continue"
+          className={`btn btn--primary btn--lg btn--block course-header__continue${quizNext || active?.type === "quiz" ? " btn--quiz" : ""}`}
           onClick={onContinue}
           disabled={!canContinue || continuing}
         >
-          {continuing ? <Spinner size={18} label="Starting" /> : <Icon name="play" size={18} />}
-          {active ? `Resume ${TASK_LABEL[active.type].toLowerCase()}` : "Continue learning"}
+          {continuing ? <Spinner size={18} label="Starting" /> : <Icon name={quizNext || active?.type === "quiz" ? "stopwatch" : "play"} size={18} />}
+          {continueLabel}
         </button>
         <p className="course-header__next">
-          {active ? (
+          {active?.type === "quiz" ? (
+            active.quiz?.started_at ? (
+              `The ${activeRetake ? "retake" : "quiz"} clock is running — finish it to see your results.`
+            ) : (
+              `${activeRetake ? "Optional retake. " : ""}Timed${quizMin ? `, about ${quizMin} min` : ""} — the clock starts when you begin.`
+            )
+          ) : active ? (
             <>
-              <span className="key">{active.skill.key}</span> <Markdown inline>{prettyTitle(active.skill.title)}</Markdown>
+              {active.skill && <span className="key">{active.skill.key}</span>} <Markdown inline>{prettyTitle(taskTitle(active))}</Markdown>
+              {quiz.due && <span className="course-header__then"> Then a quiz.</span>}
             </>
           ) : top ? (
             top.reason

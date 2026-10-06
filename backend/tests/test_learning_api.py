@@ -41,7 +41,9 @@ def test_full_study_loop(client: TestClient) -> None:
 
     nxt = client.get(f"/api/courses/{cid}/next").json()
     assert nxt["task"] is None and [o["skill"]["key"] for o in nxt["options"]] == ["S1", "S2"]
-    assert nxt["session"] == {"xp_today": 0, "daily_goal": 30, "goal_reached": False, "due_reviews": 0}
+    assert nxt["session"] == {
+        "xp_today": 0, "daily_goal": 30, "goal_reached": False, "due_reviews": 0, "quiz_due": False, "xp_until_quiz": None,
+    }  # fmt: skip
 
     task = client.post(f"/api/courses/{cid}/continue").json()
     assert task["type"] == "lesson" and task["phase"] == "learn" and task["lesson"]["skill_key"] == "S1"
@@ -158,9 +160,9 @@ def test_errors_and_settings(client: TestClient) -> None:
     nothing = client.post(f"/api/courses/{pending.course_id}/continue")
     assert nothing.status_code == 409 and nothing.json()["detail"] == "Lessons are still being generated…"
 
-    assert client.get("/api/settings").json() == {"daily_goal": 30}
-    assert client.put("/api/settings", json={"daily_goal": 45}).json() == {"daily_goal": 45}
-    assert client.get("/api/settings").json() == {"daily_goal": 45}
+    assert client.get("/api/settings").json() == {"daily_goal": 30, "quiz_time_factor": 1.0}
+    assert client.put("/api/settings", json={"daily_goal": 45}).json() == {"daily_goal": 45, "quiz_time_factor": 1.0}
+    assert client.get("/api/settings").json() == {"daily_goal": 45, "quiz_time_factor": 1.0}
     assert client.put("/api/settings", json={"daily_goal": 0}).status_code == 422
     assert client.put("/api/settings", json={}).status_code == 422
 

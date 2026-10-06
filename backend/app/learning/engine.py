@@ -54,6 +54,9 @@ free-response question also needs one independent, self-graded "correct" written
 the KP's second question; if none can be obtained (no unserved written question left) the requirement is waived
 and the lesson's first FSRS rating is Hard.
 
+Quizzes (type 'quiz', SPEC §6.7) live in learning/quiz.py: build_task, get_task, begin_practice and submit_answer
+dispatch to it; abandon, easier_step, hint and reveal refuse a running quiz (409); flag voids a quiz question.
+
 Every mutating function takes an explicit `now` and serializes through `lock` (single-process app; SQLite
 writes are short and each step is a handful of statements). Grading an answer (SymPy, bounded by its own time
 budget) happens OUTSIDE the lock; the state is re-validated afterwards. Reads (get_task, build_task) need neither.
@@ -839,7 +842,12 @@ def _question_view(qrow: dict[str, Any], st: dict[str, Any]) -> QuestionPublic:
     return question
 
 
-def build_task(task: dict[str, Any]) -> Task:
+def build_task(task: dict[str, Any], now: datetime | None = None) -> Task:
+    """The task as the API shows it. `now` (default: the clock) only matters for a quiz (seconds left)."""
+    if task["type"] == "quiz":
+        from . import quiz
+
+        return quiz.build_task(task, now)
     st = _load_state(task)
     skill = _skill_row(task["skill_id"])
     question = None
@@ -878,8 +886,17 @@ def _cooldown_for(task: dict[str, Any]) -> str | None:
     return until.isoformat(timespec="seconds") if until and until > datetime.now(timezone.utc) else None
 
 
-def get_task(task_id: str) -> Task:
-    return build_task(_task_row(task_id))
+def get_task(task_id: str, now: datetime | None = None) -> Task:
+    """GET /api/tasks/{tid}. A quiz whose time ran out is finished first (SPEC §6.7)."""
+    task = _task_row(task_id)
+    if task["type"] == "quiz":
+        from . import quiz
+
+        now = now or datetime.now(timezone.utc)
+        if quiz.expire(task, now):
+            task = _task_row(task_id)
+        return quiz.build_task(task, now)
+    return build_task(task, now)
 
 
 # ---------------------------------------------------------------------------
@@ -1042,9 +1059,17 @@ def _start_review(skill_id: str, reason: str, now: datetime, st: dict[str, Any] 
     return task_id
 
 
+QUIZ_NO_ABANDON = "A quiz can't be left — finish it (the clock keeps running once it has started)."
+
+
 def abandon(task_id: str, now: datetime) -> Task:
+    """Leave a task (no XP). A quiz cannot be left (409); an optional retake only before its clock starts."""
     with lock:
         task = _task_row(task_id)
+        if task["type"] == "quiz" and task["status"] == "active":
+            st = _safe_loads(task["state_json"], {})
+            if st.get("kind") != "retake" or task["phase"] != "learn":
+                raise Conflict(QUIZ_NO_ABANDON)
         if task["status"] == "active":
             _complete(task, _safe_loads(task["state_json"], {}), "abandoned", 0, now)
             log.info("abandoned task %s", task_id)
@@ -1057,6 +1082,10 @@ def abandon(task_id: str, now: datetime) -> Task:
 
 
 def begin_practice(task_id: str, now: datetime) -> Task:
+    if _task_row(task_id)["type"] == "quiz":  # a task's type never changes
+        from . import quiz
+
+        return quiz.begin(task_id, now)
     with lock:
         task = _task_row(task_id)
         if task["status"] != "active":
@@ -1261,6 +1290,8 @@ def _easier_blocker(st: dict[str, Any], pool: _Pool) -> str | None:
 def easier_step(task_id: str, now: datetime) -> Task:
     with lock:
         task = _task_row(task_id)
+        if task["type"] == "quiz":
+            raise Conflict("There is no easier step in a quiz.")
         if task["type"] != "lesson":
             raise Conflict("An easier step is only available during a lesson.")
         st = _load_state(task)
@@ -1591,6 +1622,10 @@ def _current_step(q: dict[str, Any], st: dict[str, Any], sub: AnswerSubmit) -> t
 
 
 def submit_answer(task_id: str, sub: AnswerSubmit, now: datetime) -> AnswerResult:
+    if _task_row(task_id)["type"] == "quiz":  # a task's type never changes
+        from . import quiz
+
+        return quiz.submit_answer(task_id, sub, now)
     with lock:
         task = _task_row(task_id)
         st = _load_state(task)
@@ -1784,10 +1819,11 @@ def _after_review_answer(
 
 
 def _tasks_on_question(q: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Active tasks whose current question is q, with their state."""
+    """Active lessons/reviews whose current question is q, with their state."""
     out = []
     for task in db.query(
-        "SELECT * FROM tasks WHERE skill_id = ? AND status = 'active' AND state_json LIKE ?", (q["skill_id"], f"%{q['id']}%")
+        "SELECT * FROM tasks WHERE skill_id = ? AND status = 'active' AND type != 'quiz' AND state_json LIKE ?",
+        (q["skill_id"], f"%{q['id']}%"),
     ):
         st = _load_state(task)
         if st.get("current") == q["id"]:
@@ -1795,11 +1831,19 @@ def _tasks_on_question(q: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str
     return out
 
 
+def _in_active_quiz(question_id: str) -> bool:
+    """The question belongs to a quiz that is still running (no hints or solutions until it ends — SPEC §6.7)."""
+    rows = db.query("SELECT state_json FROM tasks WHERE type = 'quiz' AND status = 'active' AND state_json LIKE ?", (f"%{question_id}%",))
+    return any(question_id in (_safe_loads(r["state_json"], {}).get("set") or []) for r in rows)
+
+
 def hint(question_id: str, now: datetime, step: int | None = None) -> HintResponse:
     """Show the next hint for the current attempt and record it server-side (D2). A multistep question has one hint
-    per step: `step` (default: the current step) must be the current step."""
+    per step: `step` (default: the current step) must be the current step. None during a quiz (409)."""
     with lock:
         q = _question_row(question_id)
+        if _in_active_quiz(question_id):
+            raise Conflict("No hints during a quiz.")
         current = _tasks_on_question(q)
         if not current:
             raise Conflict("Hints are available for the question you're answering — reload the task.")
@@ -1840,9 +1884,11 @@ def _step_hint(q: dict[str, Any], current: list[tuple[dict[str, Any], dict[str, 
 def reveal(question_id: str, now: datetime, response: str | None = None) -> RevealResponse:
     """Show the model solution. For free response, a committed answer (>= COMPARE_MIN_CHARS non-space characters)
     makes this a comparison for self-grading; any other reveal before an answer marks the attempt as revealed (D1).
-    A multistep question reveals only its current step's answer (that step then scores 0)."""
+    A multistep question reveals only its current step's answer (that step then scores 0). Never during a quiz (409)."""
     with lock:
         q = _question_row(question_id)
+        if _in_active_quiz(question_id):
+            raise Conflict("Solutions are shown when the quiz is over.")
         current = _tasks_on_question(q)
         if q["kind"] == "multistep":
             steps = _steps(q)
@@ -1872,8 +1918,11 @@ def reveal(question_id: str, now: datetime, response: str | None = None) -> Reve
 
 
 def _task_serving(question_id: str, skill_id: str) -> dict[str, Any] | None:
+    """The task that served the question: an active one first, else the latest (lessons/reviews of the skill, and
+    quizzes, which span skills)."""
     rows = db.query(
-        "SELECT * FROM tasks WHERE skill_id = ? AND state_json LIKE ? ORDER BY status = 'active' DESC, created_at DESC, rowid DESC",
+        "SELECT * FROM tasks WHERE (skill_id = ? OR type = 'quiz') AND state_json LIKE ?"
+        " ORDER BY status = 'active' DESC, created_at DESC, rowid DESC",
         (skill_id, f"%{question_id}%"),
     )
     return next((r for r in rows if question_id in _safe_loads(r["state_json"], {}).get("served", [])), None)
@@ -1892,6 +1941,12 @@ def flag(question_id: str, reason: str, now: datetime) -> Task:
         )
         db.execute("UPDATE attempts SET status = 'voided' WHERE task_id = ? AND question_id = ?", (task["id"], question_id))
         log.info("question %s flagged by learner (task %s): %s", q["key"], task["id"], reason)
+        if task["type"] == "quiz":  # voided: out of the score, not replaced (SPEC §6.7)
+            from . import quiz
+
+            quiz.void_question(task, q, now)
+            request_top_up(q["skill_id"], q["kp_index"])
+            return build_task(_task_row(task["id"]), now)
         st = _load_state(task)
         for entry in st["log"]:
             if entry["q"] == question_id:

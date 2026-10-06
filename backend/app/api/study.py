@@ -1,5 +1,7 @@
 """Study loop API (SPEC §5, §6): next task menu, task lifecycle, answers, reveal/flag, settings, and the teaching
-blocks of v2 lessons (inline checks, "This step isn't clear")."""
+blocks of v2 lessons (inline checks, "This step isn't clear"). Quizzes (§6.7) use the same task endpoints: POST
+/practice starts the clock, answers return status "recorded", hints / reveal / easier / abandon are 409 during a quiz;
+a manual start with type 'quiz' starts the due quiz or the optional retake (skill_id is ignored)."""
 
 from __future__ import annotations
 
@@ -9,9 +11,9 @@ from datetime import datetime, timezone
 from typing import Any, TypeVar
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from ..learning import blocks, engine, selector, stats
+from ..learning import blocks, engine, quiz, selector, stats
 from ..schemas import (
     AnswerResult,
     AnswerSubmit,
@@ -35,6 +37,23 @@ T = TypeVar("T")
 
 class StudySettings(BaseModel):
     daily_goal: int = Field(ge=1, le=1000, description="Daily XP goal (1 XP ≈ 1 focused minute).")
+    quiz_time_factor: float = Field(
+        default=quiz.DEFAULT_TIME_FACTOR, ge=quiz.MIN_TIME_FACTOR, le=quiz.MAX_TIME_FACTOR,
+        description="Multiplies a quiz's time allowance (60 s per choice question, 90 s otherwise).",
+    )  # fmt: skip
+
+
+class StudySettingsUpdate(BaseModel):
+    """PUT /api/settings: only the fields sent are changed (at least one)."""
+
+    daily_goal: int | None = Field(default=None, ge=1, le=1000)
+    quiz_time_factor: float | None = Field(default=None, ge=quiz.MIN_TIME_FACTOR, le=quiz.MAX_TIME_FACTOR)
+
+    @model_validator(mode="after")
+    def _something_to_set(self) -> StudySettingsUpdate:
+        if self.daily_goal is None and self.quiz_time_factor is None:
+            raise ValueError("Send daily_goal and/or quiz_time_factor.")
+        return self
 
 
 def _now() -> datetime:
@@ -67,7 +86,8 @@ def start_task(cid: str, body: StartTaskRequest) -> Task:
 
 @router.get("/api/tasks/{tid}", response_model=Task)
 def get_task(tid: str) -> Task:
-    return _run(lambda: engine.get_task(tid))
+    """A quiz whose time ran out is finished first (its results are then in Task.quiz)."""
+    return _run(lambda: engine.get_task(tid, _now()))
 
 
 @router.post("/api/tasks/{tid}/practice", response_model=Task)
@@ -127,13 +147,20 @@ def list_block_feedback(sid: str) -> list[dict[str, Any]]:
     return _run(lambda: blocks.list_feedback(sid))
 
 
+def _settings() -> StudySettings:
+    return StudySettings(daily_goal=stats.get_daily_goal(), quiz_time_factor=quiz.get_time_factor())
+
+
 @router.get("/api/settings", response_model=StudySettings)
 def get_settings() -> StudySettings:
-    return StudySettings(daily_goal=stats.get_daily_goal())
+    return _settings()
 
 
 @router.put("/api/settings", response_model=StudySettings)
-def put_settings(body: StudySettings) -> StudySettings:
-    value = stats.set_daily_goal(body.daily_goal)
-    log.info("daily goal set to %d XP", value)
-    return StudySettings(daily_goal=value)
+def put_settings(body: StudySettingsUpdate) -> StudySettings:
+    """Partial update; the quiz time factor applies to quizzes whose clock has not started yet."""
+    if body.daily_goal is not None:
+        log.info("daily goal set to %d XP", stats.set_daily_goal(body.daily_goal))
+    if body.quiz_time_factor is not None:
+        log.info("quiz time factor set to %.2f", quiz.set_time_factor(body.quiz_time_factor))
+    return _settings()

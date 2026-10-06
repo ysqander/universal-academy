@@ -89,8 +89,12 @@ retake), with the learner's choices:
 - **Every 150 XP** (and at least 5 newly learned skills), **forced** ("we need a bit of discipline"): after the
   current task, nothing else can be started until the quiz is taken; it cannot be abandoned.
 - **Timed** (60–90 s per question, adjustable with `quiz_time_factor`); the clock runs on the server.
-- 6–8 single-answer questions, one per skill, recent skills first; no hints/solutions; correctness shown only at the
-  end; pass mark 80 %; missed skills → immediate review; optional retake below 80 %.
+- 6–8 single-answer questions, one per skill — never-quizzed skills first (coverage over recency: with more than 8
+  new skills between quizzes the newest wait for the next one), then the weakest; no hints/solutions/lesson view;
+  correctness shown only at the end; pass mark 80 %; missed skills → immediate review that ranks above everything;
+  optional retake below 80 %.
+- In a quiz an unsimplified correct value scores 0 (in lessons it gets a "simplify" prompt instead), and answers have
+  a 2 s grace after the deadline.
 Details: [SPEC.md §6.7](SPEC.md).
 
 ## 6. Verification
@@ -122,6 +126,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   top-ups otherwise make live API calls.
 - Stop the app before `replan.py` / `regenerate.py` (they refuse while :8000 answers); both back up the database.
 - The project lives in ProtonDrive: after parallel edits, look for `*conflict*` copies and re-run all tests.
+- The live SQLite database (`data/academy.sqlite3`) is synced by ProtonDrive too. On 2026-10-06 sync left two torn
+  "Edit conflict" copies next to it while a script was writing (moved to `data/backups/protondrive-conflicts/`; the main
+  file was intact). Open decision: move `UA_DATA_DIR` outside the synced folder and sync only backups.
 
 ## 9. Open items
 

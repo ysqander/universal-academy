@@ -315,7 +315,7 @@ def abandon_active_tasks(conn, skill_id: str) -> int:
     return conn.execute(
         "UPDATE tasks SET status = 'completed', phase = 'done', outcome = 'abandoned', xp_awarded = 0, completed_at = ?, "
         "state_json = CASE WHEN json_valid(state_json) THEN json_set(state_json, '$.current', NULL) ELSE state_json END "
-        "WHERE skill_id = ? AND status = 'active'",
+        "WHERE skill_id = ? AND status = 'active' AND type != 'quiz'",  # a running quiz spans many skills: never closed
         (db.now_iso(), skill_id),
     ).rowcount
 
@@ -323,9 +323,12 @@ def abandon_active_tasks(conn, skill_id: str) -> int:
 # questions an active task has served or is showing (safety net: never delete what a task may still answer)
 _VALID_STATE = "CASE WHEN json_valid(t.state_json) THEN t.state_json ELSE '{}' END"
 _IN_ACTIVE_TASKS = (
-    f"SELECT j.value FROM tasks t, json_each({_VALID_STATE}, '$.served') j WHERE t.status = 'active' AND t.skill_id = ? "
+    # a quiz's questions belong to many skills (tasks.skill_id is only its first one), so every active quiz counts
+    f"SELECT j.value FROM tasks t, json_each({_VALID_STATE}, '$.served') j WHERE t.status = 'active' "
+    "AND (t.skill_id = ? OR t.type = 'quiz') "
     "AND j.value IS NOT NULL "  # NOT IN (…, NULL) would match nothing
-    f"UNION SELECT json_extract({_VALID_STATE}, '$.current') FROM tasks t WHERE t.status = 'active' AND t.skill_id = ? "
+    f"UNION SELECT json_extract({_VALID_STATE}, '$.current') FROM tasks t WHERE t.status = 'active' "
+    "AND (t.skill_id = ? OR t.type = 'quiz') "
     f"AND json_extract({_VALID_STATE}, '$.current') IS NOT NULL"
 )
 

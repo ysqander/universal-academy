@@ -1,7 +1,8 @@
-"""XP rules (SPEC §6.3, §6.4): 1 XP ≈ 1 focused minute.
+"""XP rules (SPEC §6.3, §6.4, §6.7): 1 XP ≈ 1 focused minute.
 
 Lesson: round(est_minutes × score), clamped 3-20, +2 when the score is 100 %.
 Review: 4 at score >= 0.8 (+1 when perfect), 2 at score >= 0.6, 1 otherwise.
+Quiz (and retake): round(time-limit minutes × score). Quiz XP does not count toward the next quiz (learning/quiz.py).
 """
 
 from __future__ import annotations
@@ -45,6 +46,11 @@ def review_xp(score: float) -> int:
     if score >= REVIEW_HARD_SCORE - _EPS:
         return REVIEW_XP_HARD
     return REVIEW_XP_FAIL
+
+
+def quiz_xp(time_limit_minutes: int, score: float) -> int:
+    """SPEC §6.7: round(time-limit minutes × score), half up; no clamp, no bonus."""
+    return int(math.floor(max(0, int(time_limit_minutes)) * max(0.0, min(1.0, score)) + 0.5 + _EPS))
 
 
 def award(course_id: str, task_id: str, xp: int, now: datetime) -> None:

@@ -60,6 +60,11 @@ export function CourseCard({ course }: { course: CourseSummary }) {
       )}
 
       <div className="course-card__chips">
+        {stats.quiz_due && (
+          <span className="chip chip--quiz-due" title="A timed quiz comes before new lessons and reviews">
+            <Icon name="stopwatch" size={14} /> Quiz due
+          </span>
+        )}
         {stats.due_reviews > 0 && (
           <span className="chip chip--due">
             <Icon name="review" size={14} /> {plural(stats.due_reviews, "review")} due

@@ -38,7 +38,7 @@ function BookFigureImage({ figureId, src }: { figureId: string; src: string }) {
       {figure && (
         <span className="md-figure__caption">
           {figure.caption && <Markdown inline>{figure.caption}</Markdown>}
-          {course && (
+          {course && course.sourceLock === null && (
             <button type="button" className="md-figure__source" onClick={() => course.openSource(figure.page)}>
               p. {figure.page_label}
             </button>

@@ -48,6 +48,7 @@ export const STATUS_LABEL: Record<SkillStatus, string> = {
 export const TASK_LABEL: Record<TaskType, string> = {
   lesson: "Lesson",
   review: "Review",
+  quiz: "Quiz",
 };
 
 const KIND_LABEL: Record<string, string> = {

@@ -1,5 +1,6 @@
 // Typed client for the FastAPI backend (docs/SPEC.md §5). Every endpoint has one function here.
 import { isCooldownMessage } from "./lib/cooldown";
+import { isQuizFirstMessage } from "./lib/quiz";
 import type {
   AnswerResult,
   AnswerSubmit,
@@ -28,6 +29,8 @@ import type {
 // Request bodies / small payloads that are not part of the shared types.ts mirror.
 export interface Settings {
   daily_goal: number;
+  /** Quiz time accommodation (SPEC §6.7): 1 normal, 1.5 (+50 %), 2 (double). Older servers: absent (= 1). */
+  quiz_time_factor?: number;
 }
 
 export class ApiError extends Error {
@@ -219,6 +222,16 @@ export async function startTask(courseId: string, body: StartTaskRequest): Promi
     return post<Task>(path, { ...body, force: true });
   }
 }
+/** selector.start_task's 409 while a quiz is due ("Take the quiz first — about 9 minutes."): information, not an error. */
+export const isQuizFirstConflict = (err: unknown): err is ApiError => isApiError(err, 409) && isQuizFirstMessage(err.message);
+
+/**
+ * Start the quiz on offer (SPEC §6.7): POST /tasks with type "quiz" (a quiz has no skill; skill_id is ignored) starts
+ * the due quiz, else the optional retake; an open quiz is resumed. `replaceActive` sets an open lesson/review aside.
+ */
+export const startQuiz = (courseId: string, replaceActive = false) =>
+  post<Task>(`/api/courses/${seg(courseId)}/tasks`, { skill_id: "", type: "quiz", replace_active: replaceActive } satisfies StartTaskRequest);
+
 export const getTask = (taskId: string, signal?: AbortSignal) => get<Task>(`/api/tasks/${seg(taskId)}`, signal);
 export const startPractice = (taskId: string) => post<Task>(`/api/tasks/${seg(taskId)}/practice`);
 export const submitAnswer = (taskId: string, body: AnswerSubmit) => post<AnswerResult>(`/api/tasks/${seg(taskId)}/answer`, body);

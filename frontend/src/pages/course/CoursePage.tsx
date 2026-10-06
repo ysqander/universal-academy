@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { deleteCourse, getCourse, getGraph, getNext, isApiError } from "../../api";
+import { deleteCourse, getCourse, getGraph, getNext, getTask, isApiError } from "../../api";
 import { CourseProvider } from "../../components/CourseProvider";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
@@ -12,15 +12,16 @@ import { useToast } from "../../context/toast";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import { NARROW_QUERY, useMediaQuery } from "../../hooks/useMediaQuery";
 import { useResource } from "../../hooks/useResource";
-import { useStartTask } from "../../hooks/useStartTask";
+import { useStartTask, type StudyLocationState } from "../../hooks/useStartTask";
 import type { FoundationNode, JobStatus, SkillNode, TaskOption } from "../../types";
 import { isJobActive } from "../../lib/job";
 import { plainText, prettyTitle } from "../../lib/markdown";
+import { forgetOpenQuiz, openQuizId, quizContentLock, quizGate } from "../../lib/quiz";
 import { BuildProgress } from "./BuildProgress";
 import { CourseHeader } from "./CourseHeader";
-import { GoalDialog } from "./GoalDialog";
 import { LessonPreviewDialog } from "./LessonPreviewDialog";
 import type { GraphSelection } from "./selection";
+import { SettingsDialog } from "./SettingsDialog";
 import { SkillDrawer } from "./SkillDrawer";
 import { SkillList } from "./SkillList";
 import { SkillMap } from "./SkillMap";
@@ -48,7 +49,9 @@ export default function CoursePage({ courseId }: { courseId: string }) {
   const [view, setView] = useState<View | null>(null);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
   const [previewSkill, setPreviewSkill] = useState<SkillNode | null>(null);
-  const [goalOpen, setGoalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // A quiz whose clock this browser showed: if its time ran out while away, its results are offered here once.
+  const [rememberedQuiz, setRememberedQuiz] = useState(() => openQuizId(courseId));
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [jobOverride, setJobOverride] = useState<JobStatus | null>(null);
@@ -90,7 +93,21 @@ export default function CoursePage({ courseId }: { courseId: string }) {
     },
     [reloadGraph, reloadNext],
   );
-  const { continueNext, startSkill, pending, replaceDialog } = useStartTask(courseId, next.data?.task ?? null, onCooldown);
+  // 409 "Take the quiz first": the menu (and the map's due state) is stale — a quiz became due since it loaded.
+  const onQuizFirst = useCallback(() => {
+    void reloadNext();
+    void reloadGraph();
+  }, [reloadNext, reloadGraph]);
+  const { continueNext, startSkill, startOption, pending, replaceDialog } = useStartTask(courseId, next.data?.task ?? null, onCooldown, onQuizFirst);
+  const lostQuiz = useResource(
+    rememberedQuiz && next.data && next.data.task?.id !== rememberedQuiz ? `quiz-results:${rememberedQuiz}` : null,
+    (signal) => getTask(rememberedQuiz ?? "", signal),
+  );
+  const quizResults = lostQuiz.data?.type === "quiz" && lostQuiz.data.phase === "done" ? lostQuiz.data : null;
+  const dismissQuizResults = () => {
+    forgetOpenQuiz(courseId);
+    setRememberedQuiz(null);
+  };
   useDocumentTitle(courseData ? plainText(prettyTitle(courseData.title)) : "Course");
 
   const refreshAll = useCallback(() => {
@@ -142,7 +159,40 @@ export default function CoursePage({ courseId }: { courseId: string }) {
   const currentView: View = view ?? (narrow ? "list" : "map");
   const showBuild =
     building || job?.state === "failed" || job?.state === "interrupted" || courseData.status === "failed" || failedLessons > 0;
-  const options = next.data?.options ?? [];
+  const activeTask = next.data?.task ?? null;
+  const quiz = quizGate(next.data?.session, courseData.stats, activeTask);
+  // While a quiz or retake is open, lessons and the book are closed (SPEC §6.7: no lesson or source view).
+  const contentLock = quizContentLock(activeTask);
+  // A due quiz is the only thing on offer (an older menu may still list other tasks: keep just the quiz then).
+  const allOptions = next.data?.options ?? [];
+  const quizOptions = allOptions.filter((o) => o.type === "quiz");
+  // The open quiz is the active task (the server doesn't list it): offer it in the menu too. Its reason names a
+  // retake as such, so the menu titles it "Quiz retake".
+  const openQuiz: TaskOption | null =
+    quiz.active && activeTask && quizOptions.length === 0
+      ? {
+          skill: null,
+          type: "quiz",
+          reason: quiz.optionalRetake
+            ? "Optional retake, not started yet — the clock starts when you begin. Start something else instead and the retake stays on offer."
+            : activeTask.quiz?.started_at
+              ? `${activeTask.quiz.kind === "retake" ? "The retake's clock" : "The clock"} is running — finish it to see your results.`
+              : activeTask.reason,
+          xp_value: activeTask.xp_value,
+          importance: 0,
+        }
+      : null;
+  // A forced quiz (due, open, or a retake whose clock runs) is all there is; an optional retake at its intro sits at
+  // the end of the server's menu, which stays open.
+  const options = quiz.blocksOthers
+    ? openQuiz
+      ? [openQuiz]
+      : quizOptions.length > 0
+        ? quizOptions
+        : allOptions
+    : openQuiz
+      ? [...allOptions.filter((o) => o.type !== "quiz"), openQuiz]
+      : allOptions;
   const graphData = graph.data;
   const hasSkills = Boolean(graphData && graphData.skills.length > 0);
   // Nothing to start yet while the build runs: say what is happening rather than a possibly stale server message
@@ -156,7 +206,7 @@ export default function CoursePage({ courseId }: { courseId: string }) {
     : next.data?.message || "Nothing to do right now.";
 
   return (
-    <CourseProvider courseId={courseId} pageRange={[courseData.start_page, courseData.end_page]}>
+    <CourseProvider courseId={courseId} pageRange={[courseData.start_page, courseData.end_page]} sourceLock={contentLock?.source ?? null}>
       <div className="page course-page">
         <CourseHeader
           course={courseData}
@@ -164,10 +214,32 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           idleMessage={idleMessage}
           onContinue={() => void continueNext()}
           continuing={pending === "continue"}
-          onEditGoal={() => setGoalOpen(true)}
+          onEditSettings={() => setSettingsOpen(true)}
+          quiz={quiz}
         />
 
         {showBuild && <BuildProgress courseId={courseId} initialJob={job} onChange={onJobChange} failedLessons={building ? 0 : failedLessons} />}
+
+        {quizResults && (
+          <div className="callout course-page__quiz-results" role="status">
+            <Icon name="stopwatch" size={18} />
+            <span>
+              <strong>Your last quiz has ended.</strong> See how it went — reviews of anything you missed are already in your menu.
+            </span>
+            <span className="course-page__quiz-results-actions">
+              <button
+                type="button"
+                className="btn btn--sm btn--primary btn--quiz"
+                onClick={() => navigate(`/courses/${encodeURIComponent(courseId)}/study`, { state: { task: quizResults } satisfies StudyLocationState })}
+              >
+                See the results
+              </button>
+              <button type="button" className="btn btn--sm btn--ghost" onClick={dismissQuizResults}>
+                Dismiss
+              </button>
+            </span>
+          </div>
+        )}
 
         {next.data?.session.goal_reached && (
           <div className="callout callout--success course-page__goal">
@@ -182,11 +254,20 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           <div className="section-title">
             <h2 id="next-heading">Up next</h2>
           </div>
+          {quiz.blocksOthers && (
+            <p className="course-page__quiz-note">
+              <Icon name="stopwatch" size={16} />
+              <span>
+                {quiz.active ? "Your quiz is open — finish it before anything else. " : "A quiz comes before new lessons and reviews. "}
+                Quizzes check what you've learned under time pressure; reviews of anything you miss come straight after.
+              </span>
+            </p>
+          )}
           {options.length > 0 ? (
             <TaskMenu
               options={options}
-              pendingKey={pending}
-              onStart={(option: TaskOption) => void startSkill(option.skill.id, option.type)}
+              pendingKey={pending === "continue" && openQuiz ? "quiz:quiz" : pending}
+              onStart={(option: TaskOption) => void (option === openQuiz ? continueNext() : startOption(option))}
             />
           ) : next.error && !next.data ? (
             <ErrorState error={next.error} onRetry={() => void next.reload()} title="Couldn't load your next tasks" />
@@ -281,21 +362,25 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           // older server is retried once with force by api.startTask). "Start anyway" forces a lesson that is cooling down.
           onLearn={(skill, options) => void startSkill(skill.id, "lesson", { force: Boolean(options?.force) || skill.status === "locked" })}
           onReview={(skill) => void startSkill(skill.id, "review")}
-          onPreview={(skill) => setPreviewSkill(skill)}
+          onPreview={(skill) => {
+            if (!contentLock) setPreviewSkill(skill);
+          }}
           onFoundationChange={onFoundationChange}
           pending={pending}
           activeTask={next.data?.task ?? null}
           cooldownMessages={cooldowns}
+          quizFirst={quiz.blocksOthers}
         />
       )}
-      <LessonPreviewDialog skill={previewSkill} onClose={() => setPreviewSkill(null)} />
+      {/* A preview still open when a quiz opens (e.g. from another tab) closes with it. */}
+      <LessonPreviewDialog skill={contentLock ? null : previewSkill} onClose={() => setPreviewSkill(null)} />
       {replaceDialog}
-      <GoalDialog
-        open={goalOpen}
-        current={next.data?.session.daily_goal ?? courseData.stats.daily_goal}
-        onClose={() => setGoalOpen(false)}
+      <SettingsDialog
+        open={settingsOpen}
+        currentGoal={next.data?.session.daily_goal ?? courseData.stats.daily_goal}
+        onClose={() => setSettingsOpen(false)}
         onSaved={() => {
-          toast.show("Daily goal updated.", "success");
+          toast.show("Settings saved.", "success");
           refreshAll();
         }}
       />

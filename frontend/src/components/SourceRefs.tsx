@@ -34,7 +34,9 @@ export function SourceRefs({ refs, pages, labels, compact = false }: SourceRefsP
           type="button"
           className="source-refs__page"
           onClick={() => course?.openSource(page)}
-          disabled={!course}
+          // Closed while a quiz is open (SPEC §6.7): the reason is the button's title.
+          disabled={!course || course.sourceLock !== null}
+          title={course?.sourceLock ?? undefined}
           aria-label={`Open source passage, page ${labels[i] ?? page + 1}`}
         >
           p. {labels[i] ?? page + 1}

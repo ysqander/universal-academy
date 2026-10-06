@@ -86,6 +86,20 @@
   color: var(--danger);
 }
 
+.skill-details__note--quiz {
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--quiz-bg);
+  color: color-mix(in srgb, var(--quiz) 70%, var(--ink));
+  line-height: 1.45;
+}
+
+.skill-details__note--quiz > svg {
+  flex: none;
+  margin-top: 3px;
+}
+
 /* A halted lesson cooling down: the return time stands where the start button would be. */
 .skill-details__back {
   display: inline-flex;

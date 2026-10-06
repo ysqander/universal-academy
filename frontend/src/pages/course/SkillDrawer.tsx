@@ -10,6 +10,7 @@ import { useToast } from "../../context/toast";
 import { cooldownEnd, returnTimeFromMessage, returnTimePhrase } from "../../lib/cooldown";
 import { formatDateTime, kindLabel, percent, relativeTime } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
+import { quizContentLock } from "../../lib/quiz";
 import type { CourseGraph, FoundationNode, SkillNode, Task } from "../../types";
 import type { GraphSelection } from "./selection";
 import "./SkillDrawer.css";
@@ -27,10 +28,13 @@ interface SkillDrawerProps {
   onFoundationChange: (foundation: FoundationNode) => void;
   /** Key of the action currently starting ("<skillId>:lesson" / "<skillId>:review"). */
   pending: string | null;
-  /** The open (unfinished) task, if any: its skill's button resumes it. */
+  /** The open (unfinished) task, if any: its skill's button resumes it. While it is a quiz, lessons and the book are
+   * closed (SPEC §6.7). */
   activeTask: Task | null;
   /** The server's 409 "comes back at …" per skill id, from a start refused during the lesson's cooldown. */
   cooldownMessages?: Record<string, string>;
+  /** A quiz is due or open (SPEC §6.7): nothing else can be started — only an open lesson/review can be resumed. */
+  quizFirst?: boolean;
 }
 
 /** Re-render when `until` (ms since the epoch) passes, so a cooldown ends on screen without a reload. */
@@ -119,6 +123,7 @@ function SkillDetails({
   pending,
   activeTask,
   cooldownMessages,
+  quizFirst = false,
 }: SkillDrawerProps & { skill: SkillNode }) {
   const byId = useMemo(() => new Map(graph.skills.map((s) => [s.id, s])), [graph.skills]);
   const prerequisites = graph.edges.filter((e) => e.target === skill.id).flatMap((e) => byId.get(e.source) ?? []);
@@ -129,7 +134,14 @@ function SkillDetails({
   const missing = prerequisites.filter((p) => p.status !== "learned" && p.status !== "mastered");
   const sort = (list: SkillNode[]) => [...list].sort((a, b) => a.order_index - b.order_index);
   // A lesson started with "Learn anyway" keeps the skill locked (the menu won't offer it) but stays resumable.
-  const resuming = activeTask !== null && activeTask.phase !== "done" && activeTask.type === "lesson" && activeTask.skill.id === skill.id;
+  const openTask = activeTask !== null && activeTask.phase !== "done" ? activeTask : null;
+  const resuming = openTask?.type === "lesson" && openTask.skill?.id === skill.id;
+  // A due quiz blocks every other start; the open lesson or review of this skill may still be finished first.
+  const resumingReview = openTask?.type === "review" && openTask.skill?.id === skill.id;
+  const quizBlocked = quizFirst && !resuming && !resumingReview;
+  const blockedTitle = quizBlocked ? "Take the quiz first" : undefined;
+  // An open quiz (its intro too: it already lists the skills) closes the lesson preview and the book (SPEC §6.7).
+  const contentLock = quizContentLock(openTask);
   const locked = skill.status === "locked" && !resuming;
   // In progress without an open task: the last attempt ended (halted, or set aside) — starting makes a new attempt.
   const learnLabel = resuming ? "Continue lesson" : skill.status === "in_progress" ? "Start again" : locked ? "Learn anyway" : "Learn this";
@@ -170,8 +182,8 @@ function SkillDetails({
               type="button"
               className="btn btn--ghost btn--sm"
               onClick={() => onLearn(skill, { force: true })}
-              disabled={pending !== null || !ready}
-              title="Start a new attempt now instead of after the break"
+              disabled={pending !== null || !ready || quizBlocked}
+              title={blockedTitle ?? "Start a new attempt now instead of after the break"}
             >
               {pending === `${skill.id}:lesson` ? <Spinner size={14} label="Starting" /> : null}
               Start anyway
@@ -182,28 +194,43 @@ function SkillDetails({
             type="button"
             className="btn btn--primary"
             onClick={() => onReview(skill)}
-            disabled={pending !== null || !ready}
+            disabled={pending !== null || !ready || quizBlocked}
+            title={blockedTitle}
           >
             {pending === `${skill.id}:review` ? <Spinner size={14} label="Starting" /> : <Icon name="review" size={16} />}
-            Review now
+            {resumingReview ? "Continue review" : "Review now"}
           </button>
         ) : (
           <button
             type="button"
             className={`btn ${locked ? "" : "btn--primary"}`}
             onClick={() => onLearn(skill)}
-            disabled={pending !== null || (!ready && !resuming)}
+            disabled={pending !== null || (!ready && !resuming) || quizBlocked}
+            title={blockedTitle}
           >
             {pending === `${skill.id}:lesson` ? <Spinner size={14} label="Starting" /> : <Icon name="lesson" size={16} />}
             {learnLabel}
           </button>
         )}
         {ready && (
-          <button type="button" className="btn btn--ghost" onClick={() => onPreview(skill)}>
-            <Icon name="eye" size={16} /> Preview lesson
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={() => onPreview(skill)}
+            disabled={contentLock !== null}
+            title={contentLock?.lesson}
+          >
+            <Icon name={contentLock ? "lock" : "eye"} size={16} /> Preview lesson
           </button>
         )}
       </div>
+      {(quizBlocked || contentLock) && (
+        <p className="skill-details__note skill-details__note--quiz" role="status">
+          <Icon name="stopwatch" size={14} />{" "}
+          {quizBlocked && "Take the quiz first — it's waiting at the top of the course page. Reviews of anything you miss come straight after; then everything opens again. "}
+          {contentLock?.note}
+        </p>
+      )}
       {cooling && (
         <p className="skill-details__note">
           The last attempt stopped below the 80% pass mark. This lesson comes back {backAt ?? "in about 2 hours"} with

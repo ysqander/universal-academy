@@ -5,8 +5,10 @@ export interface CourseContextValue {
   courseId: string;
   /** Inclusive 0-based PDF page range of the course (for source-viewer paging). */
   pageRange: [number, number] | null;
-  /** Open the source viewer (book page image + transcription) at a 0-based PDF page. */
+  /** Open the source viewer (book page image + transcription) at a 0-based PDF page. Does nothing while locked. */
   openSource: (page: number) => void;
+  /** Why the book is closed right now (a quiz is open — SPEC §6.7: no source view), else null. */
+  sourceLock: string | null;
 }
 
 /** Course-scoped services for deeply nested content (figure URLs, "open source passage"). */

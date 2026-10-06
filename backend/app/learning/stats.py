@@ -2,6 +2,11 @@
 
 Public interface (stable): compute_stats(course_id, now=None) -> CourseStats
 
+Quiz fields (SPEC §6.7) come from learning/quiz.py: quiz_due, xp_until_quiz (None until enough skills are learned),
+last_quiz_score (the last finished quiz or retake). compute_stats first finishes an active quiz whose time ran out
+(its missed skills become due reviews and it is no longer due) — the library and the course header read stats
+before /next.
+
 "Today" and streaks use the machine's local timezone. XP today in CourseStats is per course; the daily goal
 and the streak belong to the learner, so they count XP across all courses (session_xp_today, streak_days).
 """
@@ -12,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from .. import db
 from ..schemas import CourseStats
-from . import scheduler
+from . import quiz, scheduler
 
 DEFAULT_DAILY_GOAL = 30
 DAILY_GOAL_KEY = "daily_goal"
@@ -72,7 +77,8 @@ def due_review_count(course_id: str, now: datetime) -> int:
 
 def compute_stats(course_id: str, now: datetime | None = None) -> CourseStats:
     now = now or datetime.now(timezone.utc)
-    rows = db.query("SELECT status, card_json FROM progress WHERE course_id = ?", (course_id,))
+    quiz.expire_active(course_id, now)  # a quiz whose time ran out is finished first: it changes due reviews + quiz_due
+    rows =db.query("SELECT status, card_json FROM progress WHERE course_id = ?", (course_id,))
     counts = db.query_one(
         "SELECT COUNT(*) AS total, SUM(lesson_status = 'ready') AS ready FROM skills WHERE course_id = ?", (course_id,)
     ) or {"total": 0, "ready": 0}
@@ -84,6 +90,8 @@ def compute_stats(course_id: str, now: datetime | None = None) -> CourseStats:
 
     def count(*statuses: str) -> int:
         return sum(1 for r in rows if r["status"] in statuses)
+
+    quiz_state = quiz.quiz_status(course_id, now)
 
     return CourseStats(
         total_skills=counts["total"] or 0,
@@ -99,4 +107,7 @@ def compute_stats(course_id: str, now: datetime | None = None) -> CourseStats:
         daily_goal=get_daily_goal(),
         streak_days=streak_days(now),
         next_review_at=scheduler.iso(min(dues)) if dues else None,
+        quiz_due=quiz_state.due,
+        xp_until_quiz=quiz_state.xp_until,
+        last_quiz_score=quiz_state.last_score,
     )

@@ -24,7 +24,7 @@ export function BookFigure({ figure }: { figure: Figure }) {
       )}
       <div className="viz-book-figure__meta">
         {figure.caption && <Markdown inline>{figure.caption}</Markdown>}
-        {course && (
+        {course && course.sourceLock === null && (
           <button type="button" className="btn btn--quiet btn--sm" onClick={() => course.openSource(figure.page)}>
             <Icon name="source" size={14} /> Book p. {figure.page_label}
           </button>

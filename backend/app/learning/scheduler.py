@@ -263,7 +263,8 @@ def _recently_reviewed(skill_id: str, now: datetime) -> bool:
 
 
 def apply_success_credit(course_id: str, skill_id: str, now: datetime, graph: SkillGraph | None = None) -> list[ImplicitEvent]:
-    """Credit flows down: success on `skill_id` implicitly reviews (or postpones) its learned ancestors."""
+    """Credit flows down: success on `skill_id` implicitly reviews (or postpones) its learned ancestors — except
+    ancestors missed in a quiz, which wait for their own review."""
     graph = graph or load_graph(course_id)
     cards = _learned_cards(course_id)
     events: list[ImplicitEvent] = []
@@ -271,6 +272,8 @@ def apply_success_credit(course_id: str, skill_id: str, now: datetime, graph: Sk
         card = cards.get(ancestor)
         if card is None or _recently_reviewed(ancestor, now):
             continue
+        if remedial_info(ancestor).get("quiz"):
+            continue  # missed in a quiz: it waits for its own (explicit) review (SPEC §6.7)
         if w >= FIRE_FULL_CREDIT_WEIGHT:
             if utc(card.due) > utc(now) + FIRE_DUE_WINDOW:
                 continue
@@ -354,16 +357,71 @@ def remediate(course_id: str, skill_id: str, now: datetime, graph: SkillGraph | 
     return chosen
 
 
+def remedial_info(skill_id: str) -> dict:
+    """The remedial mark of a skill: {"for": skill id (lesson plateau), "at": …, "quiz": quiz task id, "quiz_at": …}
+    — any subset; {} when the skill is not a remedial review."""
+    raw = db.kv_get(f"remedial:{skill_id}")
+    try:
+        value = db.loads(raw, {}) if raw else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def remedial_target(skill_id: str) -> str | None:
     """The skill whose plateau made `skill_id` a remedial review, if any."""
-    raw = db.kv_get(f"remedial:{skill_id}")
-    return db.loads(raw, {}).get("for") if raw else None
+    return remedial_info(skill_id).get("for")
+
+
+def mark_quiz_remedial(skill_id: str, quiz_task_id: str, now: datetime) -> bool:
+    """A skill missed in a quiz (SPEC §6.7): its review is due now and tops the menu ("Missed in the quiz on …").
+    No FSRS rating is applied here — the remedial review rates the skill. Returns False when the skill has no card."""
+    row = db.query_one("SELECT card_json FROM progress WHERE skill_id = ?", (skill_id,))
+    card = load_card(row["card_json"]) if row else None
+    if card is None:
+        return False
+    if utc(card.due) > utc(now):
+        updated = Card.from_json(card.to_json())
+        updated.due = utc(now)
+        save_card(skill_id, updated, now)
+    set_quiz_remedial_mark(skill_id, quiz_task_id, iso(now))
+    return True
+
+
+def set_quiz_remedial_mark(skill_id: str, quiz_task_id: str, quiz_at: str | None) -> None:
+    """Set the quiz part of a skill's remedial mark (a plateau "for" part stays)."""
+    info = remedial_info(skill_id)
+    info.update(quiz=quiz_task_id, quiz_at=quiz_at)
+    db.kv_set(f"remedial:{skill_id}", db.dumps(info))
+
+
+def clear_quiz_remedial(skill_id: str, quiz_task_id: str) -> None:
+    """Drop the quiz part of a skill's remedial mark if `quiz_task_id` set it (a flagged quiz question, or a later
+    quiz whose right answer counted as the owed review)."""
+    info = remedial_info(skill_id)
+    if info.get("quiz") != quiz_task_id:
+        return
+    info.pop("quiz", None)
+    info.pop("quiz_at", None)
+    if info.get("for"):
+        db.kv_set(f"remedial:{skill_id}", db.dumps(info))
+    else:
+        db.execute("DELETE FROM kv WHERE key = ?", (f"remedial:{skill_id}",))
 
 
 def clear_remedial(skill_id: str | None = None, *, target: str | None = None) -> None:
+    """`skill_id`: its review is done — every mark goes. `target`: the lesson the plateau marks were for has passed —
+    those marks go, but a quiz mark on the same skill stays (that review is still owed)."""
     if skill_id is not None:
         db.execute("DELETE FROM kv WHERE key = ?", (f"remedial:{skill_id}",))
     if target is not None:
         for row in db.query("SELECT key, value FROM kv WHERE key LIKE 'remedial:%'"):
-            if db.loads(row["value"], {}).get("for") == target:
+            info = db.loads(row["value"], {})
+            if not isinstance(info, dict) or info.get("for") != target:
+                continue
+            if info.get("quiz"):
+                info.pop("for", None)
+                info.pop("at", None)
+                db.kv_set(row["key"], db.dumps(info))
+            else:
                 db.execute("DELETE FROM kv WHERE key = ?", (row["key"],))

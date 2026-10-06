@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 
 from .. import db, llm
 from ..ingest.pdf import resolve_stored
+from ..learning import quiz
 from ..learning.state import skill_states
 from ..learning.stats import compute_stats
 from ..pipeline import jobs
@@ -248,6 +249,8 @@ def figure_file(course_id: str, figure_id: str, stored: str) -> Path | None:
 @router.get("/api/courses/{cid}/source/{page}", response_model=SourcePage)
 def get_source_page(cid: str, page: int) -> SourcePage:
     course = _course_row(cid)
+    if quiz.blocks_reference(cid, datetime.now(timezone.utc)):
+        raise HTTPException(409, quiz.REFERENCE_CLOSED)
     if not course["start_page"] <= page <= course["end_page"]:
         raise HTTPException(404, f"Page {page} is not part of this course")
     labels = page_labels_for(course["book_id"])
@@ -263,9 +266,11 @@ def get_source_page(cid: str, page: int) -> SourcePage:
 
 @router.get("/api/skills/{sid}/lesson", response_model=Lesson)
 def get_lesson(sid: str) -> Lesson:
-    skill = db.query_one("SELECT lesson_status FROM skills WHERE id = ?", (sid,))
+    skill = db.query_one("SELECT lesson_status, course_id FROM skills WHERE id = ?", (sid,))
     if skill is None:
         raise HTTPException(404, f"Skill {sid} not found")
+    if quiz.blocks_reference(skill["course_id"], datetime.now(timezone.utc)):
+        raise HTTPException(409, quiz.REFERENCE_CLOSED)
     lesson = lesson_view(sid)
     if lesson is None:
         status = skill["lesson_status"]

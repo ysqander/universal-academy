@@ -196,20 +196,26 @@ timed, cumulative, mixed check with no help, after Math Academy (≈ every 150 X
   since the last quiz. A due quiz is **forced**: an active lesson/review may be finished first, then `/continue`
   starts the quiz, the menu (`/next`) offers only the quiz, and manual starts of other tasks get 409 ("Take the quiz
   first — about N minutes"). A quiz cannot be abandoned.
-- **Content**: 6–8 single-answer questions (no multistep, no free response), one per skill: skills learned since the
-  last quiz first, then older learned skills with the lowest recall; unseen questions, tier ≥ 2 preferred; difficulty
+- **Content**: 6–8 single-answer questions (no multistep, no free response), one per skill: skills never quizzed yet
+  first (earliest learned first, so every skill gets quizzed once), then already-quizzed skills with the lowest recall; unseen questions, tier ≥ 2 preferred; difficulty
   nudged towards an ~80 % average (last quiz ≥ 90 % → harder tiers, < 70 % → easier).
 - **Timed**: allowance 60 s (multiple choice, true/false) or 90 s (numeric, expression, true_false_set) per question ×
   `quiz_time_factor` (settings, default 1.0), rounded up to whole minutes. The clock starts with `POST /practice`
   (intro screen first) and runs on the server: answers after the deadline get 409 and the quiz is finished;
   unanswered questions score 0. Leaving the page does not stop the clock.
-- **Conduct**: one question at a time; no hints, no solutions, no easier step, no lesson or source view; "Pass" = 0;
-  flagging a question voids it. Correctness is not shown until the end (`AnswerResult.status = "recorded"`).
+- **Conduct**: one question at a time; no hints, no solutions, no easier step, no lesson or source view (the lesson and
+  source endpoints answer 409 while a quiz is open — a regular quiz from its intro, a retake once its clock runs);
+  "Pass" = 0; flagging a question voids it. Correctness is not shown until the end (`AnswerResult.status =
+  "recorded"`). Answers are accepted up to 2 s after the deadline (network delay). An unsimplified but correct value
+  scores 0 in a quiz (a "simplify" prompt would reveal that the value is right); unreadable input is still asked again.
+- No quiz is due while fewer than 5 learned skills have a quiz-eligible question (the learner must never be stuck).
 - **Score**: 1 correct / 0 otherwise; pass mark 80 %. XP = round(time-limit minutes × score).
 - **Afterwards** (`Task.quiz.results`): every missed skill gets an immediate remedial review (top of the menu); a
   correct answer counts as an FSRS review (Good) only if that skill was due within 3 days. Below 80 % an optional
   **retake** (same skills, fresh questions, not forced, does not reset the 150-XP counter) unlocks once the
-  remedial reviews are done.
+  remedial reviews are done; a retake can be left at its intro (it stays on offer) but not once its clock runs.
+  Missed skills' reviews rank above everything else, the lesson floor is suspended and they get no FIRe implicit
+  credit until reviewed. Every question shown in a finished quiz counts as seen (not re-served in its reviews).
 
 ### 6.5 FIRe-lite (implicit repetition, after Math Academy: credit flows down, penalties flow up)
 Let `w(S→P)` be the effective encompassing weight from skill S down to ancestor P (max over paths of the product of edge weights; ignore < 0.3).

@@ -2,10 +2,19 @@
 
 - Reviews: learned skills due now. importance = 1 + (1 - R) * 2 + 0.2 * #dependents (+1 for remedial reviews).
 - Lessons: available / in-progress skills with a ready lesson, not cooling down.
-  importance = 1 + 0.3 * #transitive dependents + Σ w(S→P) over due ancestors P (repetition compression).
+  importance = 1 + 0.3 * #transitive dependents + Σ w(S→P) over due ancestors P (repetition compression) — skills
+  missed in a quiz excluded: FIRe does not credit them (they wait for their own review).
   A due review covered by a menu lesson with w >= 0.5 is dropped (the lesson's success will credit it).
-- Lesson floor: after 3 completed reviews in a row the top option is a lesson (if any).
+- Lesson floor: after 3 completed reviews in a row the top option is a lesson (if any) — unless a skill missed in a
+  quiz still waits for its review.
 - Interleave: no two consecutive options for the same skill; ties by order_index.
+
+Quizzes (SPEC §6.7, learning/quiz.py) are forced: while one is due, the menu holds only the quiz (nothing while the
+quiz itself is the active task), "Continue" finishes the active task and then starts the quiz, and a manual start of
+anything else is a 409 ("Take the quiz first — about N minutes."; `force` does not bypass it). Skills missed in a quiz
+are reviewed first: their reviews form a tier of their own above every other option ("Missed in the quiz on 6 Oct"),
+so "Continue" starts one of them. An optional retake is offered as the last menu entry, never started by "Continue"
+while anything else is on the menu. Reading the menu or continuing finishes a quiz whose time ran out.
 """
 
 from __future__ import annotations
@@ -17,7 +26,7 @@ from typing import Any
 
 from .. import db, views
 from ..schemas import NextTaskResponse, SessionInfo, Task, TaskOption
-from . import engine, scheduler, stats, xp
+from . import engine, quiz, scheduler, stats, xp
 from .state import unmet_prerequisites
 
 log = logging.getLogger("ua.learning.selector")
@@ -25,6 +34,7 @@ log = logging.getLogger("ua.learning.selector")
 MENU_SIZE = 5
 LESSON_FLOOR_REVIEWS = 3
 REMEDIAL_BONUS = 1.0
+QUIZ_REMEDIAL_BONUS = 10.0  # shown in the importance; the top of the menu is guaranteed by rank()'s tier
 
 
 @dataclass
@@ -36,6 +46,7 @@ class Candidate:
     xp_value: int
     covers: set[str] = field(default_factory=set)  # due reviews this lesson knocks out
     remedial: bool = False
+    quiz_remedial: bool = False  # missed in a quiz
 
     def option(self) -> TaskOption:
         return TaskOption(
@@ -83,13 +94,22 @@ def _review_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
             continue
         recall = scheduler.retrievability(card, now) or 0.0
         importance = 1 + (1 - recall) * 2 + 0.2 * len(view.graph.dependents.get(sid, []))
-        target = scheduler.remedial_target(sid)
-        if target and target in view.skills:
+        info = scheduler.remedial_info(sid)
+        target = info.get("for")
+        if info.get("quiz"):
+            reason = f"Missed in the quiz on {quiz.quiz_day(db.parse_iso(info.get('quiz_at')))}"
+            importance += QUIZ_REMEDIAL_BONUS
+        elif target and target in view.skills:
             reason = f"Refresh before retrying {view.skills[target]['key']} — estimated recall {round(recall * 100)}%"
             importance += REMEDIAL_BONUS
         else:
             reason = f"Review due — estimated recall {round(recall * 100)}%"
-        out.append(Candidate(view.skills[sid], "review", importance, reason, xp.REVIEW_XP_PASS, remedial=bool(target)))
+        out.append(
+            Candidate(
+                view.skills[sid], "review", importance, reason, xp.REVIEW_XP_PASS,
+                remedial=bool(target or info.get("quiz")), quiz_remedial=bool(info.get("quiz")),
+            )
+        )  # fmt: skip
     return out
 
 
@@ -105,6 +125,9 @@ def _locked(view: _CourseView, skill_id: str) -> bool:
 
 def _lesson_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
     due = {sid for sid, card in view.cards.items() if scheduler.is_due(card, now)}
+    # A skill missed in a quiz gets no FIRe credit from a lesson (scheduler.apply_success_credit), so a lesson does not
+    # refresh it: no repetition-compression bonus, no "Also refreshes", and its review is never knocked out.
+    quiz_owed = {sid for sid in due if scheduler.remedial_info(sid).get("quiz")}
     out = []
     for sid, skill in view.skills.items():
         p = view.progress.get(sid)
@@ -118,7 +141,7 @@ def _lesson_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
         if cooldown and cooldown > scheduler.utc(now):
             continue
         n_desc = len(view.graph.descendants(sid))
-        covered = {a: w for a, w in view.graph.down.get(sid, {}).items() if a in due}
+        covered = {a: w for a, w in view.graph.down.get(sid, {}).items() if a in due and a not in quiz_owed}
         importance = 1 + 0.3 * n_desc + sum(covered.values())
         if db.loads(p["kp_failures_json"], {}):
             reason = "Second try — fresh questions after a pause"
@@ -159,12 +182,18 @@ def rank(course_id: str, now: datetime, *, exclude_skill: str | None = None) -> 
     lessons = [c for c in _lesson_candidates(view, now) if c.skill["id"] != exclude_skill]
     reviews = [c for c in _review_candidates(view, now) if c.skill["id"] != exclude_skill]
 
-    def order(c: Candidate) -> tuple[float, int, int]:
-        return (-c.importance, c.skill["order_index"], 0 if c.type == "review" else 1)
+    def order(c: Candidate) -> tuple[int, float, int, int]:
+        # skills missed in a quiz first (SPEC §6.7), whatever a lesson's importance; then by importance
+        return (0 if c.quiz_remedial else 1, -c.importance, c.skill["order_index"], 0 if c.type == "review" else 1)
 
     lessons.sort(key=order)
     recent = _last_completed_types(course_id, LESSON_FLOOR_REVIEWS)
-    lesson_first = bool(lessons) and len(recent) == LESSON_FLOOR_REVIEWS and all(t == "review" for t in recent)
+    lesson_first = (
+        bool(lessons)
+        and len(recent) == LESSON_FLOOR_REVIEWS
+        and all(t == "review" for t in recent)
+        and not any(c.quiz_remedial for c in reviews)
+    )
 
     def build_menu(knocked: set[str]) -> list[Candidate]:
         ranked = sorted(lessons + [c for c in reviews if c.remedial or c.skill["id"] not in knocked], key=order)
@@ -230,10 +259,14 @@ def _idle_message(course_id: str, now: datetime) -> str:
     return "All caught up — every skill in this chapter is learned."
 
 
-def session_info(course_id: str, now: datetime) -> SessionInfo:
+def session_info(course_id: str, now: datetime, status: quiz.QuizStatus | None = None) -> SessionInfo:
     goal = stats.get_daily_goal()
     today = stats.xp_today(now)
-    return SessionInfo(xp_today=today, daily_goal=goal, goal_reached=today >= goal, due_reviews=stats.due_review_count(course_id, now))
+    status = status or quiz.quiz_status(course_id, now)
+    return SessionInfo(
+        xp_today=today, daily_goal=goal, goal_reached=today >= goal, due_reviews=stats.due_review_count(course_id, now),
+        quiz_due=status.due, xp_until_quiz=status.xp_until,
+    )  # fmt: skip
 
 
 def _require_course(course_id: str) -> None:
@@ -241,19 +274,51 @@ def _require_course(course_id: str) -> None:
         raise engine.NotFound("Course not found.")
 
 
-def next_response(course_id: str, now: datetime) -> NextTaskResponse:
-    """The active task (if any) plus the ranked menu. No side effects."""
-    _require_course(course_id)
+def _active(course_id: str, now: datetime) -> dict[str, Any] | None:
+    """The active task, after finishing a quiz whose time ran out."""
     active = engine.active_task_row(course_id)
-    options = rank(course_id, now, exclude_skill=active["skill_id"] if active else None)
-    session = session_info(course_id, now)
+    if active is not None and quiz.expire(active, now):
+        active = engine.active_task_row(course_id)
+    return active
+
+
+def _quiz_option(plan: quiz.QuizPlan, importance: float, *, first: bool = False) -> TaskOption:
+    return TaskOption(
+        skill=None, type="quiz", reason=quiz.plan_reason(plan, first=first), xp_value=plan.minutes(), importance=importance
+    )
+
+
+def _menu(course_id: str, now: datetime, active: dict[str, Any] | None, status: quiz.QuizStatus) -> list[TaskOption]:
+    """The options next to the active task: only the quiz while one is due, else the ranked menu (+ a retake)."""
+    if status.due:
+        if active is not None and active["type"] == "quiz" and quiz.load_state(active)["kind"] == "quiz":
+            return []  # the quiz itself is the active task
+        plan = quiz.build_plan(course_id, now)
+        return [_quiz_option(plan, quiz.QUIZ_OPTION_IMPORTANCE, first=status.since is None)] if plan else []
+    exclude = active["skill_id"] if active is not None and active["type"] != "quiz" else None
+    options = [c.option() for c in rank(course_id, now, exclude_skill=exclude)]
+    if active is None or active["type"] != "quiz":
+        retake = quiz.retake_offer(course_id, now)
+        if retake is not None:
+            options = options[: MENU_SIZE - 1] + [_quiz_option(retake, quiz.RETAKE_OPTION_IMPORTANCE)]
+    return options
+
+
+def next_response(course_id: str, now: datetime) -> NextTaskResponse:
+    """The active task (if any) plus the menu. No side effects, except finishing a quiz whose time ran out."""
+    _require_course(course_id)
+    with engine.lock:
+        active = _active(course_id, now)
+    status = quiz.quiz_status(course_id, now)
+    options = _menu(course_id, now, active, status)
+    session = session_info(course_id, now, status)
     if options or active:
         message = "Daily goal reached — a good place to stop (or keep going)." if session.goal_reached else ""
     else:
         message = _idle_message(course_id, now)
     return NextTaskResponse(
-        task=engine.build_task(active) if active else None,
-        options=[c.option() for c in options],
+        task=engine.build_task(active, now) if active else None,
+        options=options,
         session=session,
         message=message,
     )
@@ -270,17 +335,45 @@ def _start(candidate_skill: dict[str, Any], type_: str, reason: str, now: dateti
 
 
 def continue_task(course_id: str, now: datetime) -> Task:
-    """Resume the active task, or start the top option of the menu."""
+    """Resume the active task, else start the due quiz, else the top option of the menu (an optional retake only
+    when nothing else is on the menu)."""
     with engine.lock:
         _require_course(course_id)
-        active = engine.active_task_row(course_id)
+        active = _active(course_id, now)
         if active:
-            return engine.build_task(active)
+            return engine.build_task(active, now)
+        if quiz.quiz_status(course_id, now).due:
+            return engine.get_task(quiz.start(course_id, now), now)
         options = rank(course_id, now)
         if not options:
+            retake = quiz.retake_offer(course_id, now)
+            if retake is not None:
+                return engine.get_task(quiz.start(course_id, now, retake), now)
             raise engine.Conflict(_idle_message(course_id, now))
         top = options[0]
         return _start(top.skill, top.type, top.reason, now)
+
+
+def _active_label(active: dict[str, Any]) -> str:
+    if active["type"] == "quiz":
+        return "the quiz retake" if quiz.load_state(active)["kind"] == "retake" else "the quiz"
+    current = db.query_one("SELECT title FROM skills WHERE id = ?", (active["skill_id"],))
+    return f"'{current['title']}'" if current else "your open task"
+
+
+def _start_quiz(course_id: str, now: datetime, active: dict[str, Any] | None, replace_active: bool) -> Task:
+    """POST /tasks with type 'quiz' (skill_id is ignored): the due quiz, else the optional retake."""
+    if active is not None and active["type"] == "quiz":
+        return engine.build_task(active, now)
+    kind = "quiz" if quiz.quiz_status(course_id, now).due else "retake"
+    if kind == "retake" and quiz.retake_offer(course_id, now) is None:
+        raise engine.Conflict("No quiz is due right now.")
+    plan = quiz.prepare(course_id, now, kind)  # raises Conflict while the active task is still intact
+    if active is not None:
+        if not replace_active:
+            raise engine.Conflict(f"Finish or leave {_active_label(active)} first.")
+        engine.abandon(active["id"], now)
+    return engine.get_task(quiz.start(course_id, now, plan), now)
 
 
 def start_task(
@@ -293,18 +386,25 @@ def start_task(
     on a locked skill (the learner's override of prerequisite gating); a skill whose lesson was already started that
     way (lesson_attempts > 0) is resumed or restarted without `force` (E2). A lesson paused after a failure (cooldown)
     is a 409 ("This lesson comes back at HH:MM (local time) with fresh questions.") until the cooldown ends, unless
-    `force` (the learner's "Start anyway")."""
+    `force` (the learner's "Start anyway"). While a quiz is due nothing but the quiz starts (409 "Take the quiz first —
+    about N minutes.", whatever `force` says); resuming the already active task stays allowed. `type` 'quiz' starts the
+    due quiz or the optional retake (skill_id is ignored)."""
     with engine.lock:
         _require_course(course_id)
+        active = _active(course_id, now)
+        if type_ == "quiz":
+            return _start_quiz(course_id, now, active, replace_active)
         skill = db.query_one("SELECT * FROM skills WHERE id = ? AND course_id = ?", (skill_id, course_id))
         if not skill:
             raise engine.NotFound("Skill not found in this course.")
         progress = db.query_one("SELECT status, lesson_attempts, cooldown_until FROM progress WHERE skill_id = ?", (skill_id,))
         learned = bool(progress) and progress["status"] in scheduler.LEARNED
         type_ = type_ or ("review" if learned else "lesson")
-        active = engine.active_task_row(course_id)
         if active and active["skill_id"] == skill_id and active["type"] == type_:
-            return engine.build_task(active)  # resuming the open task never needs `force`
+            return engine.build_task(active, now)  # resuming the open task never needs `force`
+        status = quiz.quiz_status(course_id, now)
+        if status.due:
+            raise engine.Conflict(quiz.take_first_message(course_id, now, status))
         started_before = bool(progress) and (progress["lesson_attempts"] or 0) > 0
         if type_ == "lesson" and not learned and not force and not started_before:
             blockers = unmet_prerequisites(course_id, skill_id)
@@ -320,9 +420,8 @@ def start_task(
         initial = engine.prepare_start(skill_id, type_)  # raises Conflict while the active task is still intact
         if active:
             if not replace_active:
-                current = db.query_one("SELECT title FROM skills WHERE id = ?", (active["skill_id"],))
-                raise engine.Conflict(f"Finish or leave '{current['title'] if current else 'your open task'}' first.")
-            engine.abandon(active["id"], now)
+                raise engine.Conflict(f"Finish or leave {_active_label(active)} first.")
+            engine.abandon(active["id"], now)  # a quiz (or a running retake) refuses: 409
         menu = {(c.skill["id"], c.type): c for c in rank(course_id, now)}
         chosen = menu.get((skill_id, type_))
         reason = chosen.reason if chosen else ("Chosen by you" if type_ == "lesson" else "Extra review — chosen by you")

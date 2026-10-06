@@ -52,6 +52,12 @@ const ICONS = {
       <path d="M12 7.5V12l3 2" />
     </>
   ),
+  stopwatch: (
+    <>
+      <circle cx="12" cy="13.5" r="7.5" />
+      <path d="M12 13.5V9.5M9.5 2.5h5M12 2.5v3.5M18.2 6.8l1.3-1.3" />
+    </>
+  ),
   bulb: (
     <>
       <path d="M9.5 17.5h5M10.5 20.5h3" />

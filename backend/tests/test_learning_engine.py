@@ -249,10 +249,73 @@ def test_early_stop_counts_every_remaining_question_and_the_capstone_twice(with_
     first = engine.submit_answer(task_id, wrong(task.question.id), T0)
     if not with_capstone:
         assert first.task.outcome == "failed"  # (0 + 1 + 1) / 3: out of reach after one miss
+        assert "pauses here" in first.suggestion_text
+        # the plan it stopped in, as the meter showed it before the answer: "1 of 2 answered", never "1 of 1"
+        assert (first.task.progress.answered, first.task.progress.planned) == (1, 2)
+        assert (engine.get_task(task_id).progress.answered, engine.get_task(task_id).progress.planned) == (1, 2)
         return
     assert first.task.phase == "practice" and first.task.progress.kp_target == 2  # (0 + 1 + 1 + 2) / 5 = 0.8
+    assert (first.task.progress.answered, first.task.progress.planned) == (1, 4)
     second = engine.submit_answer(task_id, wrong(first.task.question.id), T0)
     assert second.task.outcome == "failed" and second.task.progress.answered == 2  # 4 / 6
+    assert second.task.progress.planned == 4 and "pauses here" in second.suggestion_text  # "2 of 4", never "2 of 2"
+
+
+def test_halted_note_and_step_revealed_are_filled_once_the_schema_declares_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import schemas
+
+    class Progress(schemas.TaskProgress):
+        halted: bool = False
+
+    class Answer(schemas.AnswerResult):
+        note: str = ""
+
+    class Step(schemas.StepResult):
+        revealed: bool = False
+
+    monkeypatch.setattr(engine, "TaskProgress", Progress)
+    monkeypatch.setattr(engine, "AnswerResult", Answer)
+    monkeypatch.setattr(engine, "StepResult", Step)
+    fx = build_course()
+    task_id, cap, to_cap = _to_capstone(fx)
+    assert to_cap.note == "Last: one problem that puts the lesson together, step by step — it counts double."
+    assert to_cap.task.progress.halted is False
+    engine.reveal(cap, T0)
+    s0 = engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=0), T0)  # (2 + 2 × 2/3) / 4 at best
+    assert s0.status == "step" and s0.step_result.revealed is True and s0.note == ""
+    reloaded = engine.get_task(task_id).question.step_results
+    assert [r.revealed for r in reloaded] == [True]  # a reload still knows the step's solution was shown
+    stopped = engine.submit_answer(task_id, step_submit(cap, 1, correct=False), T0)
+    assert stopped.task.progress.halted is True and stopped.step_result.revealed is False
+    other = build_course()
+    set_targets(other, "S1", [1, 1])
+    t2, task = start_practice(other, "S1")
+    task = engine.submit_answer(t2, right(task.question.id), T0).task
+    last = engine.submit_answer(t2, wrong(task.question.id), T0)
+    assert last.task.outcome == "failed" and last.task.progress.halted is False  # everything planned was answered
+
+
+def test_a_miss_on_the_last_planned_question_ends_below_the_mark_not_early() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    assert task.progress.planned == 2
+    last = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    # its extra question could only reach (1 + 0 + 1) / 3: the lesson ends with everything the learner was shown answered
+    assert last.task.outcome == "failed" and (last.task.progress.answered, last.task.progress.planned) == (2, 2)
+    assert "Your score, 50%, is below the 80% pass mark" in last.suggestion_text
+    assert "pauses" not in last.suggestion_text and "out of reach" not in last.suggestion_text
+    assert failures(fx.sid("S1")) == {"1": 1}
+
+
+@pytest.mark.parametrize(
+    "score,pct",
+    [(0.0, 0), (0.125, 13), (0.285, 29), (0.665, 67), (0.9167, 92), (0.796, 79), (43 / 54, 79), (0.8, 80),
+     (0.805, 81), (0.995, 99), (0.9999, 99), (1.0, 100), (1.2, 100), (-0.1, 0)],
+)  # fmt: skip
+def test_score_percent_rounds_half_up_but_never_onto_the_pass_mark_or_100(score: float, pct: int) -> None:
+    assert engine.score_percent(score) == pct
 
 
 def test_retry_prefers_unseen_questions() -> None:
@@ -375,24 +438,45 @@ def test_capstone_steps_hints_and_reload() -> None:
     assert [s["score"] for s in json.loads(row["response"])["steps"]] == [1.0, 0.5, 1.0]
 
 
-def test_capstone_reveal_and_wrong_steps_can_fail_the_lesson() -> None:
+def test_capstone_halts_between_steps_once_80_percent_is_out_of_reach() -> None:
     fx = build_course()
     task_id, cap, _ = _to_capstone(fx)
     s0 = engine.submit_answer(task_id, step_submit(cap, 0, correct=False), T0)
+    # (2 + 2 × (0 + 1 + 1) / 3) / 4 = 0.83: still reachable
     assert s0.status == "step" and not s0.correct and s0.step_result.score == 0 and s0.task.phase == "practice"
     shown = engine.reveal(cap, T0)
     assert (shown.correct_answer, shown.solution) == ("C", "Law C lets us regroup.")  # only the current step
     assert engine.get_task(task_id).question.revealed is True
     s1 = engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=1), T0)  # nothing typed after the reveal
     assert s1.step_result.score == 0 and "Answer viewed" in s1.step_result.feedback
-    assert engine.get_task(task_id).question.revealed is False
-    last = engine.submit_answer(task_id, step_submit(cap, 2), T0)
-    assert last.score == pytest.approx(1 / 3) and last.status == "incorrect"
-    # (1 + 1 + 2/3) / 4 = 0.67 → failed in the capstone
-    assert last.task.outcome == "failed" and last.suggestion == "retry_later"
+    # (2 + 2 × (0 + 0 + 1) / 3) / 4 = 0.67 even with step 3 right: the lesson stops now, not after step 3
+    assert s1.question_done and s1.status == "incorrect" and s1.task.outcome == "failed" and s1.task.question is None
+    assert "1 left unanswered" in s1.feedback and s1.suggestion == "retry_later"
+    assert "out of reach" in s1.suggestion_text and "pauses here" in s1.suggestion_text
+    p = s1.task.progress
+    assert (p.answered, p.planned) == (2, 3)  # the capstone was not finished: "2 of 3", never "3 of 3"
+    assert p.score == pytest.approx(2 / (2 + 2 * 2 / 3))  # its 2 answered steps weigh 2 × 2/3
     assert failures(fx.sid("S1")) == {"cap": 1}
-    row = db.query_one("SELECT revealed, hints_used FROM attempts WHERE question_id = ?", (cap,))
-    assert (row["revealed"], row["hints_used"]) == (1, 0)
+    row = db.query_one("SELECT revealed, hints_used, status FROM attempts WHERE question_id = ?", (cap,))
+    assert (row["revealed"], row["hints_used"], row["status"]) == (1, 0, "incorrect")
+    entry = task_state(task_id)["log"][-1]
+    assert entry["unfinished"] and entry["w"] == pytest.approx(4 / 3) and len(entry["steps"]) == 2
+
+
+def test_capstone_answered_in_full_below_the_mark_is_not_an_early_stop() -> None:
+    fx = build_course()
+    task_id, cap, _ = _to_capstone(fx)
+    engine.submit_answer(task_id, step_submit(cap, 0), T0)
+    s1 = engine.submit_answer(task_id, step_submit(cap, 1, correct=False), T0)
+    assert s1.status == "step" and s1.task.phase == "practice"  # (2 + 2 × 2/3) / 4 = 0.83 at best
+    last = engine.submit_answer(task_id, step_submit(cap, 2, correct=False), T0)
+    assert last.score == pytest.approx(1 / 3) and last.status == "incorrect"
+    # (1 + 1 + 2/3) / 4 = 0.67 with everything answered: below the pass mark, not "out of reach … pauses here"
+    assert last.task.outcome == "failed" and last.suggestion == "retry_later"
+    assert "Your score, 67%, is below the 80% pass mark" in last.suggestion_text
+    assert "pauses" not in last.suggestion_text and "2 hours" in last.suggestion_text
+    assert (last.task.progress.answered, last.task.progress.planned) == (3, 3)
+    assert failures(fx.sid("S1")) == {"cap": 1}
 
 
 def test_flagged_capstone_is_replaced_then_skipped() -> None:
@@ -408,6 +492,99 @@ def test_flagged_capstone_is_replaced_then_skipped() -> None:
     assert task.question.id == second_cap and task.question.step_index == 0 and task.question.step_results == []
     task = engine.flag(second_cap, "", T0)
     assert task.phase == "done" and task.outcome == "passed"  # no capstone left: 2 / 2
+
+
+def _to_capstone_at_two_of_three(fx):
+    """S1 with targets 1/1 and one capstone: a miss, its extra question and KP 2 right → 2 / 3, at best 4 / 5 = 0.8."""
+    set_targets(fx, "S1", [1, 1])
+    cap = add_capstone(fx, "S1")
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    result = engine.submit_answer(task_id, right(task.question.id), T0)
+    assert result.task.question.id == cap and result.task.progress.score == pytest.approx(2 / 3)
+    return task_id, cap
+
+
+def cooldown_until(skill_id: str):
+    return db.query_one("SELECT cooldown_until FROM progress WHERE skill_id = ?", (skill_id,))["cooldown_until"]
+
+
+def test_flagging_the_capstone_mid_problem_ends_the_lesson_without_a_failure() -> None:
+    fx = build_course()
+    task_id, cap = _to_capstone_at_two_of_three(fx)
+    engine.submit_answer(task_id, step_submit(cap, 0), T0)
+    task = engine.flag(cap, "step 2 has no right option", T0)
+    # no replacement: scored on the practice alone, 2 / 3 — below 80 %, but not the learner's failure
+    assert task.phase == "done" and task.outcome == "failed" and task.progress.score == pytest.approx(2 / 3)
+    assert (task.progress.answered, task.progress.planned) == (3, 3)
+    assert failures(fx.sid("S1")) == {} and cooldown_until(fx.sid("S1")) is None
+    assert task_state(task_id)["fail"]["counted"] is False
+    assert ("S1", "lesson") in {(c.skill["key"], c.type) for c in selector.rank(fx.course_id, T0)}
+    assert selector.start_task(fx.course_id, fx.sid("S1"), "lesson", T0).skill.key == "S1"  # no cooldown to force
+
+
+@pytest.mark.parametrize("stop", ["mid_problem", "after_problem"])
+def test_flagging_the_capstone_a_lesson_failed_in_takes_the_failure_back(stop: str) -> None:
+    fx = build_course()
+    task_id, cap = _to_capstone_at_two_of_three(fx)
+    engine.submit_answer(task_id, step_submit(cap, 0), T0)
+    if stop == "mid_problem":  # (2 + 2 × (1 + 0 + 1) / 3) / 5 = 0.67 at best: stops after step 2
+        failed = engine.submit_answer(task_id, step_submit(cap, 1, correct=False), T0)
+    else:  # everything answered: (2 + 2 × 2/3) / 5
+        engine.submit_answer(task_id, step_submit(cap, 1), T0)
+        failed = engine.submit_answer(task_id, step_submit(cap, 2, correct=False), T0)
+    assert failed.task.outcome == "failed" and failures(fx.sid("S1")) == {"cap": 1}
+    assert cooldown_until(fx.sid("S1")) is not None
+    after = engine.flag(cap, "", T0)
+    assert after.outcome == "failed"  # 2 / 3 without it: still below 80 %, but no longer counted
+    assert failures(fx.sid("S1")) == {} and cooldown_until(fx.sid("S1")) is None
+    assert task_state(task_id)["fail"]["counted"] is False
+    assert selector.start_task(fx.course_id, fx.sid("S1"), "lesson", T0).skill.key == "S1"  # no cooldown to force
+
+
+def test_flagging_the_capstone_a_lesson_stopped_in_can_pass_it() -> None:
+    fx = build_course()
+    task_id, cap, _ = _to_capstone(fx)  # 2 / 2 so far
+    engine.submit_answer(task_id, step_submit(cap, 0, correct=False), T0)
+    stopped = engine.submit_answer(task_id, step_submit(cap, 1, correct=False), T0)
+    assert stopped.task.outcome == "failed" and failures(fx.sid("S1")) == {"cap": 1}
+    after = engine.flag(cap, "", T0)
+    assert after.outcome == "passed" and after.progress.score == pytest.approx(1.0)  # scored without it: 2 / 2
+    assert failures(fx.sid("S1")) == {} and status(fx.sid("S1")) == "learned"
+
+
+def test_a_flag_that_makes_80_percent_reachable_resumes_the_capstone_where_it_stopped() -> None:
+    fx = build_course()
+    task_id, cap = _to_capstone_at_two_of_three(fx)
+    first_miss = task_state(task_id)["log"][0]["q"]
+    stopped = engine.submit_answer(task_id, step_submit(cap, 0, correct=False), T0)  # (2 + 2 × 2/3) / 5 at best
+    assert stopped.task.outcome == "failed" and stopped.task.progress.planned == 4
+    resumed = engine.flag(first_miss, "", T0)  # now 2 / 2, and the capstone can still bring (2 + 4/3) / 4
+    assert resumed.phase == "practice" and resumed.question.id == cap
+    assert resumed.question.step_index == 1 and [r.correct for r in resumed.question.step_results] == [False]
+    assert failures(fx.sid("S1")) == {} and cooldown_until(fx.sid("S1")) is None
+    engine.submit_answer(task_id, step_submit(cap, 1), T0)
+    done = engine.submit_answer(task_id, step_submit(cap, 2), T0)
+    assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx((2 + 2 * 2 / 3) / 4)
+    rows = db.query("SELECT status FROM attempts WHERE question_id = ? ORDER BY rowid", (cap,))
+    assert [r["status"] for r in rows] == ["voided", "incorrect"]
+
+
+def test_a_capstone_step_in_the_other_complex_notation_is_asked_again() -> None:
+    fx = build_course()
+    set_targets(fx, "S1", [1, 1])
+    steps = [dict(CAPSTONE_STEPS[0]), {**CAPSTONE_STEPS[2], "answer": "(1/5, 2/5)", "answer_display": "$(1/5, 2/5)$"}]
+    cap = add_capstone(fx, "S1", steps=steps)
+    task_id, task = start_practice(fx, "S1")
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    task = engine.submit_answer(task_id, right(task.question.id), T0).task
+    engine.submit_answer(task_id, step_submit(cap, 0), T0)
+    with pytest.raises(engine.Invalid, match="ordered pair"):
+        engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=1, response="1/5+2/5i"), T0)
+    assert len(task_state(task_id)["step_results"]) == 1  # nothing recorded for step 2
+    done = engine.submit_answer(task_id, AnswerSubmit(question_id=cap, step=1, response="(1/5, 2/5)"), T0)
+    assert done.question_done and done.score == 1.0 and done.task.outcome == "passed"
 
 
 def test_multistep_practice_question_scores_the_mean_of_its_steps() -> None:
@@ -475,6 +652,53 @@ def test_easier_step_after_a_miss_is_scored_normally() -> None:
     done = finish(task_id, r.task)
     assert done.task.outcome == "passed" and done.task.progress.score == pytest.approx(0.8)
     assert not db.query("SELECT 1 FROM attempts WHERE question_id = ?", (kp0[1],))  # the skipped one never returns
+
+
+def _easier_setup():
+    fx = build_course()
+    kp0 = fx.questions["S1"][0]
+    db.execute("UPDATE questions SET tier = 2 WHERE id = ?", (kp0[1],))
+    db.execute("UPDATE questions SET tier = 1 WHERE id = ?", (kp0[3],))
+    task_id, task = start_practice(fx, "S1")
+    miss = engine.submit_answer(task_id, wrong(task.question.id), T0)
+    assert miss.task.question.id == kp0[1]
+    return fx, task_id, kp0
+
+
+@pytest.mark.parametrize("help_used,points", [("reveal", 0.0), ("hint", 0.5), ("none", 1.0)])
+def test_easier_step_keeps_the_help_already_used_on_the_swapped_question(help_used: str, points: float) -> None:
+    fx, task_id, kp0 = _easier_setup()
+    if help_used == "reveal":
+        engine.reveal(kp0[1], T0)
+    elif help_used == "hint":
+        engine.hint(kp0[1], T0)
+    swapped = engine.easier_step(task_id, T0)
+    assert swapped.question.id == kp0[3]
+    assert swapped.question.revealed is False and swapped.question.hints_used == 0  # nothing of q4 is shown
+    r = engine.submit_answer(task_id, right(kp0[3]), T0)
+    assert r.correct and r.score == points and r.independent is (help_used == "none")
+    if help_used == "reveal":
+        assert "replaced had been shown, so no points" in r.feedback
+        # 0 + 0 so far, at best + 1 + 2 of 5: out of reach, exactly as answering q2 after its reveal would have been
+        assert r.task.outcome == "failed"
+    elif help_used == "hint":
+        assert "replaced, so at most half a point" in r.feedback
+    row = db.query_one("SELECT independent, revealed, hints_used FROM attempts WHERE question_id = ?", (kp0[3],))
+    assert row["independent"] == int(help_used == "none")
+    assert (row["revealed"], row["hints_used"]) == ((1, 0) if help_used == "reveal" else (0, 1) if help_used == "hint" else (0, 0))
+    entry = task_state(task_id)["log"][-1]
+    assert entry["q"] == kp0[3] and entry["pts"] == points
+
+
+def test_carried_reveal_is_no_answer_to_the_easier_question() -> None:
+    fx, task_id, kp0 = _easier_setup()
+    engine.reveal(kp0[1], T0)
+    engine.easier_step(task_id, T0)
+    with pytest.raises(engine.Invalid):  # q4's own solution was never shown: an empty answer is still asked again
+        engine.submit_answer(task_id, AnswerSubmit(question_id=kp0[3]), T0)
+    after_hint = engine.hint(kp0[3], T0)  # its own hint on top changes nothing: 0 points
+    assert after_hint.hints_used == 1
+    assert engine.submit_answer(task_id, right(kp0[3]), T0).score == 0.0
 
 
 def test_easier_step_stays_in_the_current_kp() -> None:

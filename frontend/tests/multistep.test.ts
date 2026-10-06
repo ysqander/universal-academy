@@ -6,10 +6,14 @@ import {
   allAnswered,
   earnedSteps,
   initialTrail,
+  multistepNote,
   questionDone,
+  revealedStepIndexes,
+  STEP_MARK_LABEL,
   stepMark,
   stepPips,
   stepResultOf,
+  stepRevealed,
   stepsSummary,
   trailItems,
   trailReducer,
@@ -127,4 +131,45 @@ test("answer responses: step results and when the question is done", () => {
     answer_display: "-3 + 14i",
     explanation: "Expand.",
   });
+});
+
+test("a step answered with Show solution stays 'solution shown (0 points)' after a reload, never 'not right'", () => {
+  // The server's flag (StepResult.revealed) wins.
+  const shown = { ...result(1, 0), correct: false, revealed: true };
+  const wrong = { ...result(2, 0), correct: false, revealed: false };
+  assert.equal(stepRevealed(shown), true);
+  assert.equal(stepRevealed(wrong), false);
+  // Older servers: no flag — "Answer viewed — nothing submitted." or a right answer worth 0 points.
+  assert.equal(stepRevealed({ ...result(0, 0), correct: false, feedback: "Answer viewed — nothing submitted." }), true);
+  assert.equal(stepRevealed({ ...result(0, 0), correct: true, feedback: "Correct. The answer was shown first, so no point for this step." }), true);
+  assert.equal(stepRevealed({ ...result(0, 0), correct: false, feedback: "Not quite." }), false);
+  // A step that earned points was not revealed, whatever the text says.
+  assert.equal(stepRevealed({ ...result(0, 0.5), feedback: "Answer viewed" }), false);
+
+  // Rebuilt on mount from the server's step results (MultistepCard).
+  const restored = initialTrail({ steps, step_index: 2, step_results: [result(0, 0.5), shown] });
+  const revealed = revealedStepIndexes(restored.results);
+  assert.deepEqual([...revealed], [1]);
+  assert.deepEqual(stepPips(restored, revealed), ["half", "shown", "current"]);
+  assert.equal(stepMark(0, revealed.has(1)), "shown");
+  assert.equal(STEP_MARK_LABEL[stepMark(0, true)], "solution shown (0 points)");
+  assert.equal(STEP_MARK_LABEL[stepMark(0, false)], "not right");
+  // Points always win over the flag.
+  assert.equal(stepMark(1, true), "full");
+});
+
+test("multistepNote: the server's note for a finished multistep question, without the step verdict and the recap", () => {
+  // AnswerResult.note when the server sends it.
+  assert.equal(
+    multistepNote({ feedback: "Correct. Problem complete: 2 of 3 steps right. One more question on this step comes next, so you can make up for it.", note: " One more question on this step comes next, so you can make up for it." }),
+    "One more question on this step comes next, so you can make up for it.",
+  );
+  assert.equal(multistepNote({ feedback: "Correct. Problem complete: 3 of 3 steps right.", note: "" }), "");
+  // Older servers: the text after the recap.
+  assert.equal(
+    multistepNote({ feedback: "Correct. Problem complete: 3 of 3 steps right. Last: one problem that puts the lesson together, step by step — it counts double." }),
+    "Last: one problem that puts the lesson together, step by step — it counts double.",
+  );
+  assert.equal(multistepNote({ feedback: "Not quite. Problem complete: 1 of 3 steps right." }), "");
+  assert.equal(multistepNote({ feedback: "Correct." }), "");
 });

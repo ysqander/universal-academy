@@ -184,6 +184,28 @@ def print_graph(course_id: str) -> None:
             print(f"       misconception: {m}")
 
 
+def print_question(q: dict[str, Any]) -> None:
+    verify = db.loads(q["verify_json"], {})
+    print(f"\n  [{q['key']} · tier {q['tier']} · {q['kind']}] {q['prompt']}")
+    for i, c in enumerate(db.loads(q["choices_json"], [])):
+        print(f"      {'*' if i == q['correct_choice'] else ' '}{i}. {c}")
+    if q["answer"]:
+        print(f"      answer: {q['answer']}  ({q['answer_display']})")
+    for item in db.loads(q["checklist_json"], []):
+        print(f"      ☐ {item}")
+    for n, step in enumerate(db.loads(q.get("steps_json"), []) or [], start=1):
+        print(f"      step {n} [{step['kind']}] {step['prompt']} → {step.get('answer') or step.get('correct_choice')} ({step['answer_display']})")
+    print(f"      hints: {db.loads(q['hints_json'])}")
+    print(f"      solution: {q['solution']}")
+    if q["source_exercise"]:
+        print(f"      adapted from: {q['source_exercise']}")
+    independent = verify.get("independent", {})
+    print(
+        f"      verify: {verify.get('status')} {('· ' + q['flag_reason']) if q['flag_reason'] else ''}"
+        + (f" · independent {independent.get('choice')}/{independent.get('answer')!r} conf {independent.get('confidence')}" if independent else "")
+    )
+
+
 def print_lesson(skill: dict[str, Any]) -> None:
     lesson = lesson_view(skill["id"])
     rule(f"LESSON {skill['key']} — {skill['title']}")
@@ -203,26 +225,12 @@ def print_lesson(skill: dict[str, Any]) -> None:
         for step in we.steps:
             print(f"   {step.math}    — {step.why}")
         print(f"Takeaway: {we.takeaway}")
-        for q in (q for q in questions if q["kp_index"] == kp.index):
-            verify = db.loads(q["verify_json"], {})
-            print(f"\n  [{q['key']} · tier {q['tier']} · {q['kind']}] {q['prompt']}")
-            for i, c in enumerate(db.loads(q["choices_json"], [])):
-                print(f"      {'*' if i == q['correct_choice'] else ' '}{i}. {c}")
-            if q["answer"]:
-                print(f"      answer: {q['answer']}  ({q['answer_display']})")
-            for item in db.loads(q["checklist_json"], []):
-                print(f"      ☐ {item}")
-            for n, step in enumerate(db.loads(q.get("steps_json"), []) or [], start=1):
-                print(f"      step {n} [{step['kind']}] {step['prompt']} → {step.get('answer') or step.get('correct_choice')} ({step['answer_display']})")
-            print(f"      hints: {db.loads(q['hints_json'])}")
-            print(f"      solution: {q['solution']}")
-            if q["source_exercise"]:
-                print(f"      adapted from: {q['source_exercise']}")
-            independent = verify.get("independent", {})
-            print(
-                f"      verify: {verify.get('status')} {('· ' + q['flag_reason']) if q['flag_reason'] else ''}"
-                + (f" · independent {independent.get('choice')}/{independent.get('answer')!r} conf {independent.get('confidence')}" if independent else "")
-            )
+        for q in (q for q in questions if q["kp_index"] == kp.index and q.get("role") != "capstone"):
+            print_question(q)
+    capstones = [q for q in questions if q.get("role") == "capstone"]
+    print("\n## Capstone (the final multistep problem)" + ("" if capstones else "\n(none)"))
+    for q in capstones:
+        print_question(q)
     print("\nShow the missing steps:", lesson.missing_steps)
     print("Connection:", lesson.connection)
     print("Source refs:", lesson.source_refs, "pages", lesson.page_labels)

@@ -404,7 +404,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                 {revealing || (restoring && question.revealed) ? <Spinner size={14} label="Loading solution" /> : <Icon name="eye" size={15} />}{" "}
                 {revealed ? "Solution shown" : "Show solution"}
               </button>
-              {onEasier && (
+              {/* Not after a hint or the solution: swapping the question would wipe out that help (½ / 0 points). */}
+              {onEasier && hintsShown === 0 && revealed === null && !question.revealed && (
                 <button type="button" className="btn btn--ghost btn--sm" onClick={() => void askEasier()} disabled={busy}>
                   {easing ? <Spinner size={14} label="Finding an easier step" /> : <Icon name="steps" size={15} />} Give me an easier step
                 </button>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { setFoundationKnown } from "../../api";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
@@ -7,6 +7,7 @@ import { SourceRefs } from "../../components/SourceRefs";
 import { Spinner } from "../../components/Spinner";
 import { StatusChip } from "../../components/StatusChip";
 import { useToast } from "../../context/toast";
+import { cooldownEnd, returnTimeFromMessage, returnTimePhrase } from "../../lib/cooldown";
 import { formatDateTime, kindLabel, percent, relativeTime } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
 import type { CourseGraph, FoundationNode, SkillNode, Task } from "../../types";
@@ -19,7 +20,8 @@ interface SkillDrawerProps {
   selection: GraphSelection | null;
   onSelect: (selection: GraphSelection) => void;
   onClose: () => void;
-  onLearn: (skill: SkillNode) => void;
+  /** `force`: "Start anyway" during the lesson's cooldown. */
+  onLearn: (skill: SkillNode, options?: { force?: boolean }) => void;
   onReview: (skill: SkillNode) => void;
   onPreview: (skill: SkillNode) => void;
   onFoundationChange: (foundation: FoundationNode) => void;
@@ -27,6 +29,20 @@ interface SkillDrawerProps {
   pending: string | null;
   /** The open (unfinished) task, if any: its skill's button resumes it. */
   activeTask: Task | null;
+  /** The server's 409 "comes back at …" per skill id, from a start refused during the lesson's cooldown. */
+  cooldownMessages?: Record<string, string>;
+}
+
+/** Re-render when `until` (ms since the epoch) passes, so a cooldown ends on screen without a reload. */
+function useNowUntil(until: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (until === null) return;
+    const wait = Math.min(Math.max(until - Date.now(), 0) + 1000, 2 ** 31 - 1);
+    const timer = window.setTimeout(() => setNow(Date.now()), wait);
+    return () => window.clearTimeout(timer);
+  }, [until]);
+  return now;
 }
 
 /** Details of the selected node: a right-hand panel on desktop, a bottom sheet on phones. */
@@ -93,7 +109,17 @@ function Difficulty({ value }: { value: number }) {
   );
 }
 
-function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pending, activeTask }: SkillDrawerProps & { skill: SkillNode }) {
+function SkillDetails({
+  skill,
+  graph,
+  onSelect,
+  onLearn,
+  onReview,
+  onPreview,
+  pending,
+  activeTask,
+  cooldownMessages,
+}: SkillDrawerProps & { skill: SkillNode }) {
   const byId = useMemo(() => new Map(graph.skills.map((s) => [s.id, s])), [graph.skills]);
   const prerequisites = graph.edges.filter((e) => e.target === skill.id).flatMap((e) => byId.get(e.source) ?? []);
   const unlocks = graph.edges.filter((e) => e.source === skill.id).flatMap((e) => byId.get(e.target) ?? []);
@@ -105,7 +131,16 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
   // A lesson started with "Learn anyway" keeps the skill locked (the menu won't offer it) but stays resumable.
   const resuming = activeTask !== null && activeTask.phase !== "done" && activeTask.type === "lesson" && activeTask.skill.id === skill.id;
   const locked = skill.status === "locked" && !resuming;
-  const learnLabel = resuming || skill.status === "in_progress" ? "Continue lesson" : locked ? "Learn anyway" : "Learn this";
+  // In progress without an open task: the last attempt ended (halted, or set aside) — starting makes a new attempt.
+  const learnLabel = resuming ? "Continue lesson" : skill.status === "in_progress" ? "Start again" : locked ? "Learn anyway" : "Learn this";
+  // A halted lesson comes back after its cooldown with fresh questions (SPEC §6.3); "Start anyway" overrides it.
+  const cooldownAt = skill.cooldown_until ? Date.parse(skill.cooldown_until) : Number.NaN;
+  const now = useNowUntil(Number.isFinite(cooldownAt) ? cooldownAt : null);
+  const coolingUntil = learned || resuming ? null : cooldownEnd(skill.cooldown_until, now);
+  // An older server sends no cooldown_until: then only its 409 said so (and its time, if it named one).
+  const refusedMessage = skill.cooldown_until === undefined && !learned && !resuming ? (cooldownMessages?.[skill.id] ?? null) : null;
+  const backAt = coolingUntil !== null ? returnTimePhrase(coolingUntil, now) : refusedMessage ? returnTimeFromMessage(refusedMessage) : null;
+  const cooling = coolingUntil !== null || refusedMessage !== null;
 
   return (
     <div className="skill-details">
@@ -126,7 +161,23 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
       {skill.summary && <Markdown className="skill-details__summary">{skill.summary}</Markdown>}
 
       <div className="skill-details__actions">
-        {learned ? (
+        {cooling ? (
+          <>
+            <span className="skill-details__back" role="status">
+              <Icon name="clock" size={16} /> {backAt ? `Back ${backAt}` : "Back later"}
+            </span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => onLearn(skill, { force: true })}
+              disabled={pending !== null || !ready}
+              title="Start a new attempt now instead of after the break"
+            >
+              {pending === `${skill.id}:lesson` ? <Spinner size={14} label="Starting" /> : null}
+              Start anyway
+            </button>
+          </>
+        ) : learned ? (
           <button
             type="button"
             className="btn btn--primary"
@@ -153,6 +204,12 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
           </button>
         )}
       </div>
+      {cooling && (
+        <p className="skill-details__note">
+          The last attempt stopped below the 80% pass mark. This lesson comes back {backAt ?? "in about 2 hours"} with
+          fresh questions — the break helps it settle.
+        </p>
+      )}
       {skill.lesson_status === "pending" && (
         <p className="skill-details__note">
           <Spinner size={12} label="Writing" /> The lesson for this skill is still being written.
@@ -164,7 +221,7 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
           again.
         </p>
       )}
-      {locked && missing.length > 0 && ready && (
+      {locked && !cooling && missing.length > 0 && ready && (
         <p className="skill-details__note">
           <Icon name="lock" size={14} /> Usually unlocked after {sort(missing).map((m) => m.key).join(", ")}. You can still start
           it — it will be harder without {missing.length === 1 ? "that skill" : "those skills"}.
@@ -218,19 +275,6 @@ function SkillDetails({ skill, graph, onSelect, onLearn, onReview, onPreview, pe
                     <Markdown inline>{prettyTitle(f.title)}</Markdown>
                   </span>
                 </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {skill.misconceptions.length > 0 && (
-        <section className="drawer-section">
-          <h3 className="drawer-section__title">Watch out for</h3>
-          <ul className="misconceptions">
-            {skill.misconceptions.map((m, i) => (
-              <li key={i}>
-                <Markdown inline>{m}</Markdown>
               </li>
             ))}
           </ul>

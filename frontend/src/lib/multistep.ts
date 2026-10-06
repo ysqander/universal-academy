@@ -56,13 +56,34 @@ export const trailItems = (state: StepTrail): StepResult[] => state.results.filt
 
 export const allAnswered = (state: StepTrail): boolean => state.results.length >= state.total && state.total > 0;
 
-export type StepMark = "full" | "half" | "none";
+/**
+ * The step was answered with "Show solution" (0 points): the server's flag (StepResult.revealed), else — older servers —
+ * what its result says: right but worth nothing, or the stock "Answer viewed" verdict.
+ */
+export function stepRevealed(result: Pick<StepResult, "correct" | "score" | "feedback"> & { revealed?: boolean | null }): boolean {
+  if (typeof result.revealed === "boolean") return result.revealed;
+  if ((result.score || 0) > 0) return false;
+  return result.correct || /^\s*Answer viewed\b/i.test(result.feedback) || /\banswer was shown first\b/i.test(result.feedback);
+}
 
-export const stepMark = (score: number): StepMark => (score >= 1 ? "full" : score > 0 ? "half" : "none");
+/** Steps answered with "Show solution", by index (rebuilt from the server's results after a reload). */
+export const revealedStepIndexes = (results: readonly StepResult[]): Set<number> =>
+  new Set(results.filter((r) => stepRevealed(r)).map((r) => r.index));
 
-export const STEP_MARK_GLYPH: Record<StepMark, string> = { full: "✓", half: "½", none: "✗" };
+export type StepMark = "full" | "half" | "none" | "shown";
 
-export const STEP_MARK_LABEL: Record<StepMark, string> = { full: "right", half: "right with the hint", none: "not right" };
+/** `revealed`: the step's solution was shown (0 points) — said as such, not as a wrong answer. */
+export const stepMark = (score: number, revealed = false): StepMark =>
+  score >= 1 ? "full" : score > 0 ? "half" : revealed ? "shown" : "none";
+
+export const STEP_MARK_GLYPH: Record<StepMark, string> = { full: "✓", half: "½", none: "✗", shown: "–" };
+
+export const STEP_MARK_LABEL: Record<StepMark, string> = {
+  full: "right",
+  half: "right with the hint",
+  none: "not right",
+  shown: "solution shown (0 points)",
+};
 
 /** Step points earned so far (1 / 0.5 / 0 each). */
 export const earnedSteps = (results: readonly StepResult[]): number => results.reduce((sum, r) => sum + Math.min(1, Math.max(0, r.score || 0)), 0);
@@ -70,12 +91,13 @@ export const earnedSteps = (results: readonly StepResult[]): number => results.r
 /** "2½ of 3 steps". */
 export const stepsSummary = (results: readonly StepResult[], total: number): string => `${halves(earnedSteps(results))} of ${total} steps`;
 
-/** Pips over the steps: answered ones carry their mark, then the current one, then the rest. */
-export function stepPips(state: StepTrail): ("full" | "half" | "none" | "current" | "todo")[] {
+/** Pips over the steps: answered ones carry their mark, then the current one, then the rest. `revealed`: steps whose
+ * solution was shown. */
+export function stepPips(state: StepTrail, revealed: ReadonlySet<number> = new Set()): (StepMark | "current" | "todo")[] {
   const byIndex = new Map(state.results.map((r) => [r.index, r]));
   return Array.from({ length: state.total }, (_, i) => {
     const r = byIndex.get(i);
-    if (r) return stepMark(r.score);
+    if (r) return stepMark(r.score, revealed.has(i));
     return i === activeStep(state) ? "current" : "todo";
   });
 }
@@ -85,6 +107,20 @@ export function stepResultOf(result: AnswerResult, index: number): StepResult {
   if (result.step_result) return result.step_result;
   const score = result.correct ? (result.independent ? 1 : 0.5) : 0;
   return { index, correct: result.correct, score, feedback: result.feedback, answer_display: result.correct_answer, explanation: result.solution };
+}
+
+const STEPS_RECAP = /\bProblem complete:\s*\d+\s+of\s+\d+\s+steps?\s+right\.?/i;
+
+/**
+ * What the server says the finished multistep question changed in the task — "One more question on this step comes
+ * next…", "Last: one problem that puts the lesson together…", "Lesson passed with 91%." — without the last step's
+ * verdict and the steps recap (the card shows both). `AnswerResult.note` when sent; older servers: the text after
+ * "Problem complete: n of m steps right." in the feedback.
+ */
+export function multistepNote(result: Pick<AnswerResult, "feedback"> & { note?: string | null }): string {
+  if (typeof result.note === "string") return result.note.trim();
+  const recap = STEPS_RECAP.exec(result.feedback);
+  return recap ? result.feedback.slice(recap.index + recap[0].length).trim() : "";
 }
 
 /** The response finished the whole question (the last step, or the server ended it). */

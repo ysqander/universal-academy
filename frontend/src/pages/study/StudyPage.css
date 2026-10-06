@@ -230,11 +230,26 @@
   color: var(--accent);
 }
 
+/* The title takes the rest of the line, but never less than ~12rem: when the count and "Question n of m" leave less
+   than that it wraps onto its own row instead of being squeezed into a narrow column broken inside words. */
 .kp-stepper__title {
-  flex: 1;
+  flex: 1 1 12rem;
   min-width: 0;
   font-family: var(--font-serif);
   font-weight: 600;
+}
+
+@media (max-width: 599px) {
+  /* Phones: "Step 1 of 2 + final problem · Question 1 of 1" on one row, the knowledge point's title on its own below. */
+  .kp-stepper__question {
+    order: 1;
+    margin-left: auto;
+  }
+
+  .kp-stepper__title {
+    order: 2;
+    flex-basis: 100%;
+  }
 }
 
 .kp-stepper__segments li[data-capstone] {
@@ -314,6 +329,12 @@
   margin-left: auto;
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+/* Stopped early (80 % out of reach): said plainly, not as a finished plan. */
+.score-meter[data-halted] .score-meter__aside {
+  color: var(--status-progress);
+  font-weight: 600;
 }
 
 .score-meter__track {
@@ -473,6 +494,24 @@
 
 .question-card__prompt .md {
   font-size: 1.125rem;
+}
+
+/* Phones: inline math that can't wrap (a long \text{…} run, e.g. "(real coordinate, imaginary coordinate)") scrolls
+   inside itself instead of pushing past the card — prompts, steps, the step trail and the feedback alike. inline-flex
+   keeps the formula on the text's baseline (an inline-block scroll box would sit on its bottom edge) and still wraps
+   a long formula between its parts; display math already scrolls on its own (Markdown.css). */
+@media (max-width: 599px) {
+  .question-card .md .katex:not(.katex-display > .katex) {
+    display: inline-flex;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+
+  .question-card .md .katex:not(.katex-display > .katex) > .katex-html {
+    min-width: 0;
+  }
 }
 
 .question-card__source {
@@ -916,6 +955,10 @@
   background: var(--danger);
 }
 
+.multistep__pips li[data-state="shown"] {
+  background: var(--faint);
+}
+
 /* answered steps: a compact trail */
 
 .step-trail {
@@ -944,6 +987,12 @@
 .step-trail__item[data-mark="none"] {
   --mark: var(--danger);
   --mark-bg: var(--danger-bg);
+}
+
+/* answered with "Show solution": 0 points, but not a wrong answer */
+.step-trail__item[data-mark="shown"] {
+  --mark: var(--muted);
+  --mark-bg: var(--paper-sunken);
 }
 
 .step-trail__summary {

@@ -4,7 +4,18 @@ from __future__ import annotations
 
 MATH_FORMAT = (
     "Formatting: Markdown. Math only as $...$ (inline) or $$...$$ (display) — never \\( \\), \\[ \\] or bare LaTeX. "
-    "Keep the author's notation (e.g. $\\mathbf{F}^n$, $\\mathbf{C}$, 'list', 'length')."
+    "Keep the author's notation (e.g. $\\mathbf{F}^n$, $\\mathbf{C}$, 'list', 'length'). Words go outside math: no "
+    "\\text{...} phrases inside $...$ (they cannot wrap on a phone)."
+)
+
+# Iteration-3 review (capstones asked for "(real coordinate, imaginary coordinate)" after seven lessons of a+bi, and a
+# learner who typed the trained form failed the lesson): one answer form for complex numbers everywhere.
+COMPLEX_FORM_RULE = (
+    'A complex number is asked for and keyed in the form $a+bi$ — the prompt says "Enter it in the form $a+bi$" and '
+    'the answer is SymPy "a+b*i" (e.g. "1/5+2*i/5", "-3*i", "4") — as in every lesson of the course, including '
+    "multistep steps and the capstone. Never ask for a complex number as a coordinate pair \"(real coordinate, "
+    'imaginary coordinate)" unless the skill is about the ordered-pair definition itself; when only one coordinate '
+    "matters, ask for that coordinate alone as a numeric answer."
 )
 
 # Question format rule for every question generator (v1 lessons, top-ups, v2 lessons and their inline checks).
@@ -51,7 +62,10 @@ DISTINCT_DEMANDS_RULE = (
     "computation (is it real? which sign? which is larger?); spotting the error in a shown working (multiple_choice: "
     "which line is wrong, or what the correct line is); a reverse problem (find the missing number or factor that "
     "gives a stated result); interpreting a result; deciding which method or fact applies. Questions stay inside the "
-    "objective: a different demand, not a new method."
+    "objective: a different demand, not a new method. Every question needs THIS knowledge point's idea to answer: "
+    "not one whose answer follows from a prerequisite or outside fact alone, or is the only special value the prompt "
+    'allows (e.g. "for real $a,b$ with $a^2+b^2=0$, what is $b$?" needs only that real squares are nonnegative) — '
+    "make such a question a decision with a near miss that needs the lesson's idea."
 )
 NO_WRITTEN_ANSWERS_RULE = (
     'No free_response questions and no "show your working": the app checks only the answer, so an instruction to '
@@ -62,7 +76,8 @@ NO_WRITTEN_ANSWERS_RULE = (
 MULTISTEP_FORMAT = (
     "multistep: a guided problem. The prompt states the whole problem and its goal; `steps` holds 2–4 steps the "
     "learner answers one at a time (seeing each result and its explanation before the next), and a later step uses "
-    "an earlier result. Each step: prompt (what to do now and the exact form to enter), kind numeric / expression / "
+    "an earlier result. Each step: prompt (what to do now and the exact form to enter — a complex result in the form "
+    "$a+bi$), kind numeric / expression / "
     "multiple_choice / true_false / true_false_set with that kind's conventions for choices, correct_choice, answer, "
     "answer_display and tolerance, ONE hint (using it halves the step's point) and an explanation (1–2 sentences "
     "shown after the step: why this is the result). The question itself: answer \"\", choices [], correct_choice "
@@ -71,6 +86,39 @@ MULTISTEP_FORMAT = (
     "\"What is the first coordinate of $x+y$?\" (expression), \"Which property of $\\mathbf{F}$ justifies this "
     'line?" (multiple_choice), "Which hypothesis was used?" (multiple_choice).'
 )
+
+# The lesson's final problem (v1 and v2 lessons). Iteration-3 review of S3a/S3b: both capstones were the lesson's
+# own procedure split into its sub-steps (the lesson's key decision given away in a step prompt) plus a "multiply
+# back" step whose answer — 1, or the right side printed in the problem — was known before computing anything.
+CAPSTONE_RULE = """\
+CAPSTONE (`capstone`) — the lesson's final problem, served after the practice
+- ONE problem, key "cap", kind "multistep", tier 3, with 2–4 steps; a later step uses an earlier step's result.
+- It CHAINS this lesson's idea with at least one earlier skill (a prerequisite named in the request) into one
+  problem. The earlier skill does real work in a step of its own — it produces the input this lesson's method is
+  applied to, or it uses this lesson's result — not merely the arithmetic already inside this lesson's procedure.
+  This lesson's method is applied ONCE and unguided: do not split it into the sub-steps the lesson taught, and do not
+  give away its key decision (e.g. which factor to multiply by) in the problem or a step prompt.
+- Not a replay: taken together, the steps must not re-run a practice question, an inline check, the faded example or
+  a worked example on new numbers — neither whole nor split into parts. Use a fresh problem: its numbers are not
+  the running example's, a worked example's or a practice question's — not even those numbers multiplied in another
+  order (a step whose result the lesson has already shown is not fresh work).
+- Pattern: an earlier skill produces the input → this lesson's method on it, in one step → a different move that
+  uses the result (a prediction or decision without a full recomputation, a second use of the result, an
+  interpretation). Illustration for a lesson on complex reciprocals whose prerequisite is complex multiplication
+  (use your own problem and numbers): "Let $w=(1+3i)(2-i)$. Step 1: enter $w$ in the form $a+bi$ ($5+5i$). Step 2:
+  enter $1/w$ in the form $a+bi$ ($\\frac{1}{10}-\\frac{1}{10}i$). Step 3: $5-5i$ differs from $w$ only in the sign of
+  its imaginary coordinate — without a new construction, enter $1/(5-5i)$ ($\\frac{1}{10}+\\frac{1}{10}i$)." NOT:
+  "multiply $1-2i$ by $1+2i$; divide by $5$; multiply back and confirm you get $1$" — a practice question split into
+  its parts, plus a step whose answer is known in advance.
+- No step's answer may be known before it is computed: never stated in the problem or in a step prompt (e.g. the
+  right side of the equation being solved), never an earlier step's result again, never forced by a definition (a
+  number times its reciprocal is $1$, multiplying a solution back gives the right side, the reciprocal of a
+  reciprocal is the number). Checking the result ("multiply back") belongs in the last step's explanation and the
+  solution, not in a scored step; a checking step is allowed only when it asks for a value the learner must compute
+  and that is shown nowhere. A step's hint points to the move; it never contains the whole computation of the answer.
+- Each step: one machine-checked answer, ONE hint, an explanation and answer_display (the multistep format); complex
+  results in the form $a+bi$, never as coordinate pairs. The question prompt states the whole problem and its goal;
+  each step prompt says exactly what to do now and the form to enter."""
 
 GRAPH_INSTRUCTIONS = f"""\
 You design the knowledge graph of a Math-Academy-style course generated from pages of a textbook the learner owns.
@@ -166,6 +214,7 @@ LESSON ANATOMY
   - questions: target_questions + 2 questions about THIS knowledge point, tiers ramping 1 → 3, served in this order
     (see QUESTIONS).
 - missing_steps: the deeper justification or omitted algebra, for learners who click "Show the missing steps".
+- capstone: the lesson's final multistep problem, served after the knowledge points (see CAPSTONE below).
 - common_mistakes: [] (always empty — the app no longer has such a section).
 - connection: 1–2 sentences — what this enables next (name later skills from the course map) and what it builds on.
 - source_refs: printed item numbers used — short references only: "1.3", "Example 1.4", "Exercise 1A.3". Never
@@ -178,6 +227,7 @@ PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove
 - The other questions check the ingredients with different demands: which law a step uses, true_false or
   true_false_set claims about a step (the reason or a counterexample in the solution), spotting the invalid step in
   a shown argument, a computed instance.
+- The capstone walks through the lesson's main proof or uses its result in a computation.
 
 QUESTIONS
 - {NO_WRITTEN_ANSWERS_RULE}
@@ -199,7 +249,8 @@ QUESTIONS
     when a decimal approximation is expected, else null.
   - expression: answer in SymPy syntax — ** for powers, * for every product, i for the imaginary unit ("-7+22*i"),
     sqrt(2), pi; a list or vector as a tuple "(1, -2, 3)". The prompt must state the exact form to enter (e.g.
-    "Enter your answer in the form $a+bi$" or "Enter the list as $(x_1, x_2, x_3)$"). {UNORDERED_RULE}
+    "Enter your answer in the form $a+bi$" or "Enter the list as $(x_1, x_2, x_3)$"). {COMPLEX_FORM_RULE}
+    {UNORDERED_RULE}
   - multiple_choice: 3–5 choices; distractors come from real misconceptions (sign error, conjugate, coordinate-wise
     product, swapped order, a hypothesis dropped), never random values; exactly one correct; correct_choice is its
     0-based index; vary its position across questions. All options have similar length, wording and level of
@@ -223,6 +274,8 @@ QUESTIONS
 - Before writing each answer, solve the question again from scratch and make sure answer, answer_display, the
   correct choice and the solution all agree.
 - Keys: "k1q1", "k1q2", … for knowledge point 1, "k2q1", … for knowledge point 2.
+
+{CAPSTONE_RULE}
 {MATH_FORMAT}
 """
 
@@ -331,7 +384,8 @@ passage and the questions that already exist.
   claims, multiple_choice only when choosing is the skill; choice-based questions (multiple_choice, true_false, a
   true_false_set of only 2 statements) at most 40% — prefer typed answers. numeric: a plain number in SymPy
   syntax. expression: SymPy syntax with ** for powers, * for products, i for the imaginary unit, tuples
-  "(1, -2, 3)" for lists, and the prompt states the form to enter. {UNORDERED_RULE} multiple_choice: 3–5 choices with
+  "(1, -2, 3)" for lists, and the prompt states the form to enter. {COMPLEX_FORM_RULE} {UNORDERED_RULE}
+  multiple_choice: 3–5 choices with
   misconception-based distractors, correct_choice = 0-based index; all options of similar length and detail (the
   correct one must not be the longest or only detailed one; argument options are all complete arguments, each
   wrong one with exactly one specific flaw). true_false: choices exactly ["True", "False"]. {TF_SET_KIND}

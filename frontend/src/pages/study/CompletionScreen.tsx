@@ -64,8 +64,8 @@ export function CompletionScreen({ task, plannedBefore = 0, xpEarned, onSession,
   const options = next.data?.options ?? [];
   const courseHref = `/courses/${encodeURIComponent(task.course_id)}`;
   const { progress } = task;
-  const score = scoreView(progress);
-  const end = task.type === "lesson" && task.outcome === "failed" ? lessonEndNote(progress, plannedBefore) : null;
+  const score = scoreView(progress, task.type === "lesson" ? { outcome: task.outcome, plannedBefore } : null);
+  const end = task.type === "lesson" && task.outcome === "failed" ? lessonEndNote(progress, plannedBefore, task.cooldown_until) : null;
   const showScore = task.type === "lesson" && score.hasScore && (task.outcome === "passed" || task.outcome === "failed");
 
   useEffect(() => {
@@ -103,7 +103,7 @@ export function CompletionScreen({ task, plannedBefore = 0, xpEarned, onSession,
           <ScoreMeter
             view={score}
             size="lg"
-            aside={task.outcome === "passed" ? "Passed" : end?.halted ? `Stopped after ${plural(score.answered, "question")}` : "Below the pass mark"}
+            aside={task.outcome === "passed" ? "Passed" : score.halted ? score.remainingLabel : "Below the pass mark"}
           />
           {end && (
             <p className="completion__note completion__score-note">

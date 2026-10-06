@@ -52,6 +52,9 @@ export default function CoursePage({ courseId }: { courseId: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [jobOverride, setJobOverride] = useState<JobStatus | null>(null);
+  // Lessons the server refused to start because they are cooling down (409 "comes back at …"), by skill id: the drawer
+  // offers "Start anyway" for them even when the graph doesn't carry cooldown_until (older server).
+  const [cooldowns, setCooldowns] = useState<Record<string, string>>({});
 
   const course = useResource(`course:${courseId}`, (signal) => getCourse(courseId, signal));
   const job = jobOverride ?? course.data?.job ?? null;
@@ -75,12 +78,21 @@ export default function CoursePage({ courseId }: { courseId: string }) {
     (signal) => getNext(courseId, signal),
     { keepPrevious: true },
   );
-  const { continueNext, startSkill, pending, replaceDialog } = useStartTask(courseId, next.data?.task ?? null);
-  useDocumentTitle(courseData ? plainText(prettyTitle(courseData.title)) : "Course");
-
   const { reload: reloadCourse } = course;
   const { reload: reloadGraph, mutate: mutateGraph } = graph;
   const { reload: reloadNext } = next;
+  const onCooldown = useCallback(
+    (skillId: string, message: string) => {
+      setCooldowns((prev) => ({ ...prev, [skillId]: message }));
+      // The map and the menu may be stale (the lesson was halted in another tab or before this page loaded).
+      void reloadGraph();
+      void reloadNext();
+    },
+    [reloadGraph, reloadNext],
+  );
+  const { continueNext, startSkill, pending, replaceDialog } = useStartTask(courseId, next.data?.task ?? null, onCooldown);
+  useDocumentTitle(courseData ? plainText(prettyTitle(courseData.title)) : "Course");
+
   const refreshAll = useCallback(() => {
     void reloadCourse();
     void reloadGraph();
@@ -266,13 +278,14 @@ export default function CoursePage({ courseId }: { courseId: string }) {
           onSelect={setSelection}
           onClose={() => setSelection(null)}
           // "Learn anyway" forces a locked skill; resuming one started that way needs no force (a 409 "locked" from an
-          // older server is retried once with force by api.startTask).
-          onLearn={(skill) => void startSkill(skill.id, "lesson", { force: skill.status === "locked" })}
+          // older server is retried once with force by api.startTask). "Start anyway" forces a lesson that is cooling down.
+          onLearn={(skill, options) => void startSkill(skill.id, "lesson", { force: Boolean(options?.force) || skill.status === "locked" })}
           onReview={(skill) => void startSkill(skill.id, "review")}
           onPreview={(skill) => setPreviewSkill(skill)}
           onFoundationChange={onFoundationChange}
           pending={pending}
           activeTask={next.data?.task ?? null}
+          cooldownMessages={cooldowns}
         />
       )}
       <LessonPreviewDialog skill={previewSkill} onClose={() => setPreviewSkill(null)} />

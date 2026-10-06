@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { abandonTask, continueLearning, easierStep, getCourse, getNext, isApiError, startPractice, startTask } from "../../api";
+import { abandonTask, continueLearning, easierStep, getCourse, getNext, isApiError, isCooldownConflict, startPractice, startTask } from "../../api";
 import { CourseProvider } from "../../components/CourseProvider";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
@@ -173,8 +173,10 @@ export default function StudyPage({ courseId }: { courseId: string }) {
     try {
       replaceTask(await start());
     } catch (err) {
-      toast.error(err);
-      // 409 "Finish or leave '…' first": another task is open after all — pick it up instead.
+      // A lesson cooling down ("comes back at …") is information, not an error.
+      if (isCooldownConflict(err)) toast.show(err.message, "info");
+      else toast.error(err);
+      // 409 "Finish or leave '…' first": another task is open after all — pick it up instead (or a stale menu: refresh).
       if (isApiError(err, 409) && task === null) retryBoot();
     } finally {
       setBusy(null);

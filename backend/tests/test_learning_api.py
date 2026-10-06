@@ -114,6 +114,38 @@ def test_manual_start_flag_easier_and_abandon(client: TestClient) -> None:
     assert again.status_code == 409 and "No easier question" in again.json()["detail"]
 
 
+def test_paused_lesson_start_is_a_409_with_the_return_time_unless_forced(client: TestClient) -> None:
+    from app.learning import engine
+
+    fx = build_course()
+    cid = fx.course_id
+    set_targets(fx, "S1", [1, 1])
+    task = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S1")}).json()
+    task = client.post(f"/api/tasks/{task['id']}/practice").json()
+    result = client.post(f"/api/tasks/{task['id']}/answer", json=answer_body(task["question"]["id"], correct=False)).json()
+    assert result["task"]["outcome"] == "failed" and result["suggestion"] == "retry_later"
+    until = db.parse_iso(db.query_one("SELECT cooldown_until FROM progress WHERE skill_id = ?", (fx.sid("S1"),))["cooldown_until"])
+    refused = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S1")})
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == f"This lesson comes back at {engine.local_clock(until)} (local time) with fresh questions."
+    assert engine.local_clock(until) in result["suggestion_text"]
+    forced = client.post(f"/api/courses/{cid}/tasks", json={"skill_id": fx.sid("S1"), "force": True})
+    assert forced.status_code == 200 and forced.json()["type"] == "lesson" and forced.json()["id"] != task["id"]
+
+
+def test_pair_for_a_single_value_is_asked_again_over_http(client: TestClient) -> None:
+    fx = build_course()
+    task = client.post(f"/api/courses/{fx.course_id}/tasks", json={"skill_id": fx.sid("S1")}).json()
+    task = client.post(f"/api/tasks/{task['id']}/practice").json()
+    qid = fx.questions["S1"][0][0]
+    db.execute("UPDATE questions SET kind = 'expression', answer = '3/13+2*i/13' WHERE id = ?", (qid,))
+    assert task["question"]["id"] == qid
+    pair = client.post(f"/api/tasks/{task['id']}/answer", json={"question_id": qid, "response": "(3/13, 2/13)"})
+    assert pair.status_code == 422 and "a + bi" in pair.json()["detail"]
+    ok = client.post(f"/api/tasks/{task['id']}/answer", json={"question_id": qid, "response": "3/13+2i/13"}).json()
+    assert ok["correct"] and ok["independent"] and ok["score"] == 1  # the 422 recorded nothing
+
+
 def test_errors_and_settings(client: TestClient) -> None:
     assert client.get("/api/courses/nope/next").status_code == 404
     assert client.post("/api/courses/nope/continue").status_code == 404

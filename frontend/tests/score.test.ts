@@ -11,8 +11,11 @@ import {
   pointsLabel,
   progressNote,
   questionPoints,
+  scorePercent,
   scoreView,
   stepPointsLabel,
+  wasHalted,
+  withoutPassNote,
 } from "../src/lib/score.ts";
 import type { TaskProgress } from "../src/types.ts";
 
@@ -63,13 +66,42 @@ test("halves: counts in halves with the ½ sign", () => {
   assert.equal(halves(-1), "0");
 });
 
-test("percentLabel: rounds down so a score just under the pass mark never reads as passing", () => {
-  assert.equal(percentLabel(0.857), "85%");
-  assert.equal(percentLabel(0.795), "79%");
+test("percentLabel: rounds half up, as the server does, so every screen shows the same number", () => {
+  assert.equal(percentLabel(0.857), "86%");
   assert.equal(percentLabel(0.8), "80%");
   assert.equal(percentLabel(1), "100%");
-  assert.equal(percentLabel(2 / 3), "66%");
+  assert.equal(percentLabel(2 / 3), "67%");
+  assert.equal(percentLabel(0.285), "29%");
+  // The review that read "Review score 92%" on the card and "Score 91%" on the results page.
+  assert.equal(percentLabel(11 / 12), "92%");
   assert.equal(percentLabel(Number.NaN), "0%");
+  assert.equal(percentLabel(-0.2), "0%");
+  // Never up onto the pass mark or 100 %.
+  assert.equal(percentLabel(0.796), "79%");
+  assert.equal(percentLabel(0.795), "79%");
+  assert.equal(percentLabel(0.996), "99%");
+  assert.equal(percentLabel(0.7999999999), "80%"); // within the server's EPS of the mark: it passes there too
+  assert.equal(percentLabel(0.896, 0.9), "89%");
+});
+
+/** backend engine.score_percent, transcribed. */
+const serverPercent = (score: number, passMark = 0.8): number => {
+  const s = Math.max(0, Math.min(1, score));
+  const pct = Math.floor(s * 100 + 0.5 + 1e-9);
+  const mark = Math.round(passMark * 100);
+  if (s < passMark - 1e-9 && pct >= mark) return mark - 1;
+  if (s < 1 - 1e-9 && pct >= 100) return 99;
+  return pct;
+};
+
+test("scorePercent matches the server's score_percent for every reachable score", () => {
+  // Lesson scores are points / max points with points in halves, multistep steps in thirds and the capstone double.
+  for (let max = 1; max <= 40; max++) {
+    for (let sixths = 0; sixths <= max * 6; sixths++) {
+      const score = sixths / 6 / max;
+      assert.equal(scorePercent(score), serverPercent(score), `score ${sixths}/6 of ${max}`);
+    }
+  }
 });
 
 test("scoreView: score of the answered questions, the pass mark and what is left of the plan", () => {
@@ -81,6 +113,7 @@ test("scoreView: score of the answered questions, the pass mark and what is left
   assert.equal(start.remainingLabel, "0 of 5 answered");
 
   const mid = scoreView(progress({ answered: 3, points: 2.5, max_points: 3, score: 2.5 / 3 }));
+  assert.equal(mid.halted, false);
   assert.equal(mid.label, "Score 83%");
   assert.equal(mid.tone, "pass");
   assert.equal(mid.remainingLabel, "3 of 5 answered");
@@ -193,6 +226,53 @@ test("progressNote: knowledge point done, end of the lesson; no second note for 
   assert.match(progressNote(lesson(progress({ answered: 1, planned: 5 })), reportedFailed) ?? "", /no longer reachable/);
   // Not twice when the server's feedback already says so.
   assert.equal(progressNote(before, failed, "80% is out of reach on this attempt, so the lesson pauses here."), null);
+  // The second failure's remediation text says it too.
+  assert.equal(progressNote(before, failed, "This lesson has stopped short of 80% twice. Refresh S2b first."), null);
   // Legacy progress objects: nothing changed, nothing to say.
   assert.equal(progressNote(lesson(legacy), lesson(legacy)), null);
+});
+
+test("scoreView after an early stop: 'Stopped after n questions', never 'n of n answered'", () => {
+  // S3b: Q1 wrong (an extra question is added: 4 planned), the extra one wrong too — 80 % is out of reach. The halted
+  // task reports planned = answered = 2; the plan before the last answer was 4.
+  const halted = progress({ answered: 2, planned: 2, points: 0, max_points: 2, score: 0 });
+  const view = scoreView(halted, { outcome: "failed", plannedBefore: 4 });
+  assert.equal(view.halted, true);
+  assert.equal(view.remainingLabel, "Stopped after 2 questions");
+  assert.match(view.ariaText, /stopped early/);
+  assert.equal(scoreView(progress({ answered: 1, planned: 1, points: 0, max_points: 1 }), { outcome: "failed", plannedBefore: 3 }).remainingLabel, "Stopped after 1 question");
+  // The server's own flag wins over the plan arithmetic.
+  assert.equal(scoreView(progress({ answered: 2, planned: 2, halted: true }), { outcome: "failed" }).remainingLabel, "Stopped after 2 questions");
+  assert.equal(wasHalted(progress({ answered: 2, planned: 6, halted: false })), false);
+  // Every planned question answered, below the pass mark: not halted.
+  const below = scoreView(progress({ answered: 5, planned: 5, points: 3.5, max_points: 5, score: 0.7 }), { outcome: "failed", plannedBefore: 5 });
+  assert.equal(below.halted, false);
+  assert.equal(below.remainingLabel, "5 of 5 answered");
+  // Passed: the plan is done (no "Last question" on a finished task).
+  const passed = scoreView(progress({ answered: 5, planned: 5, points: 4.5, max_points: 5, score: 0.9 }), { outcome: "passed", plannedBefore: 5 });
+  assert.equal(passed.halted, false);
+  assert.equal(passed.remainingLabel, "5 of 5 answered");
+  // While the task runs, no end: the usual labels.
+  assert.equal(scoreView(halted).remainingLabel, "2 of 2 answered");
+});
+
+test("the end of a lesson without a capstone is said once: the server's 'Lesson passed with N%.' gives way", () => {
+  // S2c: the panel showed "That completes the lesson — score 80%." and "Lesson passed with 80%." together.
+  assert.equal(withoutPassNote("Lesson passed with 80%."), "");
+  assert.equal(withoutPassNote("With a hint, so half a point. Lesson passed with 81%."), "With a hint, so half a point.");
+  assert.equal(withoutPassNote("Problem complete. One more question comes next."), "Problem complete. One more question comes next.");
+  const lesson = (p: TaskProgress, over: object = {}) => ({ type: "lesson" as const, phase: "practice" as const, outcome: null, progress: p, ...over });
+  const passed = lesson(progress({ answered: 5, planned: 5, points: 4, max_points: 5, score: 0.8 }), { phase: "done", outcome: "passed" });
+  const before = lesson(progress({ answered: 4, planned: 5 }));
+  assert.equal(progressNote(before, passed, withoutPassNote("Lesson passed with 80%.")), "That completes the lesson — score 80%.");
+  // Wording it doesn't recognise: the server's text stays and the panel's own note steps back.
+  assert.equal(progressNote(before, passed, "Lesson passed — 80%."), null);
+});
+
+test("lessonEndNote: the pause text follows Task.cooldown_until", () => {
+  const p = progress({ answered: 5, planned: 5, points: 3.5, max_points: 5, score: 0.7 });
+  const now = Date.parse("2026-10-06T10:00:00Z");
+  assert.match(lessonEndNote(p, 0, null, now).text, /whenever you like/);
+  assert.match(lessonEndNote(p, 0, "2026-10-06T12:00:00Z", now).text, /comes back at \d{2}:\d{2} with fresh questions/);
+  assert.match(lessonEndNote(p).text, /about 2 hours/); // older servers: no field
 });

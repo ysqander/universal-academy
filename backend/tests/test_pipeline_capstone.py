@@ -169,11 +169,11 @@ def test_capstone_is_stored_after_the_last_knowledge_point_and_shown_without_ans
 
     public = question_public(cap)
     assert public.role == "capstone" and [s.index for s in public.steps] == [0, 1, 2]
-    assert public.steps[1].choices == ["$5+5i$", "$5-5i$", "$1+7i$", "$-5+5i$"] and public.steps[0].hint
+    assert public.steps[1].choices == ["$1-i$", "$1+i$", "$5+5i$", "$i$"] and public.steps[0].hint
     shown = public.model_dump()  # without the fake verifier's invisible markers
     shown["steps"] = [{**st, "prompt": fake_llm._MARKER_RE.sub("", st["prompt"])} for st in shown["steps"]]
     dumped = json.dumps(shown)
-    for secret in ("5+5*i", "TFT", "Multiplication of complex numbers is commutative", "correct_choice", "explanation"):
+    for secret in ("5+5*i", "TFT", "$(5+5i)(1-i)=5-5i+5i-5i^2=10$", "correct_choice", "explanation"):
         assert secret not in dumped, secret
     ordinary = question_public(practice[0])
     assert ordinary.role == "practice" and ordinary.steps == []
@@ -203,7 +203,8 @@ def test_legacy_rows_and_lessons_get_defaults(tmp_path):
     db.execute("UPDATE skills SET lesson_json = ? WHERE id = ?", (db.dumps(lesson), sid))
     view = lesson_view(sid)
     assert [kp.target_questions for kp in view.knowledge_points] == [2, 2]
-    assert view.common_mistakes == ["Old v1 section"]  # a legacy v1 lesson keeps its data (the UI hides the section)
+    assert view.common_mistakes == []  # a legacy v1 lesson keeps its data, but the section is never served (SPEC §6.3)
+    assert db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (sid,))["lesson_json"])["common_mistakes"]
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +225,7 @@ def test_steps_are_verified_with_the_earlier_results_but_never_their_own_answer(
     assert record["status"] == "agree" and [s["status"] for s in record["steps"]] == ["agree"] * 3 and not cap["flagged"]
     steps = db.loads(cap["steps_json"])
     text = verify.step_request(cap, steps, 2)
-    assert cap["prompt"] in text and "Correct result of step 1: $5+5i$" in text and "Correct result of step 2: $5+5i$" in text
+    assert cap["prompt"] in text and "Correct result of step 1: $5+5i$" in text and "Correct result of step 2: $1-i$" in text
     assert "CURRENT STEP 3 of 3 — solve only this step" in text and "1. The real part of $zw$ is $5$" in text
     assert "TFT" not in fake_llm._MARKER_RE.sub("", text)  # the current step's key is never shown (only the fake marker)
     first = fake_llm._MARKER_RE.sub("", verify.step_request(cap, steps, 0))
@@ -362,7 +363,8 @@ def test_prompts_carry_the_iteration_3_rules():
     for prompt in (PLANNER_INSTRUCTIONS, WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS):
         assert V2_FEEDBACK in prompt
     writer, reviewer, planner = (" ".join(t.split()) for t in (WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, PLANNER_INSTRUCTIONS))
-    assert "compute a product, use it to get a quotient, then check the quotient by multiplying back" in writer
+    # iteration-3 review: the capstone example no longer ends with a "multiply back" step whose answer is known
+    assert "multiplying back" not in CAPSTONE_RULE.split("NOT:")[0] and "known in advance" in CAPSTONE_RULE
     assert "There is no \"common mistakes\" section" in writer and "common_mistakes:" not in writer
     assert "free_response:" not in writer and "free_response: prove" not in LESSON_INSTRUCTIONS
     assert "common_mistakes: [] (always empty" in LESSON_INSTRUCTIONS

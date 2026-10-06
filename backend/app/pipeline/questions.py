@@ -7,7 +7,7 @@ import re
 import sqlite3
 
 from .. import db
-from ..learning.grading import check_answer, parse_true_false_set
+from ..learning.grading import AnswerParseError, check_answer, parse_answer, parse_true_false_set
 from ..llm_schemas import MultistepStep, QuestionDraft
 
 log = logging.getLogger("ua.pipeline.questions")
@@ -246,6 +246,170 @@ def _is_tuple(answer: str) -> bool:
             return False  # '(a)(b)' or '(a, b)*(c, d)': the outer parentheses do not enclose everything
         comma = comma or (ch == "," and depth == 1)
     return comma
+
+
+# ---------------------------------------------------------------------------
+# The capstone (the lesson's final multistep problem)
+# ---------------------------------------------------------------------------
+
+
+def clean_capstone(q: QuestionDraft) -> QuestionDraft:
+    """The lesson's final problem: a valid multistep question (2-4 machine-checked steps, each with a hint and an
+    explanation), stored with key 'cap' and tier 3. Raises InvalidQuestion. Content rules: capstone_issues."""
+    if q.kind != "multistep":
+        raise InvalidQuestion(f"must be a multistep question (2–4 guided, machine-checked steps), not {q.kind}")
+    return clean_question(q).model_copy(update={"key": CAPSTONE_KEY, "tier": 3})
+
+
+# Math in a prompt: $$…$$ or $…$. A value counts as "stated" only when it is written as a literal — a number such as
+# 4-3i, \frac15+\frac25i, \frac{1-2i}{5} or a tuple of such — never an expression to evaluate ((1+2i)(1-2i), 2\cdot3).
+_MATH_RE = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.DOTALL)
+_I_SQUARED = re.compile(r"i\s*\^\s*\{?\s*2\s*\}?\s*=\s*-\s*1")  # "use $i^2=-1$" states no result
+_SPLIT_RE = re.compile(r"\\text\{[^{}]*\}|\\(?:quad|qquad|neq|ne|approx|to|Rightarrow|implies|iff|text)\b|[=;]")
+_LATEX_NOISE = re.compile(r"\\left|\\right|\\[,;:!]|\\displaystyle")
+_LITERAL_CHARS = re.compile(r"[0-9.+\-/ i{}(),]*")
+_PRODUCT = re.compile(r"\)\s*[\d({]|[\d}i]\s*\(")  # (1+2i)(1-2i), 2(3+i), i(7+i), \frac{1}{5}(1-2i)
+_FRAC_DENOMINATORS = re.compile(r"\\frac\s*(?:\{[^{}]*\}|\d)\s*(?:\{([^{}]*)\}|(\d))")
+_TYPED = {"numeric", "expression"}
+
+
+def _split_top_commas(text: str) -> list[str]:
+    parts, depth, start = [], 0, 0
+    for k, ch in enumerate(text):
+        depth += ch in "([{"
+        depth -= ch in ")]}"
+        if ch == "," and depth == 0:
+            parts.append(text[start:k])
+            start = k + 1
+    return parts + [text[start:]]
+
+
+def _math_pieces(text: str) -> list[str]:
+    """The math of a prompt cut at relation signs, separators and top-level commas (a tuple's commas are kept)."""
+    pieces: list[str] = []
+    for m in _MATH_RE.finditer(text or ""):
+        math = _I_SQUARED.sub(" ; ", m.group(1) or m.group(2) or "")
+        for part in _SPLIT_RE.split(math):
+            pieces += [p.strip().rstrip(".") for p in _split_top_commas(part or "") if p and p.strip().rstrip(".")]
+    return pieces
+
+
+def _literal_value(piece: str) -> tuple[complex, ...] | None:
+    """The value of a math piece that is a literal number (or a tuple of literal numbers), else None."""
+    piece = re.sub(r"\\[dt]frac", r"\\frac", _LATEX_NOISE.sub("", piece))
+    bare = piece.replace("\\frac", "").replace("\\sqrt", "")
+    if not bare.strip() or not _LITERAL_CHARS.fullmatch(bare) or not re.search(r"[\di]", bare) or _PRODUCT.search(bare):
+        return None
+    # a quotient by anything but a plain positive integer is a computation (1/(1+2i), \frac{1}{2-i}), not a value
+    if re.search(r"/\s*[^\d\s]", piece) or any(not (a or b).strip().isdigit() for a, b in _FRAC_DENOMINATORS.findall(piece)):
+        return None
+    return _value(piece)
+
+
+def _value(text: str) -> tuple[complex, ...] | None:
+    """A scalar answer or a tuple of scalars as complex numbers; None when it has symbols, is a set, or does not
+    parse."""
+    try:
+        node = parse_answer(text)
+    except AnswerParseError:
+        return None
+    except Exception:  # noqa: BLE001 — anything else unreadable is simply not a value either
+        return None
+    if node.kind == "scalar":
+        scalars = [node]
+    elif node.kind == "tuple" and all(i.kind == "scalar" for i in node.items):
+        scalars = node.items
+    else:
+        return None
+    values = []
+    for scalar in scalars:
+        if scalar.expr is None or scalar.expr.free_symbols:
+            return None
+        try:
+            values.append(complex(scalar.expr.evalf()))
+        except (TypeError, ValueError):
+            return None
+    return tuple(values)
+
+
+def _same(a: tuple[complex, ...], b: tuple[complex, ...]) -> bool:
+    return len(a) == len(b) and all(abs(x - y) <= 1e-9 * max(1.0, abs(y)) for x, y in zip(a, b))
+
+
+def _integer(v: tuple[complex, ...]) -> bool:
+    return len(v) == 1 and abs(v[0].imag) < 1e-12 and abs(v[0].real - round(v[0].real)) < 1e-12
+
+
+def _coordinate_pair(value: tuple[complex, ...] | None, context: str) -> bool:
+    """A 2-tuple of real numbers asked for in a text about real and imaginary coordinates: a complex number entered as
+    "(real coordinate, imaginary coordinate)" instead of in the form a+bi."""
+    return (
+        value is not None
+        and len(value) == 2
+        and all(abs(x.imag) < 1e-12 for x in value)
+        and bool(re.search(r"\bimaginary\b", context, re.IGNORECASE))
+    )
+
+
+def capstone_issues(q: QuestionDraft) -> list[tuple[int, str]]:
+    """Content rules of a capstone's typed (numeric / expression) steps, the learner's iteration-3 review — returns
+    (0-based step index, problem):
+    - known before it is computed: the answer is written as a literal in the problem or in a step prompt up to this
+      one (e.g. "check that $(1+2i)z=4-3i$" → 4-3i), or equals an earlier step's result (an integer result may
+      coincide by chance and is not counted);
+    - forced by a definition: the answer is 1 and two of those known values are reciprocals (a number times its
+      reciprocal), or 0 and two are negatives;
+    - a complex number asked for as a coordinate pair: a 2-tuple of real numbers in a step about real and imaginary
+      coordinates (complex numbers are entered in the form a+bi)."""
+    issues: list[tuple[int, str]] = []
+    stated: list[tuple[complex, ...]] = [v for p in _math_pieces(q.prompt) if (v := _literal_value(p)) is not None]
+    results: list[tuple[complex, ...]] = []
+    for i, step in enumerate(q.steps):
+        stated += [v for p in _math_pieces(step.prompt) if (v := _literal_value(p)) is not None]
+        answer = _value(step.answer) if step.kind in _TYPED else None
+        if answer is None:
+            continue
+        where = f"step {i + 1} ({step.answer_display or step.answer})"
+        pair = _coordinate_pair(answer, f"{q.prompt} {step.prompt}")
+        if pair:  # (real coordinate, imaginary coordinate): judged as the complex number it stands for
+            answer = (complex(answer[0].real, answer[1].real),)
+        if any(_same(answer, v) for v in stated):
+            issues.append((i, f"{where}: its answer is already written in the problem or a step prompt — a scored "
+                              "step must ask for something the learner computes"))
+        elif any(_same(answer, v) for v in results) and not _integer(answer):
+            issues.append((i, f"{where}: its answer is an earlier step's result again (known before it is computed)"))
+        elif len(answer) == 1 and _forced(answer[0], stated + results):
+            kind = "a number times its reciprocal is 1" if abs(answer[0] - 1) < 1e-9 else "a number plus its negative is 0"
+            issues.append((i, f"{where}: its answer is forced by a definition ({kind}) — put such a check in the "
+                              "explanation, not in a scored step"))
+        if pair:
+            issues.append((i, f"{where}: asks for a complex number as a coordinate pair — ask for it in the form "
+                              "$a+bi$ (answer 'a+b*i'), or for one coordinate as a number"))
+        results.append(answer)
+    return issues
+
+
+def _forced(value: complex, known: list[tuple[complex, ...]]) -> bool:
+    scalars = list(dict.fromkeys(v[0] for v in known if len(v) == 1))
+    if abs(value - 1) < 1e-9:
+        return any(abs(a * b - 1) < 1e-9 for j, a in enumerate(scalars) for b in scalars[j + 1 :])
+    if abs(value) < 1e-12:
+        return any(abs(a + b) < 1e-9 and abs(a) > 1e-12 for j, a in enumerate(scalars) for b in scalars[j + 1 :])
+    return False
+
+
+def pair_form_warnings(questions: list[QuestionDraft]) -> list[str]:
+    """Practice questions (or multistep steps) that ask for a complex number as a coordinate pair."""
+    keys = []
+    for q in questions:
+        parts = q.steps if q.kind == "multistep" else [q]
+        for part in parts:
+            if part.kind not in _TYPED:
+                continue
+            if _coordinate_pair(_value(part.answer), f"{q.prompt} {part.prompt}"):
+                keys.append(q.key)
+                break
+    return [f"a complex number asked for as a coordinate pair (use the form a+bi) in {', '.join(keys)}"] if keys else []
 
 
 def clean_questions(questions: list[QuestionDraft], context: str) -> tuple[list[QuestionDraft], list[str]]:

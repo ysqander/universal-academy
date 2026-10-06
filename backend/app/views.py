@@ -216,7 +216,9 @@ def lesson_view(skill_id: str) -> Lesson | None:
         notation=[NotationItem(**n) for n in data.get("notation", [])],
         knowledge_points=kps,
         missing_steps=data.get("missing_steps", ""),
-        common_mistakes=[] if v2 else data.get("common_mistakes", []),  # no such section in new lessons
+        # No "common mistakes" section is generated or shown (SPEC §6.3) — legacy v1 lessons keep the data in
+        # lesson_json (the visual planner reads it), but the API no longer serves it.
+        common_mistakes=[],
         connection=data.get("connection", ""),
         visualization=None if v2 else visualization_view(db.loads(skill["viz_json"], None), course_id, labels),
         source_refs=clean_source_refs(data.get("source_refs") or db.loads(skill["source_refs_json"], [])),

@@ -6,8 +6,13 @@ t_k questions of the KP are served in pool order; every wrong or assisted answer
 multistep problem) when the skill has one. Points: 1 independent correct, 0.5 correct with a hint (no reveal), 0 wrong
 or answered after revealing the solution; a multistep question scores the mean of its steps; the capstone weighs 2.
 score = Σ w·p / Σ w over the answered (non-voided) questions. Everything planned answered with score >= 0.8 passes
-(FSRS Good at >= 0.9, else Hard); as soon as 0.8 is out of reach even if every remaining planned question is answered
-independently, the lesson halts (2h cooldown; the second failure of the same lesson remediates).
+(FSRS Good at >= 0.9, else Hard); as soon as 0.8 is out of reach even if every remaining planned question (and
+capstone step) is answered independently, the lesson halts — between questions, or between the capstone's steps
+(2h cooldown; the second failure of the same lesson remediates). A manual start during the cooldown is refused
+(selector.start_task) unless forced. Help used before an easier step swaps a question out carries over to the easier
+question (hint: at most ½, solution shown: 0). A flagged capstone is replaced only by another unserved capstone;
+otherwise the lesson is scored without it, and a result below 0.8 then counts as no failure and sets no cooldown.
+Percentages in messages follow score_percent (round half up, never up onto the pass mark or 100 %).
 
 A task's mutable state lives in tasks.state_json:
 
@@ -17,8 +22,12 @@ lesson  {"kp_total", "kp", "playable": [kp...], "targets": {"<kp>": t}, "stage":
          "step", "step_results", "step_hint", "step_revealed", "step_seconds",  # per current multistep question
          "slots": {"<kp>": [qid...]},          # questions served for that KP (they count toward its plan)
          "easier": [qid...],                   # questions swapped in by the easier step (scored normally)
-         "log": [{"q", "kp", "res", "pts", "w", "ok", "void", "scaffold", "cap"}],
-         "wrong_run", "self_grades": {qid: grade}, "proof_waived": [kp...], "fail": {...} | None, "result": {...}}
+         "carry_hint", "carry_revealed",       # help used on a question the easier step swapped out
+         "log": [{"q", "kp", "res", "pts", "w", "ok", "void", "scaffold", "cap",
+                  "unfinished", "steps"}],    # a capstone the lesson stopped in: w = its answered steps' share
+         "wrong_run", "self_grades": {qid: grade}, "proof_waived": [kp...],
+         "fail": {"kp", "key", "stage", "counted", "prev_cooldown", "cooldown_until", "remediated", "score",
+                  "early", "planned"} | None, "result": {...}}
 review  {"set": [qid...], "pos", "current", ...per-question records as above..., "served",
          "log": [{"q", "kp", "res", "credit", "pts", "w", "ok", "void", "cap"}], "self_grades",
          "result": {..., "fire": [implicit events]}}
@@ -60,7 +69,7 @@ import threading
 import time
 from collections.abc import Collection
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fsrs import Rating
@@ -139,6 +148,7 @@ class _Graded:
     hints: int
     pts: float
     seconds: float = 0.0
+    carried: str | None = None  # "revealed" | "hint": help used on the question the easier step swapped out
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +238,9 @@ _PER_QUESTION_DEFAULTS: dict[str, Any] = {
     "step_hint": False,
     "step_revealed": False,
     "step_seconds": 0.0,
+    # help used on a question the easier step swapped out: it caps this question's points (hint ½, solution 0)
+    "carry_hint": False,
+    "carry_revealed": False,
 }
 
 
@@ -513,8 +526,28 @@ def _ratio(points: float, max_points: float) -> float:
     return points / max_points if max_points > 0 else 0.0
 
 
-def _pct(score: float) -> int:
-    return int(math.floor(score * 100 + 0.5))
+def score_percent(score: float, pass_mark: float = PASS_MARK) -> int:
+    """A score (0-1) as a whole percent — the one rule for every message (the client formats TaskProgress.score the
+    same way): round half up (0.285 → 29, 0.9167 → 92), except that a score never rounds up onto the pass mark or onto
+    100 % (0.796 → 79, 0.996 → 99), so a failing score never reads as passing and an imperfect one never as perfect."""
+    score = max(0.0, min(1.0, float(score)))
+    pct = int(math.floor(score * 100 + 0.5 + EPS))
+    mark = int(round(pass_mark * 100))
+    if score < pass_mark - EPS and pct >= mark:
+        return mark - 1
+    if score < 1 - EPS and pct >= 100:
+        return 99
+    return pct
+
+
+def local_clock(dt: datetime) -> str:
+    """HH:MM in the server's local time zone (the app runs on the learner's machine)."""
+    return scheduler.utc(dt).astimezone().strftime("%H:%M")
+
+
+def cooldown_message(until: datetime) -> str:
+    """Why a paused lesson can't start yet (409 on a manual start without force)."""
+    return f"This lesson comes back at {local_clock(until)} (local time) with fresh questions."
 
 
 # ---------------------------------------------------------------------------
@@ -585,9 +618,12 @@ def _capstone_pending(st: dict[str, Any], pool: _Pool) -> bool:
 
 
 def _remaining_weight(st: dict[str, Any], pool: _Pool) -> float:
+    """Weight still to be answered: the KPs' remaining questions, the capstone, and the unanswered steps of a
+    capstone the lesson stopped in (an "unfinished" log entry carries only its answered steps' share of the weight)."""
+    unfinished = sum(max(0.0, CAPSTONE_WEIGHT - e["w"]) for e in _live(st) if e.get("unfinished"))
     if st.get("stage") == "done":
-        return 0.0
-    total = 0.0
+        return unfinished
+    total = unfinished
     if st.get("stage") != "capstone":
         total += sum(_kp_remaining(st, pool, k) for k in st["playable"] if k >= st["kp"])
     if _capstone_pending(st, pool):
@@ -595,11 +631,42 @@ def _remaining_weight(st: dict[str, Any], pool: _Pool) -> float:
     return total
 
 
+def _current_capstone_lost(st: dict[str, Any], pool: _Pool) -> float:
+    """Capstone weight already lost in the steps answered so far (the current capstone, mid-problem)."""
+    q = pool.by_id.get(st.get("current") or "")
+    if q is None or not _is_capstone(q):
+        return 0.0
+    steps, results = _steps(q), st.get("step_results") or []
+    if not steps or not results:
+        return 0.0
+    missed = sum(1.0 - float(r.get("score", 0.0)) for r in results[: len(steps)])
+    return CAPSTONE_WEIGHT * missed / len(steps)
+
+
 def _best_possible(st: dict[str, Any], pool: _Pool) -> float:
-    """The score if every remaining planned question is answered independently."""
+    """The score if every remaining planned question (and capstone step) is answered independently."""
     points, max_points = _totals(st)
     remaining = _remaining_weight(st, pool)
-    return _ratio(points + remaining, max_points + remaining)
+    return _ratio(points + remaining - _current_capstone_lost(st, pool), max_points + remaining)
+
+
+def _answered_count(st: dict[str, Any]) -> int:
+    """Questions answered in full (a capstone the lesson stopped in is not)."""
+    return sum(1 for e in _live(st) if not e.get("unfinished"))
+
+
+def _planned_count(st: dict[str, Any], pool: _Pool, *, answering_capstone: bool = False) -> int:
+    """Questions in the plan of an ongoing lesson: answered + still to answer (the capstone once).
+    `answering_capstone`: the capstone is being committed right now (no longer current, not yet logged)."""
+    planned = 0
+    for k in st["playable"]:
+        n = len(_kp_done(st, k))
+        if st.get("stage") not in ("capstone", "done") and k >= st["kp"]:
+            n += _kp_remaining(st, pool, k)
+        planned += n
+    if answering_capstone or any(e.get("cap") for e in _live(st)) or _capstone_pending(st, pool):
+        planned += 1
+    return planned
 
 
 def _serve_lesson_question(st: dict[str, Any], pool: _Pool) -> bool:
@@ -675,25 +742,43 @@ def _lesson_progress_view(task: dict[str, Any], st: dict[str, Any], skill_id: st
         served = set(st["served"])
         capacity = used + sum(1 for q in pool.practice(kp) if q["id"] not in served)
         available = max(kp_target, min(_target(st, kp) + MAX_EXTRA, capacity))
-    planned = 0
-    for k in st["playable"]:
-        n = len(_kp_done(st, k))
-        if active and st.get("stage") != "capstone" and k >= st["kp"]:
-            n += _kp_remaining(st, pool, k)
-        planned += n
     has_capstone = any(e.get("cap") for e in live) or (active and _capstone_pending(st, pool))
-    if has_capstone:
-        planned += 1
+    if active:
+        planned = _planned_count(st, pool)
+    else:
+        planned = sum(len(_kp_done(st, k)) for k in st["playable"]) + (1 if has_capstone else 0)
+        fail = st.get("fail")
+        if task["outcome"] == "failed" and isinstance(fail, dict):
+            # a lesson that stopped early keeps the plan it stopped in ("2 of 4 answered", never "2 of 2")
+            planned = max(planned, int(fail.get("planned") or 0))
+    answered = _answered_count(st)
     return TaskProgress(
+        **_schema_fields(TaskProgress, halted=_lesson_halted(task, st, answered, planned)),
         kp_index=kp, kp_total=kp_total,
         streak=NEEDED_IN_ROW if passed else min(NEEDED_IN_ROW, _trailing_correct(done)), needed_in_row=NEEDED_IN_ROW,
         kp_questions_used=used, kp_questions_available=available,
-        answered=len(live), correct=sum(1 for e in live if e["ok"]), total_questions=0,
+        answered=answered, correct=sum(1 for e in live if e["ok"] and not e.get("unfinished")), total_questions=0,
         kp_wrong=sum(1 for e in done if e["res"] == "wrong") if ongoing and not in_capstone else 0,
         easier_available=ongoing and _easier_blocker(st, pool) is None,
         kp_target=kp_target, points=points, max_points=max_points, score=_ratio(points, max_points),
         planned=planned, pass_mark=PASS_MARK, in_capstone=in_capstone, has_capstone=has_capstone,
     )  # fmt: skip
+
+
+def _lesson_halted(task: dict[str, Any], st: dict[str, Any], answered: int, planned: int) -> bool:
+    """The lesson stopped early: 80 % went out of reach with planned questions (or capstone steps) left. A lesson that
+    answered everything planned and ended below the pass mark did not halt."""
+    fail = st.get("fail")
+    if task["outcome"] != "failed" or not isinstance(fail, dict):
+        return False
+    return bool(fail.get("early", planned > answered)) and planned > answered
+
+
+def _schema_fields(model: type, **values: Any) -> dict[str, Any]:
+    """The values the response model has fields for (TaskProgress.halted, AnswerResult.note, StepResult.revealed are
+    filled as soon as app/schemas.py declares them)."""
+    fields = getattr(model, "model_fields", {})
+    return {k: v for k, v in values.items() if k in fields}
 
 
 def _review_progress_view(task: dict[str, Any], st: dict[str, Any]) -> TaskProgress:
@@ -716,6 +801,7 @@ def _review_progress_view(task: dict[str, Any], st: dict[str, Any]) -> TaskProgr
 
 def _step_result_public(r: dict[str, Any]) -> StepResult:
     return StepResult(
+        **_schema_fields(StepResult, revealed=bool(r.get("revealed")), hinted=bool(r.get("hinted"))),
         index=int(r.get("index", 0)),
         correct=bool(r.get("correct")),
         score=float(r.get("score", 0.0)),
@@ -779,7 +865,17 @@ def build_task(task: dict[str, Any]) -> Task:
         question=question,
         progress=progress,
         outcome=task["outcome"],
+        cooldown_until=_cooldown_for(task),
     )
+
+
+def _cooldown_for(task: dict[str, Any]) -> str | None:
+    """When a failed lesson comes back (only while that pause is still ahead); None otherwise."""
+    if task["type"] != "lesson" or task["outcome"] != "failed":
+        return None
+    row = db.query_one("SELECT cooldown_until FROM progress WHERE skill_id = ?", (task["skill_id"],))
+    until = db.parse_iso(row["cooldown_until"]) if row else None
+    return until.isoformat(timespec="seconds") if until and until > datetime.now(timezone.utc) else None
 
 
 def get_task(task_id: str) -> Task:
@@ -975,18 +1071,24 @@ def begin_practice(task_id: str, now: datetime) -> Task:
 
 
 def _lesson_progress(
-    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime, *, count_failure: bool = True
-) -> _Finish | None:
+    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime, *, count_failure: bool = True,
+    cooldown: bool = True, planned: int | None = None,
+) -> _Finish | None:  # fmt: skip
     """After an answer (or a voided one): halt the lesson when 80 % is out of reach, serve the next planned
-    question, or finish."""
+    question, or finish. `planned`: the plan just before the answer (kept by a lesson that stops early);
+    `cooldown`: a failure ending the lesson pauses it for LESSON_COOLDOWN (not when a flag removed its capstone)."""
     pool = _pool(skill["id"])
     if _best_possible(st, pool) < PASS_MARK - EPS:
-        return _finish_lesson_fail(task, st, skill, now, pool, counted=count_failure and bool(_live(st)))
+        early = _remaining_weight(st, pool) > EPS
+        return _finish_lesson_fail(
+            task, st, skill, now, pool, counted=count_failure and bool(_live(st)), early=early, planned=planned,
+            cooldown=cooldown,
+        )  # fmt: skip
     if st.get("current"):
         return None
     if _serve_next(st, pool):
         return None
-    return _finish_lesson_pass(task, st, skill, now, pool, count_failure=count_failure)
+    return _finish_lesson_pass(task, st, skill, now, pool, count_failure=count_failure, cooldown=cooldown, planned=planned)
 
 
 PROOF_WAIVED_TEXT = (
@@ -996,12 +1098,16 @@ PROOF_WAIVED_TEXT = (
 
 
 def _finish_lesson_pass(
-    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime, pool: _Pool, *, count_failure: bool = True
-) -> _Finish:
+    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime, pool: _Pool, *,
+    count_failure: bool = True, cooldown: bool = True, planned: int | None = None,
+) -> _Finish:  # fmt: skip
     points, max_points = _totals(st)
     score = _ratio(points, max_points)
     if score < PASS_MARK - EPS:  # nothing left to serve and below the pass mark
-        return _finish_lesson_fail(task, st, skill, now, pool, counted=count_failure and max_points > 0)
+        return _finish_lesson_fail(
+            task, st, skill, now, pool, counted=count_failure and max_points > 0, early=False, planned=planned,
+            cooldown=cooldown,
+        )  # fmt: skip
     waived = sorted(set(st.get("proof_waived") or []) | {k for k in st["playable"] if _proof_state(st, pool, k) == "waived"})
     st["proof_waived"] = waived
     rating = Rating.Good if score >= GOOD_SCORE - EPS and not waived else Rating.Hard
@@ -1025,7 +1131,7 @@ def _finish_lesson_pass(
     log.info("lesson passed: skill %s, score %.2f -> %s, %d XP%s", skill["key"], score, rating.name, amount,
              " (written proof waived)" if waived else "")  # fmt: skip
     return _Finish(
-        xp=amount, suggestion_text=PROOF_WAIVED_TEXT if waived else None, note=f" Lesson passed with {_pct(score)}%."
+        xp=amount, suggestion_text=PROOF_WAIVED_TEXT if waived else None, note=f" Lesson passed with {score_percent(score)}%."
     )
 
 
@@ -1035,8 +1141,13 @@ def _lesson_failures(progress: dict[str, Any]) -> dict[str, int]:
 
 
 def _finish_lesson_fail(
-    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime, pool: _Pool, *, counted: bool = True
-) -> _Finish:
+    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime, pool: _Pool, *,
+    counted: bool = True, early: bool = True, planned: int | None = None, cooldown: bool = True,
+) -> _Finish:  # fmt: skip
+    """End a lesson below the pass mark. `early`: planned questions (or capstone steps) were left unanswered — the
+    lesson stopped because 80 % was out of reach; otherwise everything planned was answered and the score fell short.
+    `planned`: the plan to report (default: answered + still planned now). `cooldown`: pause the lesson for
+    LESSON_COOLDOWN (False keeps the current cooldown — a flagged capstone is not the learner's failure)."""
     stage = st.get("stage", "kp")
     key = CAPSTONE_FAIL_KEY if stage == "capstone" else str(st["kp"])
     progress = _progress_row(skill)
@@ -1045,24 +1156,38 @@ def _finish_lesson_fail(
     counted = counted and not learned
     if counted:
         failures[key] = failures.get(key, 0) + 1
+    until = now + LESSON_COOLDOWN if cooldown and not learned else None
     if not learned:
         db.execute(
             "UPDATE progress SET kp_failures_json = ?, cooldown_until = ?, updated_at = ? WHERE skill_id = ?",
-            (db.dumps(failures), scheduler.iso(now + LESSON_COOLDOWN), scheduler.iso(now), skill["id"]),
+            (db.dumps(failures), scheduler.iso(until) if until else progress["cooldown_until"], scheduler.iso(now), skill["id"]),
         )
     points, max_points = _totals(st)
+    score = _ratio(points, max_points)
+    answered = _answered_count(st)
+    plan = max(answered, planned if planned is not None else _planned_count(st, pool))
+    # "pauses here" only when the learner saw questions (or capstone steps) left in the plan; a last planned answer
+    # that misses (its extra question could not reach 80 % either) ends the lesson below the pass mark
+    early = early and plan > answered
     st["fail"] = {
         "kp": st["kp"], "key": key, "stage": stage, "counted": counted, "prev_cooldown": progress["cooldown_until"],
-        "remediated": [], "score": _ratio(points, max_points),
+        "cooldown_until": scheduler.iso(until) if until else None, "remediated": [], "score": score, "early": early,
+        "planned": plan,
     }  # fmt: skip
     _complete(task, st, "failed", 0, now)
     if stage != "capstone" and _unseen_count(skill["id"], kp=st["kp"]) < _target(st, st["kp"]) + 1:
         request_top_up(skill["id"], st["kp"])
-    finish = _Finish(
-        suggestion="retry_later",
-        suggestion_text="80% is out of reach on this attempt, so the lesson pauses here. It comes back in about "
-        "2 hours with fresh questions — work on something else in the meantime.",
+    back = (
+        f"It comes back at {local_clock(until)} (in about 2 hours) with fresh questions — work on something else in "
+        "the meantime."
+        if until
+        else "This attempt doesn't count against you — start it again whenever you like."
     )
+    if early:
+        text = f"{score_percent(PASS_MARK)}% is out of reach on this attempt, so the lesson pauses here. {back}"
+    else:
+        text = f"Your score, {score_percent(score)}%, is below the {score_percent(PASS_MARK)}% pass mark. {back}"
+    finish = _Finish(suggestion="retry_later", suggestion_text=text)
     total = sum(failures.values())
     if counted and total >= REMEDIATION_AFTER_FAILURES:
         chosen = scheduler.remediate(skill["course_id"], skill["id"], now)
@@ -1153,10 +1278,19 @@ def easier_step(task_id: str, now: datetime) -> Task:
         slot.append(candidate["id"])
         st["served"].append(candidate["id"])
         st["easier"].append(candidate["id"])
+        # Help already used on the swapped-out question stays on the record: the easier question earns at most what
+        # that one still could (½ after a hint, 0 after its solution was shown — then it also counts as a miss).
+        carry_revealed = bool(
+            st.get("carry_revealed") or st.get("revealed") or st.get("step_revealed") or st.get("compared") is not None
+        )
+        carry_hint = bool(st.get("carry_hint") or int(st.get("hints") or 0) > 0 or st.get("step_hint"))
         _set_current(st, candidate["id"])
+        st["carry_revealed"] = carry_revealed
+        st["carry_hint"] = carry_hint and not carry_revealed
         st["wrong_run"] = 0
         _save_state(task_id, st)
-        log.info("task %s: easier step -> question %s (tier %s)", task_id, candidate["key"], candidate["tier"])
+        log.info("task %s: easier step -> question %s (tier %s)%s", task_id, candidate["key"], candidate["tier"],
+                 " (solution seen: 0 points)" if carry_revealed else " (hint used: ½ point)" if carry_hint else "")  # fmt: skip
         return build_task(_task_row(task_id))
 
 
@@ -1224,12 +1358,12 @@ def _finish_review(task: dict[str, Any], st: dict[str, Any], skill: dict[str, An
     skill_state.recompute_unlocks(skill["course_id"])
     log.info("review %s: skill %s score %.2f -> %s, %d XP", task["id"], skill["key"], score, rating.name, amount)
     if outcome == "passed":
-        return _Finish(xp=amount, note=f" Review score {_pct(score)}%.")
+        return _Finish(xp=amount, note=f" Review score {score_percent(score)}%.")
     if rating == Rating.Hard:
-        text = f"Recall was a little shaky ({_pct(score)}%). This skill comes back a bit sooner than usual."
+        text = f"Recall was a little shaky ({score_percent(score)}%). This skill comes back a bit sooner than usual."
     else:
         text = (
-            f"Recall was shaky ({_pct(score)}%). This skill comes back for review soon — "
+            f"Recall was shaky ({score_percent(score)}%). This skill comes back for review soon — "
             "reopen its lesson's worked examples before then."
         )
     return _Finish(xp=amount, suggestion="reread_example", suggestion_text=text)
@@ -1301,10 +1435,26 @@ def _points(correct: bool, hints: int, revealed: bool) -> float:
     return HINT_POINTS if hints > 0 else 1.0
 
 
+def _carried(st: dict[str, Any]) -> str | None:
+    """Help carried over from a question the easier step swapped out (see easier_step)."""
+    if st.get("carry_revealed"):
+        return "revealed"
+    return "hint" if st.get("carry_hint") else None
+
+
 def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grading.GradeResult | None) -> _Graded:
-    """Combine the correctness check with the server-side record of help for the current attempt (D1, D2)."""
+    """Combine the correctness check with the server-side record of help for the current attempt (D1, D2), and with
+    help carried over from a question the easier step swapped out."""
     hints = max(0, sub.hints_used, int(st.get("hints") or 0))
-    revealed = bool(sub.revealed_solution or st.get("revealed"))
+    own_reveal = bool(sub.revealed_solution or st.get("revealed"))  # this question's own solution was shown
+    revealed = own_reveal
+    carried = _carried(st)
+    if carried == "revealed" and not revealed:
+        revealed = True
+    elif carried == "hint" and hints == 0 and not revealed:
+        hints = 1
+    else:
+        carried = None  # the question's own help already decides its points
     seconds = max(0.0, sub.seconds)
     if q["kind"] == "free_response":
         if sub.self_grade is None:
@@ -1323,9 +1473,11 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
         else:
             pts = HINT_POINTS if sub.self_grade == "partial" else 0.0
         feedback = _SELF_GRADE_FEEDBACK[sub.self_grade]
-        return _Graded(correct, "self_graded", independent, feedback, res, sub.response or "", revealed, hints, pts, seconds)
+        return _Graded(
+            correct, "self_graded", independent, feedback, res, sub.response or "", revealed, hints, pts, seconds, carried
+        )
     if check is None:
-        if not revealed:
+        if not own_reveal:  # help carried from a swapped-out question is no answer to this one
             raise Invalid(_nothing_submitted_message(q["kind"], q["answer"]))
         correct, feedback = False, "Solution viewed — no answer submitted."
     else:
@@ -1337,7 +1489,7 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
     response = str(sub.choice) if _is_choice(q) and sub.choice is not None else (sub.response or "")
     return _Graded(
         correct, "correct" if correct else "incorrect", independent, feedback, res, response, revealed, hints,
-        _points(correct, hints, revealed), seconds,
+        _points(correct, hints, revealed), seconds, carried,
     )  # fmt: skip
 
 
@@ -1366,23 +1518,33 @@ def _grade_step(index: int, step: dict[str, Any], sub: AnswerSubmit, st: dict[st
 
 
 def _graded_multistep(st: dict[str, Any]) -> _Graded:
+    """The steps answered so far as one question (the mean of their points), capped by help carried over from a
+    question the easier step swapped out."""
     results = st["step_results"]
     pts = sum(r["score"] for r in results) / len(results)
-    independent = all(r["score"] >= 1 - EPS for r in results)
+    carried = _carried(st)
+    cap = 0.0 if carried == "revealed" else HINT_POINTS if carried == "hint" else 1.0
+    if pts > cap + EPS:
+        pts = cap
+    else:
+        carried = None  # the steps' own help already decides the points
+    all_right = all(r["correct"] for r in results)
+    independent = carried is None and all(r["score"] >= 1 - EPS for r in results)
     if independent:
         res = "correct"
-    elif pts <= EPS:
+    elif pts <= EPS and not (carried and all_right):
         res = "wrong"
     else:
-        res = "assisted" if all(r["correct"] for r in results) else "partial"
+        res = "assisted" if all_right else "partial"
     response = json.dumps(
         {"steps": [{k: r[k] for k in ("index", "response", "correct", "score", "hinted", "revealed")} for r in results]},
         ensure_ascii=False,
     )
     return _Graded(
         correct=independent, status="correct" if independent else "incorrect", independent=independent, feedback="",
-        res=res, response=response, revealed=any(r["revealed"] for r in results),
-        hints=sum(1 for r in results if r["hinted"]), pts=pts, seconds=float(st.get("step_seconds") or 0.0),
+        res=res, response=response, revealed=any(r["revealed"] for r in results) or carried == "revealed",
+        hints=max(sum(1 for r in results if r["hinted"]), int(carried == "hint")), pts=pts,
+        seconds=float(st.get("step_seconds") or 0.0), carried=carried,
     )  # fmt: skip
 
 
@@ -1390,6 +1552,12 @@ def _assisted_note(revealed: bool, *, helped: bool = True) -> str:
     if not helped:  # a self-graded written answer too short to count (no hint, no reveal)
         return " It's too short to count as a written answer, so half a point."
     return " The solution was shown first, so no points." if revealed else " With a hint, so half a point."
+
+
+_CARRIED_NOTE = {
+    "revealed": " The solution of the question this one replaced had been shown, so no points.",
+    "hint": " A hint was used on the question this one replaced, so at most half a point.",
+}
 
 
 def _record_attempt(task: dict[str, Any], q: dict[str, Any], g: _Graded, now: datetime) -> None:
@@ -1455,7 +1623,22 @@ def _submit_step(
     st["step_seconds"] = float(st.get("step_seconds") or 0.0) + max(0.0, sub.seconds)
     public = _step_result_public(result)
     correct_choice = _int_or_none(step.get("correct_choice")) if _is_choice_kind(step["kind"]) else None
-    if index + 1 < len(_steps(q)):
+    n_steps = len(_steps(q))
+    if index + 1 < n_steps and task["type"] == "lesson" and _is_capstone(q):
+        if _best_possible(st, _pool(skill["id"])) < PASS_MARK - EPS:
+            # 80 % is out of reach even if every remaining step is right: the lesson stops inside the capstone
+            graded = _graded_multistep(st)
+            n_right = sum(1 for r in st["step_results"] if r["correct"])
+            graded.feedback = (
+                f"{result['feedback']} The problem stops here: {n_right} of {len(st['step_results'])} steps answered "
+                f"right, {n_steps - len(st['step_results'])} left unanswered."
+            )
+            return _commit_answer(
+                task, st, skill, q, graded, sub, now,
+                step=(public, result["answer_display"], correct_choice, q["solution"] or result["explanation"]),
+                unfinished=n_steps,
+            )  # fmt: skip
+    if index + 1 < n_steps:
         st["step"] = index + 1
         st["step_hint"] = False
         st["step_revealed"] = False
@@ -1478,17 +1661,24 @@ def _submit_step(
 def _commit_answer(
     task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], q: dict[str, Any], graded: _Graded,
     sub: AnswerSubmit, now: datetime, *, step: tuple[StepResult, str, int | None, str] | None = None,
+    unfinished: int | None = None,
 ) -> AnswerResult:  # fmt: skip
-    """Record a finished question attempt and move the task on."""
+    """Record a finished question attempt and move the task on. `unfinished` (lesson capstone only): the problem's
+    number of steps when the lesson stops inside it — only the answered steps are recorded."""
     _record_attempt(task, q, graded, now)
     if q["kind"] == "free_response" and sub.self_grade:
         st["self_grades"][q["id"]] = sub.self_grade
     st["current"] = None
-    finish = (_after_lesson_answer if task["type"] == "lesson" else _after_review_answer)(task, st, skill, q, graded, now)
+    if task["type"] == "lesson":
+        finish = _after_lesson_answer(task, st, skill, q, graded, now, unfinished=unfinished)
+    else:
+        finish = _after_review_answer(task, st, skill, q, graded, now)
     if task["status"] == "active":
         _save_state(task["id"], st)
     feedback = graded.feedback
-    if graded.res == "assisted" and q["kind"] != "multistep":
+    if graded.carried and graded.res in ("assisted", "partial"):
+        feedback += _CARRIED_NOTE[graded.carried]
+    elif graded.res == "assisted" and q["kind"] != "multistep":
         feedback += _assisted_note(graded.revealed, helped=graded.revealed or graded.hints > 0)
     if q["kind"] == "free_response" and sub.self_grade == "incorrect" and task["status"] == "active":
         feedback = feedback.rstrip(".") + ", then try the next one."
@@ -1512,25 +1702,34 @@ def _commit_answer(
         score=graded.pts,
         step_result=step_result,
         question_done=True,
+        **_schema_fields(AnswerResult, note=finish.note.strip()),
     )
 
 
 def _after_lesson_answer(
-    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], q: dict[str, Any], g: _Graded, now: datetime
-) -> _Finish:
+    task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], q: dict[str, Any], g: _Graded, now: datetime,
+    *, unfinished: int | None = None,
+) -> _Finish:  # fmt: skip
     pool = _pool(skill["id"])
     kp = st["kp"]
     capstone = _is_capstone(q)
     stage_before = st.get("stage", "kp")
     in_slot = not capstone and q["id"] in _slot(st, kp)
     plan_before = _kp_plan(st, pool, kp) if in_slot else 0
-    st["log"].append({
+    planned_before = _planned_count(st, pool, answering_capstone=capstone)  # what the meter showed before this answer
+    entry = {
         "q": q["id"], "kp": q["kp_index"], "res": g.res, "pts": g.pts, "w": CAPSTONE_WEIGHT if capstone else 1,
         "ok": g.correct, "void": False, "scaffold": q["id"] in st["easier"], "cap": capstone,
-    })  # fmt: skip
+    }  # fmt: skip
+    if unfinished:
+        # the lesson stops inside the capstone: the answered steps carry their share of its weight, and the steps
+        # are kept so a flag that makes 80 % reachable again can resume the problem where it stopped
+        answered_steps = len(st["step_results"])
+        entry.update(w=CAPSTONE_WEIGHT * answered_steps / unfinished, unfinished=True, steps=list(st["step_results"]))
+    st["log"].append(entry)
     st["wrong_run"] = st.get("wrong_run", 0) + 1 if g.res == "wrong" else 0
     extra = in_slot and _kp_plan(st, pool, kp) > plan_before
-    finish = _lesson_progress(task, st, skill, now)
+    finish = _lesson_progress(task, st, skill, now, planned=planned_before)
     if finish is not None:
         return finish
     note = ""
@@ -1699,31 +1898,53 @@ def flag(question_id: str, reason: str, now: datetime) -> Task:
                 entry["void"] = True
         skill = _skill_row(task["skill_id"])
         if task["type"] == "lesson":
-            _void_in_lesson(task, st, skill, question_id, now)
+            _void_in_lesson(task, st, skill, q, now)
         else:
             _void_in_review(task, st, skill, q, now)
         request_top_up(skill["id"], None if _is_capstone(q) else q["kp_index"])
         return build_task(_task_row(task["id"]))
 
 
+def _take_back_failure(fail: dict[str, Any], skill: dict[str, Any], now: datetime) -> None:
+    """Undo what a lesson failure recorded: its count toward remediation and the cooldown it set (unless a later
+    failure has set another one since)."""
+    progress = _progress_row(skill)
+    failures = _lesson_failures(progress)
+    if fail.get("counted"):
+        key = str(fail.get("key", fail.get("kp")))
+        failures[key] = max(0, failures.get(key, 0) - 1)
+    cooldown = progress["cooldown_until"]
+    if "cooldown_until" not in fail:  # recorded by an earlier version: it always set the cooldown
+        cooldown = fail.get("prev_cooldown") if fail.get("counted") else cooldown
+    elif fail["cooldown_until"] and cooldown == fail["cooldown_until"]:
+        cooldown = fail.get("prev_cooldown")
+    db.execute(
+        "UPDATE progress SET kp_failures_json = ?, cooldown_until = ?, updated_at = ? WHERE skill_id = ?",
+        (db.dumps({k: v for k, v in failures.items() if v}), cooldown, scheduler.iso(now), skill["id"]),
+    )
+    fail.update(counted=False, cooldown_until=None)
+
+
 def _reopen_failed_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], now: datetime) -> bool:
-    """A lesson that failed partly because of a now-flagged question resumes where it stopped."""
+    """A lesson that failed partly because of a now-flagged question resumes where it stopped (inside the capstone
+    when it stopped there: the answered steps are kept)."""
     fail = st.get("fail")
     if task["outcome"] != "failed" or not fail or active_task_row(task["course_id"]) is not None:
         return False
-    if fail.get("counted"):
-        progress = _progress_row(skill)
-        failures = _lesson_failures(progress)
-        key = str(fail.get("key", fail.get("kp")))
-        failures[key] = max(0, failures.get(key, 0) - 1)
-        db.execute(
-            "UPDATE progress SET kp_failures_json = ?, cooldown_until = ?, updated_at = ? WHERE skill_id = ?",
-            (db.dumps({k: v for k, v in failures.items() if v}), fail.get("prev_cooldown"), scheduler.iso(now), skill["id"]),
-        )
+    _take_back_failure(fail, skill, now)
     if isinstance(fail.get("kp"), int):
         st["kp"] = fail["kp"]
     st["stage"] = fail.get("stage", st.get("stage", "kp"))
     st["fail"] = None
+    unfinished = next((e for e in st["log"] if e.get("unfinished") and not e.get("void")), None)
+    if unfinished is not None:
+        st["log"].remove(unfinished)
+        db.execute(
+            "UPDATE attempts SET status = 'voided' WHERE task_id = ? AND question_id = ?", (task["id"], unfinished["q"])
+        )  # the stopped attempt; the resumed problem records a complete one
+        _set_current(st, unfinished["q"])
+        st["step_results"] = [r for r in unfinished.get("steps") or [] if isinstance(r, dict)]
+        st["step"] = len(st["step_results"])
     db.execute(
         "UPDATE tasks SET status = 'active', phase = 'practice', outcome = NULL, completed_at = NULL WHERE id = ?", (task["id"],)
     )
@@ -1732,7 +1953,12 @@ def _reopen_failed_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[
     return True
 
 
-def _void_in_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], qid: str, now: datetime) -> None:
+def _void_in_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any], q: dict[str, Any], now: datetime) -> None:
+    """A flagged question leaves the lesson. A flagged capstone is replaced only by another unserved capstone;
+    otherwise the lesson ends on its remaining planned questions — scored without the capstone, and a result below
+    80 % is not counted as a failure and sets no cooldown (one the capstone itself caused is taken back)."""
+    qid = q["id"]
+    capstone = _is_capstone(q)
     answered_here = any(e["q"] == qid for e in st["log"])
     for slot in st["slots"].values():
         if qid in slot:
@@ -1744,6 +1970,11 @@ def _void_in_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[str, A
             return
         reachable = task["outcome"] == "failed" and _best_possible(st, _pool(skill["id"])) >= PASS_MARK - EPS
         if not (answered_here and reachable and _reopen_failed_lesson(task, st, skill, now)):
+            fail = st.get("fail")
+            if capstone and answered_here and task["outcome"] == "failed" and isinstance(fail, dict):
+                if fail.get("key") == CAPSTONE_FAIL_KEY:  # it failed in the capstone: never the learner's failure
+                    _take_back_failure(fail, skill, now)
+                    log.info("task %s: failure in a flagged capstone taken back", task["id"])
             _save_state(task["id"], st)
             return
     if st.get("current") == qid:
@@ -1755,7 +1986,8 @@ def _void_in_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[str, A
         run += 1
     st["wrong_run"] = run
     # A pool emptied by flags is not the learner's failure: it pauses the lesson without counting toward remediation.
-    _lesson_progress(task, st, skill, now, count_failure=False)
+    # A flagged capstone is not either, and it doesn't even pause the lesson.
+    _lesson_progress(task, st, skill, now, count_failure=False, cooldown=not capstone)
     if task["status"] == "active":
         _save_state(task["id"], st)
 

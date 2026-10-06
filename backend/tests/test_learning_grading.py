@@ -598,3 +598,42 @@ def test_true_false_set_is_checkable_and_displayed() -> None:
 def test_true_false_set_does_not_change_the_other_kinds() -> None:
     assert not check_answer("true_false", answer="", correct_choice=0, tolerance=None, response="T", choice=None).correct
     assert check_answer("numeric", answer="2", correct_choice=None, tolerance=None, response="2", choice=None).correct
+
+
+# ---------------------------------------------------------------------------
+# A complex number as a + bi vs (real, imaginary): a form slip, asked again — never graded wrong
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "answer,response,message",
+    [
+        ("(1/5, 2/5)", "1/5+2/5i", grading.PAIR_EXPECTED),
+        ("(1, 0)", "1+0i", grading.PAIR_EXPECTED),
+        ("(4, -3)", "4+3i", grading.PAIR_EXPECTED),  # wrong value: same message, so it can't be used as an oracle
+        ("(1/5, 2/5)", "7", grading.PAIR_EXPECTED),
+        ("[[1, 2]]", "1+2i", grading.PAIR_EXPECTED),
+        ("3/13+2*i/13", "(3/13, 2/13)", grading.SINGLE_EXPECTED),
+        ("3/13+2*i/13", "(3/13, -2/13)", grading.SINGLE_EXPECTED),
+        ("5", "(5, 0)", grading.SINGLE_EXPECTED),
+    ],
+)
+def test_pair_vs_single_value_is_invalid_not_wrong(answer: str, response: str, message: str) -> None:
+    result = grade(answer, response)
+    assert result.invalid and not result.correct, result.feedback
+    assert result.feedback == message
+
+
+def test_pair_messages_never_say_whether_the_value_is_right() -> None:
+    assert grade("(1/5, 2/5)", "1/5+2/5i").feedback == grade("(1/5, 2/5)", "9+9i").feedback
+    assert grade("3/13+2*i/13", "(3/13, 2/13)").feedback == grade("3/13+2*i/13", "(1, 1)").feedback
+
+
+def test_other_shape_mismatches_stay_wrong_with_the_right_example() -> None:
+    three = grade("(1, -2, 3)", "6")
+    assert not three.correct and not three.invalid and "e.g. (a, b, c)" in three.feedback
+    four = grade("(1, 2, 3, 4)", "6")
+    assert not four.invalid and "Expected 4 components, e.g. (a, b, c, d)" in four.feedback
+    assert not grade("1+2*i", "(1, 2, 3)").invalid  # three components for one value: wrong, as before
+    assert grade("(1/5, 2/5)", "(1/5, 2/5)").correct and grade("1/5+2*i/5", "1/5+2/5i").correct
+    assert grade("1", "1+0i").correct

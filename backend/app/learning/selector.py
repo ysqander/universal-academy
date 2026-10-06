@@ -291,13 +291,15 @@ def start_task(
     Everything that could stop the new task is checked BEFORE the active task is touched. Another active task is a
     409 ("Finish or leave … first.") unless `replace_active`, in which case it is abandoned. `force` starts a lesson
     on a locked skill (the learner's override of prerequisite gating); a skill whose lesson was already started that
-    way (lesson_attempts > 0) is resumed or restarted without `force` (E2)."""
+    way (lesson_attempts > 0) is resumed or restarted without `force` (E2). A lesson paused after a failure (cooldown)
+    is a 409 ("This lesson comes back at HH:MM (local time) with fresh questions.") until the cooldown ends, unless
+    `force` (the learner's "Start anyway")."""
     with engine.lock:
         _require_course(course_id)
         skill = db.query_one("SELECT * FROM skills WHERE id = ? AND course_id = ?", (skill_id, course_id))
         if not skill:
             raise engine.NotFound("Skill not found in this course.")
-        progress = db.query_one("SELECT status, lesson_attempts FROM progress WHERE skill_id = ?", (skill_id,))
+        progress = db.query_one("SELECT status, lesson_attempts, cooldown_until FROM progress WHERE skill_id = ?", (skill_id,))
         learned = bool(progress) and progress["status"] in scheduler.LEARNED
         type_ = type_ or ("review" if learned else "lesson")
         active = engine.active_task_row(course_id)
@@ -309,6 +311,10 @@ def start_task(
             if blockers:
                 names = ", ".join(f"{b['key']} ({b['title']})" for b in blockers)
                 raise engine.Conflict(f"{skill['key']} is locked — learn {names} first.")
+        if type_ == "lesson" and not learned and not force:
+            cooldown = db.parse_iso(progress["cooldown_until"]) if progress else None
+            if cooldown and cooldown > scheduler.utc(now):
+                raise engine.Conflict(engine.cooldown_message(cooldown))
         if type_ == "review" and not learned:
             raise engine.Conflict("Reviews start after the lesson has been passed.")
         initial = engine.prepare_start(skill_id, type_)  # raises Conflict while the active task is still intact

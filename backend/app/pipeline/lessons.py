@@ -22,12 +22,16 @@ from .context import (
 )
 from .prompts import LESSON_INSTRUCTIONS
 from .questions import (
-    clean_questions,
     MAX_CHOICE_SHARE_HARD,
+    InvalidQuestion,
+    capstone_issues,
     choice_share,
+    clean_capstone,
+    clean_questions,
     format_warnings,
     insert_questions,
     is_machine_checkable,
+    pair_form_warnings,
 )
 from .textutil import FIGURE_PLACEHOLDER_RE, clean_source_refs, lesson_text, mentions_caption
 
@@ -85,22 +89,28 @@ async def ensure_lesson(ctx: BuildContext, skill_id: str, prefix: str, *, force:
                 stream=True,
             )
             # The proof rule is enforced with a retry; a last draft that still misses it is kept (with a warning)
-            # rather than leaving the skill without a lesson.
+            # rather than leaving the skill without a lesson. The capstone likewise: a last draft keeps a repaired
+            # capstone (giveaway steps dropped) or ends after the practice.
             lesson, pools, notes = validate_lesson(draft, proof=proof, strict=not last)
+            capstone, cap_notes = validate_capstone(draft.capstone, strict=not last)
+            notes += cap_notes
         except Exception as e:  # noqa: BLE001 — any failure is retried once, then the lesson is marked failed
             error = e
             log.warning("lesson %s attempt %d failed: %s", skill["key"], attempt + 1, e)
             continue
         lesson, figure_ids, figure_notes = resolve_figures(lesson, skill, course_figures(ctx.course))
         notes += figure_notes
-        abandoned = persist_lesson(skill_id, lesson, pools, figure_ids=figure_ids)
+        abandoned = persist_lesson(skill_id, lesson, pools, figure_ids=figure_ids, capstone=capstone)
         if abandoned:
             ctx.abandoned_tasks += abandoned
             notes.append(f"abandoned {abandoned} active task{'s' * (abandoned != 1)} started on the previous version")
         for note in notes:
             ctx.tracker.log(f"Lesson {skill['key']}: {note}", level=logging.WARNING)
         n_questions = sum(len(p) for p in pools)
-        ctx.tracker.log(f"Lesson {skill['key']} ready — {len(pools)} knowledge points, {n_questions} questions")
+        ctx.tracker.log(
+            f"Lesson {skill['key']} ready — {len(pools)} knowledge points, {n_questions} questions, "
+            + (f"a {len(capstone.steps)}-step capstone" if capstone else "no capstone")
+        )
         return True
     if skill["lesson_status"] == "ready":
         ctx.tracker.log(f"Lesson {skill['key']} kept — regeneration failed: {error}", level=logging.ERROR)
@@ -180,8 +190,9 @@ def validate_lesson(
             f"{share:.0%} of the questions are multiple choice or true/false (at most 40%); replace most of them with "
             "typed numeric/expression questions (concrete instances) or multistep walkthroughs"
         )
-    notes += format_warnings(pools)
+    notes += format_warnings(pools) + pair_form_warnings([q for pool in pools for q in pool])
     lesson = draft.model_dump()
+    lesson.pop("capstone", None)  # stored as a question (role 'capstone'), see validate_capstone / persist_lesson
     lesson["knowledge_points"] = [
         {**{k: v for k, v in kp.model_dump().items() if k != "questions"}, "target_questions": target}
         for kp, target in zip(kps, targets)
@@ -192,6 +203,54 @@ def validate_lesson(
         notes.append(f"kept {len(refs)} of {len(draft.source_refs)} source refs (item numbers only)")
     lesson["source_refs"] = refs
     return lesson, pools, notes
+
+
+def capstone_problems(q: QuestionDraft | None) -> list[str]:
+    """Every problem of a draft capstone ([] = usable as is): a structural one (not multistep, an invalid step) or
+    the content rules of capstone_issues (a step whose answer is known before it is computed, a complex result asked
+    as a coordinate pair). One revision can fix them all."""
+    if q is None:
+        return ["capstone: missing — the lesson needs a final multistep problem"]
+    try:
+        cap = clean_capstone(q)
+    except InvalidQuestion as e:
+        return [f"capstone: {e}"]
+    return [f"capstone: {message}" for _, message in capstone_issues(cap)]
+
+
+def validate_capstone(q: QuestionDraft | None, *, strict: bool = True) -> tuple[QuestionDraft | None, list[str]]:
+    """Validate the lesson's final problem (v1 and v2 lessons, SPEC §4.2b). strict=True raises InvalidLesson on any
+    problem (capstone_problems), so the draft is regenerated or revised. strict=False repairs: steps whose answer is
+    known before it is computed are dropped while at least 2 steps remain (their check belongs in the explanation);
+    a structurally invalid capstone — or one left with fewer than 2 steps — is left out (the lesson ends after the
+    practice); a coordinate-pair answer is kept with a note. Returns (the capstone or None, notes)."""
+    if q is None:
+        if strict:
+            raise InvalidLesson("capstone: missing — the lesson needs a final multistep problem")
+        return None, ["no capstone — the lesson ends after the practice"]
+    try:
+        cap = clean_capstone(q)
+    except InvalidQuestion as e:
+        if strict:
+            raise InvalidLesson(f"capstone: {e}") from e
+        return None, [f"no valid capstone (capstone: {e}) — the lesson ends after the practice"]
+    issues = capstone_issues(cap)
+    if not issues:
+        return cap, []
+    if strict:
+        raise InvalidLesson("capstone: " + "; ".join(message for _, message in issues))
+    known = sorted({i for i, message in issues if "coordinate pair" not in message})
+    notes = [f"capstone: {message}" + (" — step dropped" if i in known else " — kept") for i, message in issues]
+    if not known:
+        return cap, notes
+    steps = [step for i, step in enumerate(cap.steps) if i not in known]
+    if len(steps) < 2:
+        return None, notes + ["no valid capstone (fewer than 2 steps left) — the lesson ends after the practice"]
+    last_dropped = len(cap.steps) - 1 in known
+    update: dict[str, Any] = {"steps": steps}
+    if last_dropped:
+        update["answer_display"] = steps[-1].answer_display
+    return cap.model_copy(update=update), notes
 
 
 def kp_targets(lesson: dict[str, Any]) -> list[int]:
@@ -218,12 +277,18 @@ def next_question_key(kp_index: int, used: set[str]) -> str:
 
 
 def persist_lesson(
-    skill_id: str, lesson: dict[str, Any], pools: list[list[QuestionDraft]], *, figure_ids: list[str] | None = None
+    skill_id: str,
+    lesson: dict[str, Any],
+    pools: list[list[QuestionDraft]],
+    *,
+    figure_ids: list[str] | None = None,
+    capstone: QuestionDraft | None = None,
 ) -> int:
     """Questions first, then lesson_status='ready' — in one transaction. Questions of an earlier version of the lesson
     are deleted, except those the learner already answered: they are retired (flagged, renamed key) so the attempt
     history stays valid. Active tasks on the skill (started on the old version — possibly while the new one was being
     written, from another process) are abandoned in the same transaction, so no task can point at a deleted question.
+    The capstone is stored like a v2 lesson's: role 'capstone', kp_index = the number of knowledge points.
     Returns the number of tasks abandoned."""
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")  # the task check and the question swap are one step, also for other processes
@@ -231,6 +296,8 @@ def persist_lesson(
         retire_questions(conn, skill_id)
         for kp_index, pool in enumerate(pools):
             insert_questions(conn, skill_id, kp_index, pool)
+        if capstone is not None:
+            insert_questions(conn, skill_id, len(pools), [capstone], role="capstone")
         if figure_ids is None:
             conn.execute(
                 "UPDATE skills SET lesson_json = ?, lesson_status = 'ready' WHERE id = ?", (db.dumps(lesson), skill_id)

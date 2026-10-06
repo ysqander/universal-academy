@@ -1,6 +1,6 @@
 import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
-import { hasCapstone, kpPosition, lessonStages, scoreView } from "../../lib/score";
+import { hasCapstone, kpPosition, lessonStages, scoreView, type TaskEnd } from "../../lib/score";
 import type { KnowledgePoint, TaskProgress } from "../../types";
 import { ScoreMeter } from "./ScoreMeter";
 
@@ -9,20 +9,22 @@ interface KpStepperProps {
   progress: TaskProgress;
   /** The score meter's figures: the latest answer's, while its feedback is still on screen. */
   scored?: TaskProgress;
+  /** That answer finished the task: how it ended (a halted lesson says "Stopped after n questions"). */
+  end?: TaskEnd | null;
 }
 
 /**
  * Lesson progress: one segment per knowledge point (+ the capstone, "Put it together"), "Step 2 of 3 · title" with
  * "Question n of target" for the knowledge point, and the score so far against the 80 % pass mark.
  */
-export function KpStepper({ points, progress, scored }: KpStepperProps) {
+export function KpStepper({ points, progress, scored, end }: KpStepperProps) {
   const capstone = hasCapstone(progress);
   const stages = lessonStages(progress, points.length, capstone);
   const kpTotal = stages.filter((s) => !s.capstone).length;
   const inCapstone = Boolean(progress.in_capstone);
   const current = points[progress.kp_index];
   const position = kpPosition(progress, current);
-  const view = scoreView(scored ?? progress);
+  const view = scoreView(scored ?? progress, scored ? end : null);
   const label = inCapstone ? "Final problem: put it together" : `Knowledge point ${progress.kp_index + 1} of ${kpTotal}`;
 
   return (

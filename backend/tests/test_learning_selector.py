@@ -124,6 +124,39 @@ def test_cooldown_hides_failed_lesson() -> None:
     assert retry.reason.startswith("Second try")
 
 
+def test_manual_start_during_the_cooldown_is_refused_unless_forced() -> None:
+    fx = build_course()
+    task_id = engine.start_lesson(fx.sid("S1"), "x", T0)
+    task = engine.begin_practice(task_id, T0)
+    while task.phase != "done":
+        task = engine.submit_answer(task_id, wrong(task.question.id), T0).task
+    until = T0 + timedelta(hours=2)
+    message = f"This lesson comes back at {engine.local_clock(until)} (local time) with fresh questions."
+    assert message.startswith("This lesson comes back at ") and engine.local_clock(until)[2] == ":"
+    for type_ in (None, "lesson"):
+        with pytest.raises(engine.Conflict) as exc:
+            selector.start_task(fx.course_id, fx.sid("S1"), type_, T0 + timedelta(minutes=5))
+        assert str(exc.value) == message
+    attempts = lambda: db.query_one("SELECT lesson_attempts FROM progress WHERE skill_id = ?", (fx.sid("S1"),))["lesson_attempts"]  # noqa: E731
+    assert attempts() == 1 and not engine.active_task_row(fx.course_id)  # nothing started
+    other = selector.start_task(fx.course_id, fx.sid("S2"), None, T0 + timedelta(minutes=6))
+    with pytest.raises(engine.Conflict, match="comes back at"):  # checked before the open task is touched
+        selector.start_task(fx.course_id, fx.sid("S1"), None, T0 + timedelta(minutes=7), replace_active=True)
+    assert engine.get_task(other.id).outcome is None
+    forced = selector.start_task(fx.course_id, fx.sid("S1"), None, T0 + timedelta(minutes=8), replace_active=True, force=True)
+    assert forced.type == "lesson" and forced.skill.key == "S1" and forced.id != task_id and attempts() == 2
+    engine.abandon(forced.id, T0 + timedelta(minutes=9))
+    after = selector.start_task(fx.course_id, fx.sid("S1"), None, until + timedelta(minutes=1))
+    assert after.type == "lesson" and after.skill.key == "S1"
+
+
+def test_cooldown_message_uses_local_time() -> None:
+    until = T0 + timedelta(hours=2)
+    assert engine.cooldown_message(until) == (
+        f"This lesson comes back at {until.astimezone().strftime('%H:%M')} (local time) with fresh questions."
+    )
+
+
 def test_next_response_has_no_side_effects_and_reports_active_task() -> None:
     fx = build_course()
     response = selector.next_response(fx.course_id, T0)

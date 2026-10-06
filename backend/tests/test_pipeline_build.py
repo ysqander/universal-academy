@@ -300,9 +300,12 @@ def test_disagreements_are_flagged_but_every_kp_stays_servable(tmp_path, monkeyp
     for skill in db.query("SELECT id, lesson_json FROM skills WHERE course_id = ?", (cid,)):
         rows = db.query("SELECT * FROM questions WHERE skill_id = ?", (skill["id"],))
         targets = [kp["target_questions"] for kp in db.loads(skill["lesson_json"])["knowledge_points"]]
-        for kp in {r["kp_index"] for r in rows}:
-            pool = [r for r in rows if r["kp_index"] == kp]
+        practice = [r for r in rows if r["role"] == "practice"]
+        for kp in {r["kp_index"] for r in practice}:
+            pool = [r for r in practice if r["kp_index"] == kp]
             assert sum(1 for r in pool if not r["flagged"]) == targets[kp]  # each KP keeps its target servable
+        capstones = [r for r in rows if r["role"] == "capstone"]  # v1 lessons end with a capstone too
+        assert len(capstones) == 1 and capstones[0]["kp_index"] == len(targets) and capstones[0]["flagged"] == 1
         flagged = [r for r in rows if r["flagged"]]
         assert flagged and all(r["flag_reason"].startswith("verification: ") for r in flagged)
         assert all("independent solver answered" in r["flag_reason"] for r in flagged)

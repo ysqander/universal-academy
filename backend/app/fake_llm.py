@@ -5,9 +5,10 @@ several abilities with " and " (like "Multiply complex numbers and use their pow
 any other (its specs name earlier siblings the way real planners do, "a (S2a): …", which plan validation rewrites to
 "S2a: …"); the writer returns a teaching sequence with checks of several kinds (expression, true_false_set,
 reflect), a faded example and a visual, knowledge points with target_questions 2 and 1, and a 3-step capstone of
-mixed kinds (expression, multiple_choice, true_false_set); the reviewer reports one blocking issue on a first draft
-and none on a revised one. v1 lessons have targets 2 and 3; no generated question is free_response (proofs are
-multistep walkthroughs). The content is a small, realistic course on complex numbers and
+mixed kinds (expression, multiple_choice, true_false_set) whose later steps use the first result and none of whose
+answers is known in advance; the reviewer reports one blocking issue on a first draft and none on a revised one. v1
+lessons have targets 2 and 3 and the same capstone; no generated question is free_response (proofs are multistep
+walkthroughs). The content is a small, realistic course on complex numbers and
 F^n (Axler §1A style). Every generated question — and every step of a multistep question — carries an invisible
 Markdown marker
     [//]: # "ua-fake|<choice>|<answer>"
@@ -561,7 +562,8 @@ def _proof_question(key: str) -> QuestionDraft:
 
 
 def _capstone() -> QuestionDraft:
-    """The v2 lesson's final problem: three chained steps of mixed kinds."""
+    """The lesson's final problem (v1 and v2): three chained steps of mixed kinds — compute a product, decide which
+    factor makes it real, then read facts off the product (no step's answer is stated or forced in advance)."""
     return _multistep(
         "cap",
         "Let $z=1+2i$ and $w=3-i$. Find $zw$, then use the result to answer two questions without starting over.",
@@ -576,12 +578,12 @@ def _capstone() -> QuestionDraft:
             ),
             _step(
                 "multiple_choice",
-                "Without recomputing, what is $(3-i)(1+2i)$?",
-                choices=["$5+5i$", "$5-5i$", "$1+7i$", "$-5+5i$"],
+                "Which of these numbers, multiplied by $zw$, gives a real number?",
+                choices=["$1-i$", "$1+i$", "$5+5i$", "$i$"],
                 correct=0,
-                display="$5+5i$",
-                hint="Does the order of the factors matter?",
-                explanation="Multiplication of complex numbers is commutative, so $wz=zw=5+5i$.",
+                display="$1-i$",
+                hint="Multiply each option by $5+5i$ and look at the imaginary part.",
+                explanation="$(5+5i)(1-i)=5-5i+5i-5i^2=10$ is real; the other products have a nonzero imaginary part.",
             ),
             _step(
                 "true_false_set",
@@ -594,8 +596,8 @@ def _capstone() -> QuestionDraft:
             ),
         ],
         display="$zw=5+5i$",
-        solution="$zw=5+5i$; by commutativity $wz=5+5i$; $\\operatorname{Re}(zw)=5$ and $i\\,zw=-5+5i$.",
-        targets="chains multiplication with commutativity and $i^2=-1$",
+        solution="$zw=5+5i$; $(5+5i)(1-i)=10$ is real; $\\operatorname{Re}(zw)=5$ and $i\\,zw=-5+5i$.",
+        targets="chains multiplication with a decision about the product and $i^2=-1$",
     )
 
 
@@ -628,6 +630,7 @@ def _lesson(text: str, _prefix: str) -> LessonDraft:
             "Why $i^2=-1$ follows from the definition: $(0+1i)(0+1i)=(0\\cdot0-1\\cdot1)+(0\\cdot1+1\\cdot0)i=-1$."
         ),
         common_mistakes=[],
+        capstone=_capstone(),
         connection="Coordinatewise operations on $\\mathbf{F}^n$ are the model for the abstract vector space in 1B.",
         # the last two are the kind of caption/page note real models emit: the pipeline keeps item numbers only
         source_refs=["1.1", "1.3", "1.13", "1.13 Definition — addition in F^n", "Printed p.2: complex numbers"],

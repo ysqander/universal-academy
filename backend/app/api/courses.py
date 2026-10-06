@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -157,6 +159,12 @@ def get_graph(cid: str) -> CourseGraph:
     row = _course_row(cid)
     labels = db.loads(row["page_labels_json"], [])
     states = skill_states(cid)
+    now = datetime.now(timezone.utc)
+    cooldowns = {
+        r["skill_id"]: until.isoformat(timespec="seconds")
+        for r in db.query("SELECT skill_id, cooldown_until FROM progress WHERE course_id = ? AND cooldown_until IS NOT NULL", (cid,))
+        if (until := db.parse_iso(r["cooldown_until"])) and until > now
+    }
     skills = []
     for s in db.query("SELECT * FROM skills WHERE course_id = ? ORDER BY order_index", (cid,)):
         info = states.get(s["id"])
@@ -185,6 +193,7 @@ def get_graph(cid: str) -> CourseGraph:
                 retrievability=info.retrievability if info else None,
                 stability_days=info.stability_days if info else None,
                 reviews=info.reviews if info else 0,
+                cooldown_until=cooldowns.get(s["id"]),
             )
         )
     edges = [

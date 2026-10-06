@@ -1,4 +1,5 @@
 // Typed client for the FastAPI backend (docs/SPEC.md §5). Every endpoint has one function here.
+import { isCooldownMessage } from "./lib/cooldown";
 import type {
   AnswerResult,
   AnswerSubmit,
@@ -41,6 +42,10 @@ export class ApiError extends Error {
 
 export const isApiError = (err: unknown, status?: number): err is ApiError =>
   err instanceof ApiError && (status === undefined || err.status === status);
+
+/** 409 from starting a lesson during its cooldown ("This lesson comes back at 14:43 (local time) …"): not an error —
+ * say it as information; `force: true` starts it anyway. */
+export const isCooldownConflict = (err: unknown): err is ApiError => isApiError(err, 409) && isCooldownMessage(err.message);
 
 export const isAbortError = (err: unknown): boolean => err instanceof DOMException && err.name === "AbortError";
 
@@ -202,7 +207,8 @@ const LOCKED_CONFLICT = /\bis locked\b/;
 /**
  * Start (or resume) a chosen task. A lesson the learner picked explicitly (drawer, menu) is theirs to take: when the
  * server still answers 409 "locked" — e.g. resuming a lesson started earlier with "Learn anyway" — retry once with
- * `force` (a no-op for unlocked skills), so the button never silently fails.
+ * `force` (a no-op for unlocked skills), so the button never silently fails. A 409 cooldown ("comes back at …") is
+ * never retried: only the learner's own "Start anyway" sends `force` for it.
  */
 export async function startTask(courseId: string, body: StartTaskRequest): Promise<Task> {
   const path = `/api/courses/${seg(courseId)}/tasks`;

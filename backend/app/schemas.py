@@ -127,6 +127,7 @@ LessonStatus = Literal["pending", "ready", "failed"]
 class SkillNode(BaseModel):
     id: str
     key: str  # "S1"
+    cooldown_until: str | None = None  # a halted lesson comes back then (ISO UTC); earlier starts need force
     title: str
     objective: str
     kind: str
@@ -236,6 +237,8 @@ class StepResult(BaseModel):
     feedback: str
     answer_display: str
     explanation: str
+    revealed: bool = False  # the step's answer was shown (Show solution): 0 points
+    hinted: bool = False  # the step's hint was used: at most ½ point
 
 
 class QuestionPublic(BaseModel):
@@ -366,6 +369,7 @@ class TaskProgress(BaseModel):
     pass_mark: float = 0.8
     in_capstone: bool = False  # the lesson's final multistep problem is being answered
     has_capstone: bool = False  # the task ends with (or includes) a capstone
+    halted: bool = False  # the lesson stopped early (80 % became unreachable with planned questions left)
 
 
 class Task(BaseModel):
@@ -380,6 +384,7 @@ class Task(BaseModel):
     question: QuestionPublic | None = None  # the current question (practice phase / review)
     progress: TaskProgress
     outcome: TaskOutcome | None = None
+    cooldown_until: str | None = None  # failed lesson: when it comes back (ISO UTC); None = no pause (e.g. after a flag)
 
 
 class SessionInfo(BaseModel):
@@ -442,6 +447,7 @@ class AnswerResult(BaseModel):
     score: float = 0.0  # points earned for this question (1 / 0.5 / 0; multistep: mean of its steps)
     step_result: StepResult | None = None  # multistep: the step just answered
     question_done: bool = True  # False while a multistep question still has steps to answer
+    note: str = ""  # the engine's progress note (extra question after a miss, capstone next, …); also in feedback
 
 
 class RevealRequest(BaseModel):

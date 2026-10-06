@@ -1140,6 +1140,30 @@ def _flatten_vector(node: Node) -> Node:
 _GENERIC_MISSES = ("Not quite.", "Not equivalent to the expected answer.")
 
 
+def _tuple_example(n: int) -> str:
+    """'(a, b)' for 2 components, '(a, b, c)' for 3 … — the shape of an n-component answer."""
+    return "(" + ", ".join("abcd"[:n]) + ")" if 1 <= n <= 4 else f"(x_1, …, x_{n})"
+
+
+PAIR_EXPECTED = (
+    "An ordered pair is expected here, e.g. (a, b) — for a complex number, its real and imaginary coordinates — "
+    "not a single value."
+)
+SINGLE_EXPECTED = "A single value is expected here, not a pair — write a complex number in the form a + bi."
+
+
+def _pair_form_mismatch(expected: Node, got: Node) -> str | None:
+    """A single value for a 2-component key, or a pair for a single-value key: the learner used the other notation
+    (typically a complex number as a + bi vs (real, imaginary)). That is a form slip — ask again, never mark it wrong.
+    The message depends only on the shapes, never on whether the value is right."""
+    expected, got = _flatten_vector(expected), _flatten_vector(got)
+    if expected.kind == "tuple" and len(expected.items) == 2 and got.kind == "scalar":
+        return PAIR_EXPECTED
+    if expected.kind == "scalar" and got.kind == "tuple" and len(got.items) == 2:
+        return SINGLE_EXPECTED
+    return None
+
+
 def _compare(expected: Node, got: Node, abs_tol: float | None, explicit_tol: float | None = None) -> _Verdict:
     if expected.kind == "scalar" and got.kind == "scalar":
         assert expected.expr is not None and got.expr is not None
@@ -1154,7 +1178,7 @@ def _compare(expected: Node, got: Node, abs_tol: float | None, explicit_tol: flo
     if expected.kind == "scalar":
         return _Verdict(False, "A single value is expected, not a list.")
     if got.kind == "scalar":
-        return _Verdict(False, f"Expected {len(expected.items)} components, e.g. (a, b, c).")
+        return _Verdict(False, f"Expected {len(expected.items)} components, e.g. {_tuple_example(len(expected.items))}.")
     if expected.kind == "matrix" and got.kind != "matrix":
         return _Verdict(False, "A matrix is expected, e.g. [[1, 2], [3, 4]].")
     if got.kind == "set" and expected.kind == "tuple":
@@ -1342,6 +1366,9 @@ def _check_math(kind: str, answer: str, tolerance: float | None, response: str |
         if _NUMBER_WITH_UNITS.fullmatch(text):
             return GradeResult(False, "Enter just the number, without units.", invalid=True)
         return GradeResult(False, "A number is expected here.")
+    shape = _pair_form_mismatch(expected, got)
+    if shape:
+        return GradeResult(False, shape, invalid=True)
     verdict = _compare(expected, got, abs_tol, tolerance)
     if not verdict.ok:
         return GradeResult(False, verdict.feedback or "Not quite.")

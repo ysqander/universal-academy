@@ -1,4 +1,4 @@
-import type { ScoreView } from "../../lib/score";
+import { scorePercent, type ScoreView } from "../../lib/score";
 
 interface ScoreMeterProps {
   view: ScoreView;
@@ -8,13 +8,14 @@ interface ScoreMeterProps {
   aside?: string | null;
 }
 
-/** Score of the answered questions with the pass mark drawn on the bar (SPEC §6.3: pass at 80 %). */
+/** Score of the answered questions with the pass mark drawn on the bar (SPEC §6.3: pass at 80 %). A lesson halted
+ * early is marked as such ("Stopped after n questions"), never as a finished plan. */
 export function ScoreMeter({ view, size = "md", aside }: ScoreMeterProps) {
   const pct = Math.round(view.fraction * 1000) / 10;
   const mark = Math.round(view.passMark * 1000) / 10;
   const right = aside === undefined ? view.remainingLabel : aside;
   return (
-    <div className="score-meter" data-tone={view.tone} data-size={size}>
+    <div className="score-meter" data-tone={view.tone} data-size={size} data-halted={view.halted || undefined}>
       <div className="score-meter__line">
         <span className="score-meter__score">{view.label}</span>
         <span className="score-meter__pass">· {view.passLabel}</span>
@@ -26,7 +27,7 @@ export function ScoreMeter({ view, size = "md", aside }: ScoreMeterProps) {
         aria-label="Score"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={view.hasScore ? Math.floor(pct) : 0}
+        aria-valuenow={view.hasScore ? scorePercent(view.fraction, view.passMark) : 0}
         aria-valuetext={view.ariaText}
       >
         <div className="score-meter__fill" style={{ width: `${view.hasScore ? pct : 0}%` }} />

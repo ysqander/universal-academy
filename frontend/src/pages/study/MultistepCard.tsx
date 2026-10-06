@@ -15,11 +15,13 @@ import {
   activeStep,
   initialTrail,
   questionDone,
+  revealedStepIndexes,
   STEP_MARK_GLYPH,
   STEP_MARK_LABEL,
   stepMark,
   stepPips,
   stepResultOf,
+  stepRevealed,
   stepsSummary,
   trailItems,
   trailReducer,
@@ -50,8 +52,11 @@ interface MultistepCardProps {
 export function MultistepCard({ task, question, position, onAnswered, onContinue, onSuggestion, onEasier, onTaskReplaced }: MultistepCardProps) {
   const [trail, dispatch] = useReducer(trailReducer, question, initialTrail);
   const [final, setFinal] = useState<AnswerResult | null>(null);
-  // Steps whose solution was shown in this view (their result line says so).
-  const [revealedSteps, setRevealedSteps] = useState<ReadonlySet<number>>(() => new Set());
+  // Steps answered with "Show solution" (0 points; their result line says so) — rebuilt from the server's step
+  // results after a reload, so such a step never turns into "not right".
+  const [revealedSteps, setRevealedSteps] = useState<ReadonlySet<number>>(() => revealedStepIndexes(question.step_results ?? []));
+  // A hint or a shown answer on this attempt: the easier question is no longer offered (it would wipe out that help).
+  const [helped, setHelped] = useState(() => question.hints_used > 0 || question.revealed);
   const [flagOpen, setFlagOpen] = useState(false);
   const [easing, setEasing] = useState(false);
   const { seconds } = useStopwatch(final === null);
@@ -62,7 +67,7 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
   const shownIndex = trail.open ?? active;
   const shownStep = shownIndex === null ? null : (steps[shownIndex] ?? null);
   const shownResult = shownIndex === null ? null : (trail.results.find((r) => r.index === shownIndex) ?? null);
-  const pips = stepPips(trail);
+  const pips = stepPips(trail, revealedSteps);
   const startedHere = trail.results.length === 0;
 
   // A new question after scrolling through feedback: bring its prompt back into view.
@@ -72,8 +77,9 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
   }, []);
 
   const onStepAnswered = (result: AnswerResult, index: number, revealed: boolean) => {
-    if (revealed) setRevealedSteps((prev) => new Set(prev).add(index));
-    dispatch({ type: "answered", result: stepResultOf(result, index) });
+    const stepResult = stepResultOf(result, index);
+    if (revealed || stepRevealed(stepResult)) setRevealedSteps((prev) => new Set(prev).add(index));
+    dispatch({ type: "answered", result: stepResult });
     if (questionDone(result)) {
       setFinal(result);
       onAnswered(result);
@@ -156,12 +162,13 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
             answerShown={shownIndex === question.step_index && question.revealed}
             done={final !== null}
             onAnswered={(result, revealed) => onStepAnswered(result, shownIndex, revealed)}
+            onHint={() => setHelped(true)}
             onNext={() => dispatch({ type: "next" })}
           />
         )}
       </div>
 
-      {onEasier && startedHere && !final && (
+      {onEasier && startedHere && !final && !helped && revealedSteps.size === 0 && (
         <div className="question-card__tools">
           <button type="button" className="btn btn--ghost btn--sm" onClick={() => void askEasier()} disabled={easing}>
             {easing ? <Spinner size={14} label="Finding an easier step" /> : <Icon name="steps" size={15} />} Give me an easier question
@@ -173,7 +180,7 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
         <FeedbackPanel
           result={final}
           answerShown
-          steps={{ results: trail.results, total: trail.total, capstone }}
+          steps={{ results: trail.results, total: trail.total, capstone, revealed: revealedSteps }}
           before={task}
           onContinue={() => onContinue(final)}
           onSuggestion={(action) => onSuggestion(action, final)}
@@ -210,18 +217,18 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
 
 /** An answered step, compact: mark, "Step 1", its result; opens to the step's prompt and explanation. */
 function StepTrailItem({ step, result, revealed }: { step: MultistepStepPublic | undefined; result: StepResult; revealed: boolean }) {
-  const mark = stepMark(result.score);
+  const mark = stepMark(result.score, revealed);
   const tfKey = step?.kind === "true_false_set" ? parseTfKey(result.answer_display, step.choices.length) : null;
   return (
     <li className="step-trail__item" data-mark={mark}>
       <details className="step-trail__details">
         <summary className="step-trail__summary">
           <span className="step-trail__mark" aria-hidden="true">
-            {STEP_MARK_GLYPH[mark]}
+            {mark === "shown" ? <Icon name="eye" size={14} strokeWidth={2.25} /> : STEP_MARK_GLYPH[mark]}
           </span>
           <span className="step-trail__label">
             Step {result.index + 1}
-            <span className="visually-hidden">: {revealed ? "solution shown" : STEP_MARK_LABEL[mark]}.</span>
+            <span className="visually-hidden">: {STEP_MARK_LABEL[mark]}.</span>
           </span>
           <span className="step-trail__result">
             {tfKey ? <TfKeyList answerKey={tfKey} /> : result.answer_display.trim() ? <Markdown inline>{result.answer_display}</Markdown> : null}
@@ -253,11 +260,13 @@ interface StepCardProps {
   /** The whole question is answered (the summary follows; no "Next step"). */
   done: boolean;
   onAnswered: (result: AnswerResult, revealed: boolean) => void;
+  /** The step's hint was shown (the card then stops offering an easier question). */
+  onHint: () => void;
   onNext: () => void;
 }
 
 /** The current step: its prompt and answer input, one hint (½ point), Show solution (0 points), then its result. */
-function StepCard({ taskId, questionId, step, index, total, result, revealed, hintUsed, answerShown, done, onAnswered, onNext }: StepCardProps) {
+function StepCard({ taskId, questionId, step, index, total, result, revealed, hintUsed, answerShown, done, onAnswered, onHint, onNext }: StepCardProps) {
   const toast = useToast();
   const finePointer = useMediaQuery("(pointer: fine)");
   const kind = step.kind;
@@ -326,10 +335,12 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
     try {
       const { hint: text } = await getHint(questionId, index);
       setHint(text.trim() ? text : step.hint);
+      onHint();
     } catch (err) {
       if (isApiError(err, 404) || isApiError(err, 405) || isApiError(err, 422)) {
         // A server without per-step hints: show it locally; the answer still reports it (hints_used).
         setHint(step.hint);
+        onHint();
       } else {
         toast.error(err);
       }

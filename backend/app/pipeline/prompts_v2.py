@@ -4,6 +4,8 @@ revision. Written from the learner's own review of the first lessons."""
 from __future__ import annotations
 
 from .prompts import (
+    CAPSTONE_RULE,
+    COMPLEX_FORM_RULE,
     COUNT_QUESTION_RULE,
     DISTINCT_DEMANDS_RULE,
     MATH_FORMAT,
@@ -127,8 +129,10 @@ SERVED_SEQUENCE_RULE = (
     "from scratch (e.g. a whole quotient) appears at most once before the capstone — the faded example already had "
     "the learner carry it out. A later knowledge point leads with ITS new demand (for \"interpret an equation as a "
     "quotient\": which quotient solves it, or whether a candidate satisfies it — not another full quotient in a new "
-    "wrapper); a plain repeat of the procedure may only be one of its spare questions. The capstone is where the "
-    "whole chain is carried out once more."
+    "wrapper); a plain repeat of the procedure may only be one of its spare questions. The capstone then applies the "
+    "main procedure once more, but to an input an earlier skill produces (or a case that needs a decision), in one "
+    "unguided step, and ends with a step that uses or interprets the result: it is never the sub-steps of a served "
+    "question, a teaching check or the faded example re-run on new numbers."
 )
 
 QUESTION_RULES = f"""\
@@ -154,7 +158,7 @@ PRACTICE QUESTIONS (knowledge_points[].questions)
     approximations, else null.
   - expression: SymPy syntax — ** for powers, * for every product, i for the imaginary unit ("-7+22*i"), sqrt(2);
     a list as a tuple "(1, -2, 3)". The prompt states the exact form to enter ("Enter your answer in the form
-    $a+bi$"). {UNORDERED_RULE}
+    $a+bi$"). {COMPLEX_FORM_RULE} {UNORDERED_RULE}
   - multiple_choice: 3–5 options from real misconceptions, exactly one correct, correct_choice = its 0-based index
     (vary the position); options of similar length and detail.
   - true_false: choices exactly ["True", "False"]; correct_choice 0 = True, 1 = False.
@@ -168,19 +172,6 @@ PRACTICE QUESTIONS (knowledge_points[].questions)
   ("Exercise 1A.7") or null.
 - Keys "k1q1", "k1q2", … for knowledge point 1, "k2q1", … for knowledge point 2. Before writing each answer, solve
   the question again from scratch and make sure answer, answer_display, the correct choice and the solution agree."""
-
-CAPSTONE_RULE = """\
-CAPSTONE (`capstone`) — the lesson's final problem, served after the practice
-- ONE problem, key "cap", kind "multistep", tier 3, with 2–4 steps that build on each other: a later step uses an
-  earlier step's result. It chains THIS lesson's ideas with earlier skills (the assumed prerequisites) into one
-  meaningful result, and so shows the learner can combine several ideas and steps. Example for reciprocals and
-  quotients: compute a product, use it to get a quotient, then check the quotient by multiplying back.
-- Not more drill: no step repeats a practice question with new numbers; each step is a different move (compute,
-  use the result, decide, check or interpret). Use a fresh problem — not the running example, the worked examples or
-  a practice question.
-- Each step: one machine-checked answer, a hint, an explanation and answer_display (the multistep format above). The
-  question prompt states the whole problem and its goal; each step prompt says exactly what to do now and the form
-  to enter."""
 
 PROOF_RULE = """\
 PROOF SKILLS (kind 'proof', or an objective starting with Prove / Justify / Show): the learner never writes a proof as
@@ -249,16 +240,26 @@ FOR EACH SKILL (TeachingSpec)
   part of the objective (for a procedure: the book's formula as "a record of the steps we just performed"; for a
   definition: the definition itself). A bridge that makes a non-routine move (squaring and adding two equations,
   substituting, introducing a helper quantity) states its purpose in the same sentence: "we want X, so we do Y" (e.g.
-  "to get the sum $a^2+b^2$, which with the known difference gives each square, square both equations and add").
-  If more than about 10 bridges are truly needed, ask whether the objective is
+  "to get the sum $a^2+b^2$, which with the known difference gives each square, square both equations and add"). X
+  must connect to the goal: say why reaching X helps — what we can already do once we have it — not only what the
+  move does (e.g. "we can already turn a nonzero real number into $1$ by dividing by it, so we want a factor that
+  makes the product real; for that the imaginary cross-products must cancel, so try $2-3i$"). The first bridges set
+  up the goal and what we can already do; never open with a bridge that rebuts a move the learner has not seen yet
+  (a remark about a tempting move comes after that move). If more than about 10 bridges are truly needed, ask
+  whether the objective is
   two skills (e.g. "each term of the first bracket multiplies each term of the second, giving
   four products"; "$(3i)(2i)$ has two factors of $i$, so it contains $i^2$"; "replacing $i^2$ by $-1$ turns that
   product into a real number"; "the real terms and the $i$ terms are collected separately").
 - success_check: what would demonstrate the objective without requiring a new method, written as the lesson's
   CAPSTONE: one fresh problem of 2–4 guided steps, each using the previous result, that chains this skill with an
-  earlier one (e.g. compute a product, use it to get a quotient, check the quotient by multiplying back). When the
-  objective is to decide whether a supplied answer works, it includes a candidate that matches the target in exactly
-  one coordinate.
+  earlier one — the earlier skill produces the input (or uses the result) in its own step, this skill's method is
+  applied once without being split into its taught sub-steps or having its key decision given away, and a last step
+  makes a different move with the result (a prediction, a second use, an interpretation). E.g. for reciprocals:
+  compute $w=(1+3i)(2-i)$ in the form $a+bi$, enter $1/w$, then predict $1/(5-5i)$ without a new construction. No
+  step whose answer is known in advance (stated in the problem, an earlier result again, or forced by a definition:
+  a number times its reciprocal is $1$, multiplying back gives the given right side), and complex results in the
+  form $a+bi$, never as coordinate pairs. When the objective is to decide whether a supplied answer works, it
+  includes a candidate that matches the target in exactly one coordinate.
 - representations: 0–2, each finishing "This representation helps the learner notice ___" and saying how it is
   read; format 'none' is valid and often right (an annotated sequence of equations may be best). A representation
   comes after the question it answers is established.
@@ -311,7 +312,12 @@ RULES FOR THE SEQUENCE
   later remark.
 - Motivate every non-obvious move BEFORE making it: say what we are trying to find or isolate and why this move gets
   it ("we already know $a^2-b^2=3$; if we also knew $a^2+b^2$, adding and subtracting would give $a^2$ and $b^2$ — so
-  square both coordinate equations and add them"). A move shown as a bare trick is a missing bridge.
+  square both coordinate equations and add them"). The purpose is why the intermediate result helps reach the goal
+  (what we can already do once we have it), not only how the move produces it: "we cannot divide by $2+3i$ yet, but
+  we can divide by a nonzero real number — so we look for a factor that makes the product real; for that the
+  imaginary cross-products must cancel". A move shown as a bare trick, or justified only by its mechanism ("this
+  makes the cross-products opposites"), is a missing bridge. Never refer to or rebut a move before it has been
+  introduced — such a remark (also when the spec's bridge puts it first) comes after the move.
 - In a first encounter show every algebra line the learner needs with only the stated prerequisites; never jump from
   an expanded form straight to a factored one (write $a^4-2a^2b^2+b^4+4a^2b^2=a^4+2a^2b^2+b^4=(a^2+b^2)^2$, not
   $\\dots=(a^2+b^2)^2$ directly).
@@ -322,8 +328,11 @@ RULES FOR THE SEQUENCE
 - Make the learner think before the final exercises: 1–3 inline checks placed right after the step they test, then
   the progression complete example → partially completed example (a faded_example) → independent practice. The
   first check comes early, inside the demonstration: one small step on the running example the learner can now do
-  (like "what does $6i^2$ become?"). Include one explanation question as a 'reflect' check (e.g. "Why did the
-  bottom-right entry become a real number?").
+  (like "what does $6i^2$ become?"). Include one explanation question as a 'reflect' check: it asks WHY — a reason
+  the learner must supply — never for a value they could compute (that is a graded check). Ask it before the text
+  spells out the reason, or ask why a tempting alternative fails (e.g. "Why did the bottom-right entry become a real
+  number?", "Why is $2-3i$ not itself the reciprocal of $2+3i$?"); its model answer must not repeat a line the learner
+  has just read.
 - Nothing essential in `deeper`: if an explanation is necessary for the objective it belongs in the main path.
   `deeper` is only an alternative explanation, a deeper derivation or a reminder — '' is fine.
 - Nothing extra in the main path either: a related result the book states nearby that the objective and its practice
@@ -345,7 +354,8 @@ RULES FOR THE SEQUENCE
 INLINE CHECKS (`check` of check / faded_example blocks; formative — graded by the app, never scored)
 - A small question about the step just taught, answerable from what has been shown so far (not from later blocks).
 - kind numeric / expression / multiple_choice / true_false / true_false_set / reflect, same answer conventions as
-  practice questions (expression answers in SymPy syntax with i, and the prompt says the form to enter). 'reflect' =
+  practice questions (expression answers in SymPy syntax with i, complex numbers in the form $a+bi$, and the prompt
+  says the form to enter). 'reflect' =
   the learner thinks or says the answer, then reveals: answer "", choices [], correct_choice null, answer_display =
   a model answer in one or two sentences. A faded_example's check is never 'reflect'.
 - explanation: the reasoning in one to three sentences, shown after the learner responds. The next block may build
@@ -404,8 +414,11 @@ Look specifically for:
   entries left unexplained;
 - a transition whose reason is not given where it happens ("because $i^2=-1$");
 - a non-routine move whose purpose is not stated before it is made (e.g. "square both equations and add" without
-  saying which quantity that produces and why we want it), or an algebra step that skips the intermediate line
-  (expanded form → factored square) → issue (minor; blocking when it is the procedure's key step);
+  saying which quantity that produces and why we want it), a move justified only by its mechanism or immediate effect
+  ("this makes the cross-products opposites", "to cancel the imaginary terms") without saying why that intermediate
+  result helps reach the goal, a sentence that refers to or rebuts a move before the move has been introduced, or an
+  algebra step that skips the intermediate line (expanded form → factored square) → issue (minor; blocking when it is
+  the procedure's key step);
 - a faded example whose check is a 'reflect' question instead of the graded missing step;
 - a lesson on checking supplied answers whose failing candidates fail in every coordinate, or whose "one coordinate
   is not enough" point rests only on an invented value (no computed candidate matching in exactly one coordinate);
@@ -436,16 +449,32 @@ Look specifically for:
 - a knowledge point that demonstrates nothing new over the previous one, or a target_questions larger than the
   point's real variety (the learner would repeat themselves) → issue (blocking for a repeating knowledge point,
   minor for an inflated target); repair: drop / merge it, or lower target_questions;
-- the capstone: missing, not multistep, a step that only repeats a practice question, or steps that do not chain
-  (independent mini-questions instead of one problem whose later steps use earlier results) → issue (blocking) at
-  "cap"; a wrong step answer → math_errors;
+- the capstone: missing, not multistep, steps that do not chain (independent mini-questions instead of one problem
+  whose later steps use earlier results), steps that together re-run a served practice question, an inline check, the
+  faded example or a worked example on new numbers (whole or split into its sub-steps), a step prompt or the problem
+  giving away the lesson's key decision (e.g. which factor to multiply by), no earlier skill doing real work in a
+  step of its own (only the arithmetic already inside this lesson's procedure), a step whose answer is known before
+  it is computed (stated in the problem or a step prompt, an earlier result again, or forced by a definition: a
+  number times its reciprocal is $1$, multiplying a solution back gives the right side), a hint that contains the
+  whole computation, or a complex result asked as a coordinate pair instead of $a+bi$ → issue (blocking) at "cap";
+  repair: the capstone pattern (an earlier skill produces the input → this lesson's method once → a different move
+  with the result) or drop the offending step; a wrong step answer → math_errors;
+- a question whose answer needs no idea of this lesson: it follows from a prerequisite or outside fact alone, or it
+  is the only special value the prompt allows (e.g. "$a^2+b^2=0$ for real $a,b$ — what is $b$?") → issue (minor) at
+  its key; repair: a decision with a near miss that needs the lesson's idea;
 - main-path content the objective, the success check and the practice do not need (an extra identity or law, a
   digression) → an issue (minor, or blocking when it crowds out needed reasoning); repair: drop it or move it to
   'deeper';
 - an exercise that asks for two things at once ("compute …, then decide …") while only one answer is checked;
-- minor: a block that introduces more than one new idea at once; a check that only asks for reflection where a small
-  computation on the running example was possible; an answer format the prompt does not state clearly (e.g. several
-  roots "in any order" whose stored answer is an ordered tuple instead of a set {{…}}).
+- minor: a block that introduces more than one new idea at once; an inline check — other than the lesson's one
+  explanation ('reflect') check — that only asks for reflection where a small computation on the running example was
+  possible; an answer format the prompt does not state clearly (e.g. several roots "in any order" whose stored answer
+  is an ordered tuple instead of a set {{…}}), or a complex number asked for as a coordinate pair instead of in the
+  form $a+bi$;
+- the one explanation ('reflect') check is wanted: it is ungraded on purpose and asks WHY. Report it (minor) only when
+  it asks for a value or result the learner could compute, or when its model answer repeats a sentence shown just
+  before it; repair: ask for the reason before the text states it, or ask why a tempting alternative fails — never
+  turn it into a numeric check.
 split_recommended: true only when a needed repair would add another substantial objective; say why in split_reason.
 Report only real problems — no clarity scores, no praise, no restating what works. Empty lists are fine.
 {MATH_FORMAT}

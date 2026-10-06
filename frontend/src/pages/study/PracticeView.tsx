@@ -5,7 +5,7 @@ import { Markdown } from "../../components/Markdown";
 import { SourceRefs } from "../../components/SourceRefs";
 import { StateMessage } from "../../components/StateMessage";
 import { kpPosition } from "../../lib/score";
-import type { AnswerResult, Task, TaskProgress } from "../../types";
+import type { AnswerResult, Task } from "../../types";
 import type { SuggestionAction } from "./FeedbackPanel";
 import { KpStepper } from "./KpStepper";
 import { MultistepCard } from "./MultistepCard";
@@ -32,8 +32,10 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
   const explainerOpen = explainer && explainer.kp === progress.kp_index ? explainer.open : progress.kp_questions_used <= 1;
   // The latest answer's progress (score, answered) while its feedback is on screen; the task itself moves on with
   // Continue. Only while the task it answered is still the one shown (Continue, a flag or an easier step replace it).
-  const [scored, setScored] = useState<{ base: Task; progress: TaskProgress } | null>(null);
-  const scoredProgress = scored && scored.base === task ? scored.progress : undefined;
+  const [scored, setScored] = useState<{ base: Task; after: Task } | null>(null);
+  const after = scored && scored.base === task ? scored.after : undefined;
+  // That answer finished the lesson: the meter says how (halted early vs every planned question answered).
+  const end = after && after.phase === "done" ? { outcome: after.outcome, plannedBefore: task.progress.planned } : null;
   // The server decides whether POST /easier would succeed now (a miss in this knowledge point that wasn't voided,
   // and a strictly easier unseen question left), so the button survives reloads and never leads to a 409.
   const easierAllowed = task.type === "lesson" && Boolean(progress.easier_available) && !inCapstone;
@@ -48,7 +50,7 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
   };
 
   const answered = (result: AnswerResult) => {
-    setScored({ base: task, progress: result.task.progress });
+    setScored({ base: task, after: result.task });
     onAnswered(result);
   };
 
@@ -83,7 +85,7 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
 
   return (
     <div className="practice-view">
-      {task.type === "lesson" && lesson && <KpStepper points={lesson.knowledge_points} progress={progress} scored={scoredProgress} />}
+      {task.type === "lesson" && lesson && <KpStepper points={lesson.knowledge_points} progress={progress} scored={after?.progress} end={end} />}
       {task.type === "review" && (
         <div className="review-progress" aria-label={position ?? undefined}>
           {Array.from({ length: total }, (_, i) => (

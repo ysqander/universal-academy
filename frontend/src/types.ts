@@ -115,7 +115,7 @@ export interface SkillNode {
   source_refs: string[];
   figure_ids: string[];
   foundations: string[];
-  misconceptions: string[];
+  misconceptions: string[]; // not shown (SPEC §6.3: no common-mistake lists)
   lesson_status: LessonStatus;
   status: SkillStatus;
   due: boolean;
@@ -123,6 +123,9 @@ export interface SkillNode {
   retrievability: number | null;
   stability_days: number | null;
   reviews: number;
+  // A halted lesson is not offered again before this (ISO, UTC); starting it earlier is a 409 unless force=true.
+  // Optional: older servers don't send it (then only the 409 tells).
+  cooldown_until?: string | null;
 }
 
 export interface SkillEdge {
@@ -278,6 +281,7 @@ export interface StepResult {
   feedback: string;
   answer_display: string;
   explanation: string;
+  revealed?: boolean; // the step's answer was shown ("Show solution"): 0 points (older servers: absent)
 }
 
 export interface QuestionPublic {
@@ -419,6 +423,7 @@ export interface TaskProgress {
   pass_mark: number; // 0.8
   in_capstone: boolean; // the final multistep problem is being answered
   has_capstone: boolean; // the task ends with (or includes) a capstone
+  halted?: boolean; // lesson stopped early (80 % became unreachable with planned questions left); older servers: absent
 }
 
 export interface Task {
@@ -433,6 +438,7 @@ export interface Task {
   question: QuestionPublic | null;
   progress: TaskProgress;
   outcome: TaskOutcome | null;
+  cooldown_until?: string | null; // failed lesson: when it comes back (ISO UTC); null = no pause (e.g. after a flag)
 }
 
 export interface SessionInfo {
@@ -461,7 +467,7 @@ export interface StartTaskRequest {
   skill_id: string;
   type?: TaskType | null;
   replace_active?: boolean; // another task is active: 409 unless true (then it is abandoned)
-  force?: boolean; // learn a locked skill anyway
+  force?: boolean; // learn a locked skill anyway / start a lesson during its cooldown
 }
 
 export type SelfGrade = "correct" | "partial" | "incorrect";
@@ -492,6 +498,9 @@ export interface AnswerResult {
   score: number; // points for this question (1 / 0.5 / 0; multistep: mean of its steps)
   step_result: StepResult | null; // multistep: the step just answered
   question_done: boolean; // false while a multistep question still has steps
+  // What the answer changed in the task (extra question next, capstone next, lesson passed …); also appended to
+  // `feedback`. Older servers: absent (multistep notes are then read from the end of `feedback`).
+  note?: string;
 }
 
 // free_response: send the committed answer so the reveal counts as a comparison, not as assistance.

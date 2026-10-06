@@ -86,6 +86,21 @@
   color: var(--danger);
 }
 
+/* A halted lesson cooling down: the return time stands where the start button would be. */
+.skill-details__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  background: var(--status-progress-bg);
+  color: var(--status-progress);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .drawer-section {
   display: flex;
   flex-direction: column;
@@ -198,21 +213,6 @@
   font-size: var(--text-lg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-}
-
-.misconceptions {
-  margin: 0;
-  padding-left: 1.2em;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  font-family: var(--font-serif);
-  font-size: var(--text-base);
-  line-height: 1.5;
-}
-
-.misconceptions li::marker {
-  color: var(--status-due);
 }
 
 .foundation-check {

@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { stripStockVerdict } from "../../lib/feedback";
-import { earnedSteps, stepsSummary } from "../../lib/multistep";
-import { pointsLabel, progressNote } from "../../lib/score";
+import { earnedSteps, multistepNote, stepsSummary } from "../../lib/multistep";
+import { pointsLabel, progressNote, withoutPassNote } from "../../lib/score";
 import type { AnswerResult, StepResult, Task } from "../../types";
 
 export type SuggestionAction = "easier" | "reread" | "map";
@@ -13,6 +13,8 @@ export interface StepsSummary {
   results: StepResult[];
   total: number;
   capstone: boolean;
+  /** Steps answered with "Show solution". */
+  revealed?: ReadonlySet<number>;
 }
 
 interface FeedbackPanelProps {
@@ -42,8 +44,10 @@ function toneOf(result: AnswerResult, steps: StepsSummary | null): Tone {
   if (steps) {
     const earned = earnedSteps(steps.results);
     if (earned >= steps.total) return { tone: "correct", icon: "check", title: `All ${steps.total} steps right`, note: null };
-    return earned > 0
-      ? { tone: "partial", icon: "steps", title: stepsSummary(steps.results, steps.total), note: null }
+    if (earned > 0) return { tone: "partial", icon: "steps", title: stepsSummary(steps.results, steps.total), note: null };
+    const allShown = steps.results.length > 0 && steps.results.every((r) => steps.revealed?.has(r.index));
+    return allShown
+      ? { tone: "neutral", icon: "eye", title: stepsSummary(steps.results, steps.total), note: "Every step's solution was shown — read it through once more below." }
       : { tone: "incorrect", icon: "x", title: stepsSummary(steps.results, steps.total), note: "Read the steps above once more — the full solution is below." };
   }
   // Help used is said once, in the points line under the title ("½ point — with a hint").
@@ -65,9 +69,10 @@ export function FeedbackPanel({ result, answerShown = false, revealed = false, s
   const panelRef = useRef<HTMLElement>(null);
   const tone = toneOf(result, steps);
   // "Not quite." under the title "Not quite" only repeats the verdict: show what the grader adds to it, if anything.
-  // Multistep: each step's feedback is in its step card and the summary is the title, so the server's
-  // question-level text (last step's feedback + a recap) would only repeat them.
-  const feedback = steps ? "" : stripStockVerdict(result.feedback);
+  // Multistep: each step's feedback is in its step card and the summary is the title, so of the server's
+  // question-level text only its note is kept (extra question next, the capstone next…), not the last step's
+  // verdict and the recap. The server's "Lesson passed with N%." is said once, by the progress note below.
+  const feedback = withoutPassNote(steps ? multistepNote(result) : stripStockVerdict(result.feedback));
   const toneNote = tone.note;
   const points = steps ? (steps.capstone ? "Counts double in your score" : null) : pointsLabel(result, revealed);
   const note = progressNote(before, result.task, `${feedback} ${result.suggestion_text ?? ""}`);

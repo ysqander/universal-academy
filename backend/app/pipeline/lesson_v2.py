@@ -54,15 +54,17 @@ from .context import (
 from .lessons import (
     InvalidLesson,
     abandon_active_tasks,
+    capstone_problems,
     figures_for_skill,
     free_response_problem,
     is_proof_skill,
     resolve_figures,
     retire_questions,
+    validate_capstone,
     validate_lesson,
 )
 from .prompts_v2 import PLANNER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, REVISION_NOTE, WRITER_INSTRUCTIONS
-from .questions import CAPSTONE_KEY, InvalidQuestion, clean_question, insert_questions
+from .questions import InvalidQuestion, clean_capstone, clean_question, insert_questions
 from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
 from .verify import verify_skill
 from .visuals import FINALIZE_TIMEOUT, finalize_plan
@@ -436,7 +438,9 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
         f"Starting point: {spec.starting_point}",
         "Reasoning sequence (the bridges, in order — each one belongs in the main path):",
         *[f"{i}. {step}" for i, step in enumerate(spec.reasoning_sequence, start=1)],
-        f"Success check: {spec.success_check}",
+        f"Success check — the planner's idea for the capstone (where it conflicts with the CAPSTONE rules, the rules "
+        f"win: no step whose answer is known in advance, no practice question split into steps, complex results in "
+        f"the form $a+bi$): {spec.success_check}",
         "Planned representations:",
         *(
             [f"- {r.format}: helps the learner notice {r.helps_notice} — read it as: {r.how_to_read}" for r in spec.representations]
@@ -666,7 +670,7 @@ def review_request(spec: TeachingSpec, draft: LessonV2Draft, *, key: str, revise
         *([f"- {o}" for o in spec.out_of_scope] or ["- (none)"]),
         "Planned reasoning sequence:",
         *[f"{i}. {s}" for i, s in enumerate(spec.reasoning_sequence, start=1)],
-        f"Success check: {spec.success_check}",
+        f"Success check (the planner's idea for the capstone; the capstone rules take precedence): {spec.success_check}",
         "",
         "LESSON DRAFT",
         render_lesson(draft),
@@ -793,32 +797,15 @@ def clean_inline_check(check: InlineCheck) -> dict[str, Any]:
     }
 
 
-def clean_capstone(q: QuestionDraft) -> QuestionDraft:
-    """The lesson's final problem: a valid multistep question (2-4 machine-checked steps, each with a hint and an
-    explanation), stored with key 'cap' and tier 3. Raises InvalidQuestion."""
-    if q.kind != "multistep":
-        raise InvalidQuestion(f"must be a multistep question (2–4 guided, machine-checked steps), not {q.kind}")
-    return clean_question(q).model_copy(update={"key": CAPSTONE_KEY, "tier": 3})
-
-
-def capstone_problem(draft: LessonV2Draft) -> str | None:
-    try:
-        clean_capstone(draft.capstone)
-    except InvalidQuestion as e:
-        return f"capstone: {e}"
-    return None
-
-
 def content_problems(draft: LessonV2Draft) -> list[str]:
     """The content rules a strict validation may not reach after its first problem: no free_response anywhere, and a
-    valid multistep capstone."""
+    valid multistep capstone with no step whose answer is known in advance (capstone_problems)."""
     problems = [
         free_response_problem(i, [q.key or "?" for q in kp.questions if q.kind == "free_response"])
         for i, kp in enumerate(draft.knowledge_points)
         if any(q.kind == "free_response" for q in kp.questions)
     ]
-    cap = capstone_problem(draft)
-    return problems + ([cap] if cap else [])
+    return problems + capstone_problems(draft.capstone)
 
 
 def clean_goal(text: str) -> str:
@@ -910,18 +897,14 @@ async def validate_v2(
         knowledge_points=draft.knowledge_points,
         missing_steps="",
         common_mistakes=[],
+        capstone=draft.capstone,
         connection=draft.connection,
         source_refs=draft.source_refs or spec.source_refs,
     )
     base, pools, kp_notes = validate_lesson(as_v1, proof=proof, strict=strict)
     notes += [n for n in kp_notes if not n.startswith("proof skill without a multistep")]
-    try:
-        capstone: QuestionDraft | None = clean_capstone(draft.capstone)
-    except InvalidQuestion as e:
-        if strict:
-            raise InvalidLesson(f"capstone: {e}") from e
-        capstone = None
-        notes.append(f"no valid capstone (capstone: {e}) — the lesson ends after the practice")
+    capstone, cap_notes = validate_capstone(draft.capstone, strict=strict)
+    notes += cap_notes
     lesson = {
         "format": "v2",
         "title": spec.title,

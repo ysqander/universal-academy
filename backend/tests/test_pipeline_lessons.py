@@ -120,7 +120,8 @@ def test_proof_lessons_are_practised_with_multistep_walkthroughs(tmp_path):
     rows = db.query("SELECT kind, steps_json, role FROM questions WHERE skill_id = ? ORDER BY rowid", (s2["id"],))
     assert not any(r["kind"] == "free_response" for r in rows)
     multistep = [r for r in rows if r["kind"] == "multistep"]
-    assert multistep and all(len(db.loads(r["steps_json"])) == 3 and r["role"] == "practice" for r in multistep)
+    assert multistep and all(len(db.loads(r["steps_json"])) == 3 for r in multistep)
+    assert [r["role"] for r in multistep].count("capstone") == 1 and rows[-1]["role"] == "capstone"  # stored last
     assert all(db.loads(r["steps_json"]) == [] for r in rows if r["kind"] != "multistep")
 
 

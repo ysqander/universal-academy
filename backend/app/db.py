@@ -235,6 +235,12 @@ CREATE INDEX IF NOT EXISTS idx_attempts_task ON attempts(task_id);
 CREATE INDEX IF NOT EXISTS idx_xp_course ON xp_log(course_id, created_at);
 """
 
+# Columns added after the first release: (table, column, DDL). Applied idempotently by init_db().
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("questions", "steps_json", "ALTER TABLE questions ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]'"),
+    ("questions", "role", "ALTER TABLE questions ADD COLUMN role TEXT NOT NULL DEFAULT 'practice'"),  # practice | capstone
+]
+
 _init_lock = threading.Lock()
 _initialized_for: str | None = None
 
@@ -248,6 +254,10 @@ def init_db() -> None:
         conn = sqlite3.connect(settings.db_path)
         try:
             conn.executescript(SCHEMA)
+            for table, column, ddl in MIGRATIONS:
+                columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if column not in columns:
+                    conn.execute(ddl)
             conn.commit()
         finally:
             conn.close()

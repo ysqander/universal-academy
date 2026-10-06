@@ -218,7 +218,24 @@ class VisualizationFrame(BaseModel):
     note: str = ""
 
 
-QuestionKindT = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression", "free_response"]
+QuestionKindT = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression", "free_response", "multistep"]
+
+
+class MultistepStepPublic(BaseModel):
+    index: int
+    prompt: str
+    kind: Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression"]
+    choices: list[str]
+    hint: str  # one hint per step; using it (POST /api/questions/{qid}/hint?step=i) halves the step's point
+
+
+class StepResult(BaseModel):
+    index: int
+    correct: bool
+    score: float  # 1 independent, 0.5 with the hint, 0 wrong
+    feedback: str
+    answer_display: str
+    explanation: str
 
 
 class QuestionPublic(BaseModel):
@@ -239,10 +256,15 @@ class QuestionPublic(BaseModel):
     hints_used: int = 0  # hints already shown for the current attempt (server-recorded; survives reloads)
     revealed: bool = False  # the solution was revealed for the current attempt (server-recorded)
     committed_response: str | None = None  # free_response: the answer committed before a comparison reveal
+    role: Literal["practice", "capstone"] = "practice"  # capstone = the lesson's final multistep problem
+    steps: list[MultistepStepPublic] = Field(default_factory=list)  # multistep only
+    step_index: int = 0  # multistep: the step to answer next in the current attempt (server-recorded)
+    step_results: list[StepResult] = Field(default_factory=list)  # multistep: steps already answered (for reloads)
 
 
 class KnowledgePoint(BaseModel):
     index: int
+    target_questions: int = 2  # questions the learner answers to demonstrate this KP
     title: str
     explanation: str
     worked_example: WorkedExample
@@ -320,8 +342,10 @@ TaskOutcome = Literal["passed", "failed", "abandoned"]
 
 
 class TaskProgress(BaseModel):
-    """Lesson: per knowledge point, 2 independent correct answers in a row pass the KP (Math Academy rule).
-    Review: `answered`/`total_questions` over a short mixed set."""
+    """Lesson (SPEC §6.3): each knowledge point serves its target number of questions (+1 after a miss), then the
+    multistep capstone; points 1 independent / 0.5 with a hint / 0 wrong or revealed; pass at score >= pass_mark.
+    Review: `answered`/`total_questions` over a short mixed set, same points and pass mark.
+    streak / needed_in_row are legacy (kept for older clients)."""
 
     kp_index: int  # current knowledge point (lesson) — 0 for reviews
     kp_total: int  # number of knowledge points (lesson) — 1 for reviews
@@ -334,6 +358,13 @@ class TaskProgress(BaseModel):
     total_questions: int  # reviews: questions in the set; lessons: 0 (open-ended)
     kp_wrong: int = 0  # wrong answers so far in the current KP (lesson)
     easier_available: bool = False  # POST /easier would succeed now (after a miss, and an easier question exists)
+    kp_target: int = 0  # questions planned for the current KP (lesson)
+    points: float = 0.0  # points earned so far in this task
+    max_points: float = 0.0  # points possible for the questions answered so far
+    score: float = 0.0  # points / max_points (0-1)
+    planned: int = 0  # questions planned for the whole task (lesson: sum of KP targets + capstone)
+    pass_mark: float = 0.8
+    in_capstone: bool = False  # the lesson's final multistep problem is being answered
 
 
 class Task(BaseModel):
@@ -392,11 +423,12 @@ class AnswerSubmit(BaseModel):
     hints_used: int = 0
     revealed_solution: bool = False
     seconds: float = 0.0
+    step: int | None = None  # multistep: index of the step being answered (one submission per step)
 
 
 class AnswerResult(BaseModel):
     correct: bool
-    status: Literal["correct", "incorrect", "self_graded", "voided"]
+    status: Literal["correct", "incorrect", "self_graded", "voided", "step"]  # "step": a multistep step, more to come
     independent: bool  # counted toward passing (no hints, no reveal)
     feedback: str  # short message, e.g. "Equivalent to the expected answer." / "Close: check the sign of the imaginary part."
     correct_answer: str  # answer_display
@@ -406,6 +438,9 @@ class AnswerResult(BaseModel):
     xp_awarded: int = 0
     suggestion: Literal["easier_step", "review_prerequisite", "reread_example", "retry_later"] | None = None
     suggestion_text: str | None = None
+    score: float = 0.0  # points earned for this question (1 / 0.5 / 0; multistep: mean of its steps)
+    step_result: StepResult | None = None  # multistep: the step just answered
+    question_done: bool = True  # False while a multistep question still has steps to answer
 
 
 class RevealRequest(BaseModel):

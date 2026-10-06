@@ -125,7 +125,22 @@ class KnowledgeGraphDraft(BaseModel):
 # Stage 3 — lesson package per skill
 # ---------------------------------------------------------------------------
 
-QuestionKind = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression", "free_response"]
+QuestionKind = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression", "free_response", "multistep"]
+StepKind = Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression"]
+
+
+class MultistepStep(BaseModel):
+    """One guided, machine-checked step of a multistep problem (the learner sees the result before the next step)."""
+
+    prompt: str = Field(description="What to do in this step (Markdown + LaTeX); may refer to the results of earlier steps.")
+    kind: StepKind
+    choices: list[str] = Field(description="Same conventions as QuestionDraft.choices for the step's kind; [] for numeric/expression.")
+    correct_choice: int | None
+    answer: str = Field(description="Same conventions as QuestionDraft.answer for the step's kind.")
+    answer_display: str
+    tolerance: float | None
+    hint: str = Field(description="One hint for this step (using it halves the step's point).")
+    explanation: str = Field(description="Shown after the step is answered: why this is the right result (1-2 sentences).")
 
 
 class NotationItem(BaseModel):
@@ -173,16 +188,26 @@ class QuestionDraft(BaseModel):
     )
     targets: str = Field(description="Which part of the objective or which misconception this question assesses.")
     source_exercise: str | None = Field(description="If adapted from a book exercise, its reference (e.g. 'Exercise 1A.3'); else null.")
+    steps: list[MultistepStep] = Field(
+        description="multistep only: 2-4 guided steps that chain the lesson's ideas (and earlier skills) into one problem; otherwise []."
+    )
 
 
 class KnowledgePointDraft(BaseModel):
     title: str = Field(description="Short name of this step of the skill, e.g. 'Multiplying two complex numbers'.")
     explanation: str = Field(description="2-6 sentences (Markdown + LaTeX) introducing just this knowledge point.")
     worked_example: WorkedExample
+    target_questions: int = Field(
+        description=(
+            "How many questions the learner must answer to demonstrate THIS knowledge point (1-3): 1 when a single "
+            "answer shows it, 2-3 only when the point has real variety. Never pad with repetition."
+        )
+    )
     questions: list[QuestionDraft] = Field(
         description=(
-            "Exactly 4 questions of the same problem type as the worked example, different numbers/objects each, "
-            "all at this knowledge point's difficulty. At least 3 machine-checkable (not free_response)."
+            "target_questions + 2 questions (the extra ones are served after a miss and in reviews), each asking "
+            "something different (a new case, a prediction, spotting an error, a reverse problem), not the same "
+            "procedure with new numbers. Machine-checkable kinds only (no free_response)."
         )
     )
 
@@ -422,7 +447,12 @@ class LessonV2Draft(BaseModel):
     knowledge_points: list[KnowledgePointDraft] = Field(
         description="Practice after the teaching sequence: 1-3 knowledge points (short reminder + a fresh worked example + 4 questions)."
     )
-    common_mistakes: list[str]
+    capstone: QuestionDraft = Field(
+        description=(
+            "The final multistep problem (kind 'multistep', 2-4 steps) that makes the learner chain the lesson's "
+            "ideas — and earlier skills — to solve one problem. Each step machine-checked; key 'cap'."
+        )
+    )
     connection: str = Field(description="1-2 sentences: what this enables next.")
     deeper: str = Field(
         description="Optional 'Go deeper': an alternative explanation or deeper derivation; never reasoning needed for the objective. '' if none."

@@ -252,7 +252,33 @@ export interface WorkedExample {
   takeaway: string;
 }
 
-export type QuestionKind = "multiple_choice" | "true_false" | "true_false_set" | "numeric" | "expression" | "free_response";
+export type QuestionKind =
+  | "multiple_choice"
+  | "true_false"
+  | "true_false_set"
+  | "numeric"
+  | "expression"
+  | "free_response"
+  | "multistep";
+
+export type StepKind = "multiple_choice" | "true_false" | "true_false_set" | "numeric" | "expression";
+
+export interface MultistepStepPublic {
+  index: number;
+  prompt: string;
+  kind: StepKind;
+  choices: string[];
+  hint: string; // using it (POST /api/questions/{qid}/hint?step=i) halves the step's point
+}
+
+export interface StepResult {
+  index: number;
+  correct: boolean;
+  score: number; // 1 independent, 0.5 with the hint, 0 wrong
+  feedback: string;
+  answer_display: string;
+  explanation: string;
+}
 
 export interface QuestionPublic {
   id: string;
@@ -270,6 +296,10 @@ export interface QuestionPublic {
   hints_used: number; // hints already shown for this attempt (server-recorded)
   revealed: boolean; // solution revealed for the current attempt (server-recorded)
   committed_response: string | null; // free_response: answer committed before a comparison reveal
+  role: "practice" | "capstone"; // capstone = the lesson's final multistep problem
+  steps: MultistepStepPublic[]; // multistep only
+  step_index: number; // multistep: next step to answer (server-recorded)
+  step_results: StepResult[]; // multistep: steps already answered in this attempt
 }
 
 export interface SkillRef {
@@ -281,6 +311,7 @@ export interface SkillRef {
 
 export interface KnowledgePoint {
   index: number;
+  target_questions: number; // questions answered to demonstrate this KP
   title: string;
   explanation: string;
   worked_example: WorkedExample;
@@ -378,6 +409,13 @@ export interface TaskProgress {
   total_questions: number; // reviews: size of the set; lessons: 0
   kp_wrong: number; // wrong answers so far in the current KP
   easier_available: boolean; // POST /easier would succeed now
+  kp_target: number; // questions planned for the current KP
+  points: number; // points earned so far in this task
+  max_points: number; // points possible for the questions answered so far
+  score: number; // points / max_points (0-1)
+  planned: number; // questions planned for the whole task (lesson: KP targets + capstone)
+  pass_mark: number; // 0.8
+  in_capstone: boolean; // the final multistep problem is being answered
 }
 
 export interface Task {
@@ -433,11 +471,12 @@ export interface AnswerSubmit {
   hints_used: number;
   revealed_solution: boolean;
   seconds: number;
+  step?: number | null; // multistep: index of the step being answered
 }
 
 export interface AnswerResult {
   correct: boolean;
-  status: "correct" | "incorrect" | "self_graded" | "voided";
+  status: "correct" | "incorrect" | "self_graded" | "voided" | "step"; // "step": a multistep step, more to come
   independent: boolean;
   feedback: string;
   correct_answer: string;
@@ -447,6 +486,9 @@ export interface AnswerResult {
   xp_awarded: number;
   suggestion: "easier_step" | "review_prerequisite" | "reread_example" | "retry_later" | null;
   suggestion_text: string | null;
+  score: number; // points for this question (1 / 0.5 / 0; multistep: mean of its steps)
+  step_result: StepResult | null; // multistep: the step just answered
+  question_done: boolean; // false while a multistep question still has steps
 }
 
 // free_response: send the committed answer so the reveal counts as a comparison, not as assistance.

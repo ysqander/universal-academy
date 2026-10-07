@@ -8,3 +8,5 @@ frontend/dist/
 .DS_Store
 .playwright-mcp/
 .claude/
+backups/
+data-moved-*/

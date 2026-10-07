@@ -15,7 +15,7 @@ FastAPI (Python 3.12, uvicorn)
    ├─ learning/    grading, FSRS + FIRe-lite scheduler, task selector, XP
    ├─ api/         routers: books, courses, study
    └─ llm.py       OpenAI wrapper (structured outputs, retries, concurrency, fake mode)
-SQLite (data/academy.sqlite3) + files (data/books/<book_id>/…, data/courses/<course_id>/…)
+SQLite (<data>/academy.sqlite3) + files (<data>/books/<book_id>/…, <data>/courses/<course_id>/…); <data> = UA_DATA_DIR, default ~/Library/Application Support/UniversalAcademy (outside the cloud-synced project)
 External: OpenAI Responses API · NVIDIA Nemotron Parse (build.nvidia.com, optional)
 ```
 
@@ -24,17 +24,17 @@ Run: `./run.sh` (builds frontend if needed, starts uvicorn on :8000). Dev: `uvic
 ## 2. Files on disk (DB paths are stored relative to the data dir, so the data folder can move)
 
 ```
-data/books/<book_id>/book.pdf
-data/books/<book_id>/pages/<page>@<dpi>.png        # cached renders (thumbnails + source viewer)
-data/courses/<course_id>/pages/<page>.png          # parse-resolution renders (UA_RENDER_DPI, default 200)
-data/courses/<course_id>/marks/<page>.png          # renders with numbered candidate boxes (set-of-mark prompt)
-data/courses/<course_id>/figures/<figure_id>.png   # cropped figures (2x scale, small padding)
+<data>/books/<book_id>/book.pdf
+<data>/books/<book_id>/pages/<page>@<dpi>.png        # cached renders (thumbnails + source viewer)
+<data>/courses/<course_id>/pages/<page>.png          # parse-resolution renders (UA_RENDER_DPI, default 200)
+<data>/courses/<course_id>/marks/<page>.png          # renders with numbered candidate boxes (set-of-mark prompt)
+<data>/courses/<course_id>/figures/<figure_id>.png   # cropped figures (2x scale, small padding)
 ```
 
 ## 3. Ingestion
 
 ### 3.1 Book import
-- `POST /api/books` (multipart `file`) or `POST /api/books/import-path {path}` (local file path; copied into data/).
+- `POST /api/books` (multipart `file`) or `POST /api/books/import-path {path}` (local file path; copied into <data>/).
 - Extract metadata title/author (fallback: filename), page count, page labels (`page.get_label()` → fallback str(i+1)).
 - Outline: `doc.get_toc()` → nested `OutlineNode` tree. end_page of a node = (nearest later start at the same or higher level, in page order) − 1, or that start page itself when the next section begins below the top of its page (TOC destination y; if unknown, the shared page is included); clamped into the parent's range; the last top-level node ends at the last page. Ids `n0..nN` in TOC order. Titles are prettified at import (R^n → Rⁿ, x^2 → x²).
 - No outline → `outline_source="detected"`: send the text layer of the first ~25 pages to the LLM to detect the table of contents (chapters/sections with printed page numbers), then map printed numbers → PDF indexes via page labels (or by detecting the offset where printed number "1" appears). If no text layer, `outline_source="none"` and the UI offers manual page ranges.

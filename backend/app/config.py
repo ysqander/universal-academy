@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,6 +11,14 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
+def default_data_dir() -> Path:
+    """Live data (SQLite + files) stays OUT of the project folder, which is cloud-synced: syncing a database while it
+    is written can leave torn "conflict" copies. macOS: ~/Library/Application Support/UniversalAcademy."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "UniversalAcademy"
+    return Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "universal-academy"
 
 
 def _env(name: str, default: str) -> str:
@@ -45,7 +54,7 @@ class Settings:
     render_dpi: int = field(default_factory=lambda: int(_env("UA_RENDER_DPI", "200")))
     max_course_pages: int = field(default_factory=lambda: int(_env("UA_MAX_COURSE_PAGES", "80")))
 
-    data_dir: Path = field(default_factory=lambda: Path(_env("UA_DATA_DIR", str(PROJECT_ROOT / "data"))))
+    data_dir: Path = field(default_factory=lambda: Path(_env("UA_DATA_DIR", str(default_data_dir()))))
 
     # Set UA_FAKE_LLM=1 to run the whole pipeline offline against canned responses (tests / UI dev).
     fake_llm: bool = field(default_factory=lambda: _env("UA_FAKE_LLM", "0") == "1")

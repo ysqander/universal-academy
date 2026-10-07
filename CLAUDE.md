@@ -30,5 +30,6 @@ cd frontend && npm run build && npm run lint && npm test
 
 - Never read or print `.env` (API keys).
 - Test servers: blank keys or `UA_FAKE_LLM=1`, so nothing calls a paid API by accident.
-- `data/` holds the learner's real course and progress: don't write to it except through the app or the
-  `backend/scripts/` tools (stop the app first; they back up the database).
+- The learner's real course and progress live in `~/Library/Application Support/UniversalAcademy` (outside this
+  cloud-synced folder; `UA_DATA_DIR` overrides). Don't write to it except through the app or the `backend/scripts/`
+  tools (stop the app first; they back up the database). Daily snapshots go to `backups/` here.

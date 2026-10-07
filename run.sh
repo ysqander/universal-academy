@@ -32,5 +32,14 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Starting Universal Academy at http://localhost:$PORT (Ctrl-C to stop)"
+# Live data lives outside this (cloud-synced) folder; only a closed daily snapshot is written here to be synced.
+DATA_DIR="${UA_DATA_DIR:-$(.venv/bin/python -c 'from app.config import settings; print(settings.data_dir)')}"
+if [ -f "$DATA_DIR/academy.sqlite3" ]; then
+  mkdir -p "$ROOT/backups"
+  SNAPSHOT="$ROOT/backups/academy-$(date +%Y-%m-%d).sqlite3"
+  [ -f "$SNAPSHOT" ] || sqlite3 "$DATA_DIR/academy.sqlite3" ".backup '$SNAPSHOT'"
+  ls -1t "$ROOT"/backups/academy-*.sqlite3 2>/dev/null | tail -n +15 | while read -r old; do rm -f "$old"; done
+fi
+
+echo "Starting Universal Academy at http://localhost:$PORT (Ctrl-C to stop) — data in $DATA_DIR"
 exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT"

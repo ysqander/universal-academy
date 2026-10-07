@@ -4,6 +4,9 @@ choices; disagreements and reported defects are flagged (kept out of serving and
 A true_false_set disagreement is re-solved once, statement by statement against the stated definitions (role
 "graph"): a single misread statement of the first solver must not flag a correct question. When that careful second
 solve agrees with the key the question stays servable (status 'agree_on_recheck', both solves recorded, logged).
+A "reported problem" (the solver agreed with the key but named a defect, e.g. "option 3 is also correct", or was
+unsure) is re-checked the same way, with the reported defect shown: one weak-model false alarm must not withhold a
+question — or a whole capstone.
 
 A multistep question (a guided problem, e.g. the lesson's capstone) is verified step by step: the solver gets the
 problem, the earlier steps with their correct results and the current step — never its answer — and its answer is
@@ -169,16 +172,34 @@ def _describe(row: dict[str, Any], independent: IndependentAnswer) -> str:
     return repr(independent.answer)
 
 
+def _reported(first: Verdict) -> str:
+    """The defect a first solve reported while agreeing with the key ('' for a disagreement)."""
+    if first.record.get("status") != "problem":
+        return ""
+    independent = first.record.get("independent") or {}
+    return (independent.get("problems") or "").strip() or f"low confidence ({independent.get('confidence', 0):.2f})"
+
+
 async def recheck(
     row: dict[str, Any], first: Verdict, *, text: str | None = None, instructions: str = VERIFY_STATEMENTS_RECHECK
 ) -> Verdict:
-    """Second, careful solve of a disagreement (a true_false_set, or a step of a multistep question) by the stronger
-    'graph' model. Agreement with the key keeps the question servable; a failed call keeps the first verdict."""
+    """Second, careful solve by the stronger 'graph' model of a disagreement (a true_false_set, or a step of a
+    multistep question) or of a reported problem (shown to the second solver, who judges whether it is real).
+    Agreement with the key and no confirmed defect keep the question servable; a failed call keeps the first
+    verdict."""
+    request = text if text is not None else verify_request(row)
+    reported = _reported(first)
+    if reported:
+        request += (
+            f"\n\nA first solver reached the same answer but reported a possible defect: {reported}\n"
+            "Decide whether it is real (for a choice: is another option also correct, or none of them?). Put a "
+            "defect in `problems` only if it is real; otherwise leave `problems` empty."
+        )
     try:
         second = await llm.structured(
             role="graph",
             instructions=instructions,
-            text=text if text is not None else verify_request(row),
+            text=request,
             shared_prefix=_setting_for(row) or None,
             schema=IndependentAnswer,
             max_output_tokens=32000,
@@ -192,9 +213,10 @@ async def recheck(
     record = {**first.record, "status": verdict.record["status"], "recheck": second.model_dump()}
     first_answer = _describe(row, IndependentAnswer.model_validate(first.record["independent"]))
     if not verdict.flagged:
+        first_said = f"reported {reported!r}" if reported else f"answered {first_answer}"
         note = (
-            f"{row['key']}: the independent solver answered {first_answer}, a careful re-check agreed with the key "
-            f"{row['answer']!r} — kept"
+            f"{row['key']}: the independent solver {first_said}, a careful re-check agreed with the key "
+            f"{row['answer'] or row['correct_choice']!r} and found no defect — kept"
         )
         log.info("verification: %s", note)
         return Verdict(False, "", {**record, "status": "agree_on_recheck"}, note)
@@ -228,8 +250,10 @@ async def _verify_single(row: dict[str, Any]) -> Verdict | None:
     if independent is None:
         return None
     verdict = judge(row, independent)
-    if verdict.record["status"] == "disagree" and row["kind"] in RECHECK_KINDS:
-        verdict = await recheck(row, verdict)
+    status = verdict.record["status"]
+    if (status == "disagree" and row["kind"] in RECHECK_KINDS) or status == "problem":
+        instructions = VERIFY_STATEMENTS_RECHECK if row["kind"] == "true_false_set" else VERIFY_INSTRUCTIONS
+        verdict = await recheck(row, verdict, instructions=instructions)
     return verdict
 
 
@@ -306,7 +330,7 @@ async def verify_multistep(row: dict[str, Any]) -> Verdict | None:
     async def judged(i: int, independent: IndependentAnswer) -> Verdict:
         srow = step_row(row, steps, i)
         verdict = judge(srow, independent)
-        if verdict.record["status"] == "disagree":
+        if verdict.record["status"] in ("disagree", "problem"):
             verdict = await recheck(srow, verdict, text=texts[i], instructions=_step_recheck_instructions(steps[i]["kind"]))
         return verdict
 

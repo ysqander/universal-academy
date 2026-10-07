@@ -486,6 +486,27 @@ def capstone_issues(q: QuestionDraft) -> list[tuple[int, str]]:
     return issues
 
 
+_STEP_REF = re.compile(r"\bsteps?\s+(\d+)", re.IGNORECASE)
+
+
+def step_reference_problems(q: QuestionDraft) -> list[str]:
+    """References to steps that do not exist (after a step was dropped, "the root from Step 3" in a 2-step problem) or
+    that a step prompt cannot use yet (step 2 asking for "your result from step 2")."""
+    n = len(q.steps)
+    problems = []
+    for k in {int(m) for m in _STEP_REF.findall(q.prompt or "")}:
+        if not 1 <= k <= n:
+            problems.append(f"the problem refers to step {k}, but there are {n} steps")
+    for i, step in enumerate(q.steps, start=1):
+        for k in sorted({int(m) for m in _STEP_REF.findall(step.prompt or "")}):
+            if not 1 <= k < i:
+                problems.append(f"step {i} refers to step {k}, whose result is not known yet (or that does not exist)")
+        for k in sorted({int(m) for m in _STEP_REF.findall(f"{step.hint} {step.explanation}")}):
+            if not 1 <= k <= n:
+                problems.append(f"step {i}'s hint or explanation refers to step {k}, which does not exist")
+    return problems
+
+
 def _forced(value: complex, known: list[tuple[complex, ...]]) -> bool:
     scalars = list(dict.fromkeys(v[0] for v in known if len(v) == 1))
     if abs(value - 1) < 1e-9:

@@ -86,6 +86,11 @@ an earlier step, or forced by a definition such as "multiply back and get 1"). V
 Why: the learner wanted guided, verifiable multi-step problems instead of "show your working", ending a series of
 simpler questions so it proves they can chain concepts.
 
+A broken capstone is **rewritten, not cut** (2026-10-07): when the capstone still breaks a rule after the lesson's
+revision, or verification withholds it, the writer rewrites only the capstone (strictly validated, verified again).
+Dropping a step left dangling "the root from Step 2" references in S2d, and a withheld capstone left S4a without one.
+A step may refer only to earlier steps that exist. Stored lessons: `scripts/regenerate.py --only capstone [--note …]`.
+
 ## 5. Scoring and progression (SPEC §6.3–§6.4)
 
 - **Points:** 1 independent correct, **0.5 with a hint**, 0 wrong or answered after revealing the solution. A
@@ -127,7 +132,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   (1) and was cheapest ($0.035 per chapter vs $0.48 for Sol); Sol was 2.7× slower. There is no GPT-6 "Terra" tier.
   The test was too easy to rank models finely (8 positives, one run each).
 - **Disagreements on `true_false_set` questions and multistep steps** are re-solved once by `gpt-6.1-sol`;
-  agreement on the re-check keeps the question (`agree_on_recheck`).
+  agreement on the re-check keeps the question (`agree_on_recheck`). So is any **reported problem** (the solver agreed
+  with the key but named a defect, e.g. "option 3 is also correct", or was unsure), with the defect shown to the
+  re-checker (2026-10-07: one such false alarm withheld S4a's whole capstone).
 - **No-model consistency check first:** a key that contradicts the question's own displayed answer is flagged
   (`key_mismatch`) at generation and at verification. It caught 5/6 planted wrong keys with 0 false alarms on 302
   real questions.

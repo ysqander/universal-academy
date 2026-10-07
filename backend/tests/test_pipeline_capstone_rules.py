@@ -16,9 +16,17 @@ from test_pipeline_v2 import built_course, skill_by_title, split_plan
 from app import db, fake_llm
 from app.llm_schemas import LessonDraft, LessonV2Draft, MultistepStep, QuestionDraft
 from app.pipeline import topup
-from app.pipeline.lesson_v2 import content_problems, validate_v2, write_request
+from app.pipeline.lesson_v2 import capstone_defects, content_problems, validate_v2, write_request
 from app.pipeline.lessons import InvalidLesson, capstone_problems, validate_capstone, validate_lesson
-from app.pipeline.questions import capstone_issues, clean_capstone, format_warnings, pair_form_warnings
+from app.pipeline.questions import (
+    capstone_issues,
+    clean_capstone,
+    format_warnings,
+    pair_form_warnings,
+    step_reference_problems,
+)
+from app.pipeline.regenerate import regenerate
+from app.pipeline.verify import verify_question
 from app.pipeline.replan import replan
 from app.views import lesson_view
 
@@ -128,6 +136,110 @@ def test_capstone_validation_is_strict_first_then_drops_the_giveaway_step():
     assert cap is None and any("fewer than 2 steps" in n for n in notes)
     plain = GOOD.model_copy(update={"kind": "expression", "steps": [], "answer": "1"})
     assert capstone_problems(plain) == ["capstone: must be a multistep question (2–4 guided, machine-checked steps), not expression"]
+
+
+def test_capstone_steps_refer_only_to_earlier_steps_that_exist():
+    # what a dropped step left behind in the S2d re-plan of 2026-10-07
+    dangling = capstone("Let $w=(12+5i)-(3+45i)$. Find the roots of $z^2=w$, then use the root from Step 3.", [
+        step("Using your value of $w$, find the root with positive real part. Enter it in the form $a+bi$.", "5-4*i"),
+        step("Let $u$ be the root from Step 2. Compute $(1+u)^2$ in the form $a+bi$.", "20-48*i"),
+    ])
+    problems = step_reference_problems(clean_capstone(dangling))
+    assert any("the problem refers to step 3" in p for p in problems)
+    assert any("step 2 refers to step 2" in p for p in problems)
+    assert any("refers to step" in p for p in capstone_problems(dangling))
+    with pytest.raises(InvalidLesson, match="refers to step"):
+        validate_capstone(dangling)
+    assert step_reference_problems(clean_capstone(GOOD)) == []
+    fine = capstone("Let $w=(2+i)(2-i)$.", [step("Compute $w$.", "5", kind="numeric"),
+                                             step("Using your result from step 1, enter $1/w$.", "1/5", kind="numeric")])
+    assert step_reference_problems(clean_capstone(fine)) == []
+
+
+def _capstone_row(skill_id: str) -> dict:
+    return db.query_one(
+        "SELECT * FROM questions WHERE skill_id = ? AND role = 'capstone' AND key NOT LIKE 'old-%'", (skill_id,)
+    )
+
+
+def test_a_capstone_still_broken_after_the_revision_is_rewritten_not_cut(tmp_path, monkeypatch, llm_calls):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    original = fake_llm.respond
+
+    def giveaway_always(**kwargs):
+        result = original(**kwargs)
+        if kwargs["schema"] is LessonV2Draft:
+            result.capstone = S3A_ABI  # the revision does not fix it either
+        return result
+
+    monkeypatch.setattr(fake_llm, "respond", giveaway_always)
+    llm_calls.clear()
+    result = asyncio.run(replan(cid, key)).results[0]
+    assert result.ok and result.revised and llm_calls["CapstoneRepair"] == 1
+    assert any(n.startswith("capstone rewritten") and "reciprocal is 1" in n for n in result.notes)
+    row = _capstone_row(result.skill_id)
+    assert len(db.loads(row["steps_json"])) == 3 and not row["flagged"]  # all steps kept (none dropped)
+
+
+def test_regenerate_rewrites_only_a_withheld_capstone(tmp_path, llm_calls):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    sid = asyncio.run(replan(cid, key)).results[0].skill_id
+    old = _capstone_row(sid)
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'lesson', 'completed', '{}', ?)",
+        (task_id, cid, sid, db.now_iso()),
+    )
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, response, created_at) VALUES (?,?,?,?,1,'correct','{}',?)",
+        (db.new_id(), task_id, old["id"], sid, db.now_iso()),
+    )
+    db.execute(
+        "UPDATE questions SET flagged = 1, flag_reason = 'verification: step 2: reported problem — option 3 is also correct' WHERE id = ?",
+        (old["id"],),
+    )
+    assert capstone_defects(sid)[0].startswith("it is withheld from the learner — verification: step 2")
+    practice = {r["id"] for r in db.query("SELECT id FROM questions WHERE skill_id = ? AND role != 'capstone'", (sid,))}
+    llm_calls.clear()
+    report = asyncio.run(regenerate(cid, [key], lessons=False, visuals=False, verify=False, capstones=True))
+    assert llm_calls["CapstoneRepair"] == 1 and llm_calls["LessonV2Draft"] == 0
+    assert "stored and verified" in report.capstones[0]
+    new = _capstone_row(sid)
+    assert new["id"] != old["id"] and not new["flagged"] and capstone_defects(sid) == []
+    retired = db.query_one("SELECT * FROM questions WHERE id = ?", (old["id"],))
+    assert retired["key"] == "old-cap1" and retired["flagged"]  # answered: kept as history, never deleted
+    assert {r["id"] for r in db.query("SELECT id FROM questions WHERE skill_id = ? AND role != 'capstone'", (sid,))} == practice
+    # a capstone without a defect is left alone unless a note names one
+    llm_calls.clear()
+    assert "capstone fine" in asyncio.run(regenerate(cid, [key], lessons=False, visuals=False, verify=False, capstones=True)).capstones[0]
+    assert llm_calls["CapstoneRepair"] == 0
+    noted = asyncio.run(regenerate(cid, [key], lessons=False, visuals=False, verify=False, capstones=True,
+                                   capstone_notes=["the problem asks to compute alpha but no step does"]))
+    assert "stored and verified" in noted.capstones[0] and llm_calls["CapstoneRepair"] == 1
+
+
+def test_a_reported_problem_is_rechecked_before_it_withholds_a_capstone(tmp_path, monkeypatch):
+    cid = built_course(tmp_path)
+    sid = asyncio.run(replan(cid, skill_by_title(cid, "Distinguish lists")["key"])).results[0].skill_id
+    row = _capstone_row(sid)
+    original = fake_llm.respond
+    confirm = {"graph": False}
+
+    def weak_false_alarm(**kwargs):
+        result = original(**kwargs)
+        if kwargs["schema"].__name__ == "IndependentAnswer" and (kwargs["role"] == "verify" or confirm["graph"]):
+            result.problems = "Option 3 is also a valid answer."
+        return result
+
+    monkeypatch.setattr(fake_llm, "respond", weak_false_alarm)
+    verdict = asyncio.run(verify_question(row))
+    assert not verdict.flagged and verdict.record["status"] == "agree_on_recheck"
+    assert all(s["status"] == "agree_on_recheck" for s in verdict.record["steps"]) and "found no defect" in verdict.note
+    confirm["graph"] = True  # the careful re-check confirms the defect: withheld
+    verdict = asyncio.run(verify_question(row))
+    assert verdict.flagged and verdict.record["status"] == "problem" and "also a valid answer" in verdict.reason
 
 
 def test_v2_giveaway_capstones_go_to_the_revision(tmp_path, monkeypatch):

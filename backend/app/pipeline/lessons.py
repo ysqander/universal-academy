@@ -32,6 +32,7 @@ from .questions import (
     insert_questions,
     is_machine_checkable,
     pair_form_warnings,
+    step_reference_problems,
 )
 from .textutil import FIGURE_PLACEHOLDER_RE, clean_source_refs, lesson_text, mentions_caption
 
@@ -217,7 +218,9 @@ def capstone_problems(q: QuestionDraft | None) -> list[str]:
         cap = clean_capstone(q)
     except InvalidQuestion as e:
         return [f"capstone: {e}"]
-    return [f"capstone: {message}" for _, message in capstone_issues(cap)]
+    return [f"capstone: {message}" for _, message in capstone_issues(cap)] + [
+        f"capstone: {message}" for message in step_reference_problems(cap)
+    ]
 
 
 def validate_capstone(q: QuestionDraft | None, *, strict: bool = True) -> tuple[QuestionDraft | None, list[str]]:
@@ -237,10 +240,11 @@ def validate_capstone(q: QuestionDraft | None, *, strict: bool = True) -> tuple[
             raise InvalidLesson(f"capstone: {e}") from e
         return None, [f"no valid capstone (capstone: {e}) — the lesson ends after the practice"]
     issues = capstone_issues(cap)
+    references = step_reference_problems(cap)
+    if strict and (issues or references):
+        raise InvalidLesson("capstone: " + "; ".join([message for _, message in issues] + references))
     if not issues:
-        return cap, []
-    if strict:
-        raise InvalidLesson("capstone: " + "; ".join(message for _, message in issues))
+        return cap, [f"capstone: {message}" for message in references]
     known = sorted({i for i, message in issues if "coordinate pair" not in message})
     notes = [f"capstone: {message}" + (" — step dropped" if i in known else " — kept") for i, message in issues]
     if not known:
@@ -252,7 +256,8 @@ def validate_capstone(q: QuestionDraft | None, *, strict: bool = True) -> tuple[
     update: dict[str, Any] = {"steps": steps}
     if last_dropped:
         update["answer_display"] = steps[-1].answer_display
-    return cap.model_copy(update=update), notes
+    kept = cap.model_copy(update=update)
+    return kept, notes + [f"capstone after the drop: {message}" for message in step_reference_problems(kept)]
 
 
 def kp_targets(lesson: dict[str, Any]) -> list[int]:

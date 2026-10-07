@@ -30,11 +30,13 @@ import networkx as nx
 from .. import db, llm
 from ..llm_schemas import (
     BridgeIssue,
+    CapstoneRepair,
     DependentLink,
     InlineCheck,
     LessonDraft,
     LessonReview,
     LessonV2Draft,
+    MultistepStep,
     PlannedPrereq,
     QuestionDraft,
     TeachingPlan,
@@ -65,7 +67,13 @@ from .lessons import (
     validate_capstone,
     validate_lesson,
 )
-from .prompts_v2 import PLANNER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, REVISION_NOTE, WRITER_INSTRUCTIONS
+from .prompts_v2 import (
+    CAPSTONE_REPAIR_NOTE,
+    PLANNER_INSTRUCTIONS,
+    REVIEWER_INSTRUCTIONS,
+    REVISION_NOTE,
+    WRITER_INSTRUCTIONS,
+)
 from .questions import InvalidQuestion, clean_capstone, clean_question, insert_questions
 from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
 from .verify import verify_skill
@@ -1173,6 +1181,14 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
                 final, result.revised = revised, True
                 final_review = await review_lesson(spec, revised, key=key, revised=True)
         result.final_review = final_review
+        cap_problems = capstone_problems(final.capstone)
+        if cap_problems:  # rewrite just the capstone rather than drop steps (or end the lesson without one)
+            try:
+                rewritten = await rewrite_capstone(course, skill, spec, render_lesson(final), prefix, cap_problems)
+                final = final.model_copy(update={"capstone": rewritten})
+                result.notes.append(f"capstone rewritten ({'; '.join(cap_problems)})")
+            except Exception as e:  # noqa: BLE001 — the lenient validation below keeps what it can
+                result.notes.append(f"capstone repair failed ({e})")
         lesson, pools, capstone, notes = await validate_v2(final, spec, figures, proof=proof, strict=False)
         result.notes += notes
     except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
@@ -1206,6 +1222,8 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         + f" · final review: {review_summary(final_review)}"
     )
     result.verify_notes = await verify_skill(skill_id)
+    if capstone_defects(skill_id):  # e.g. withheld by verification: one capstone-only repair, verified again
+        result.verify_notes.append(await repair_stored_capstone(ctx, skill_id, prefix))
     for note in result.verify_notes:
         tracker.log(f"Verify {key}: {note}")
     result.ok = True
@@ -1226,6 +1244,148 @@ async def _write_with_retry(
     raise error
 
 
+# ---------------------------------------------------------------------------
+# Capstone repair: rewrite only the final problem instead of dropping its steps or serving the lesson without one
+# ---------------------------------------------------------------------------
+
+_STEP_DEFAULTS: dict[str, Any] = {
+    "choices": [], "correct_choice": None, "answer": "", "answer_display": "", "tolerance": None, "hint": "", "explanation": ""
+}
+
+
+def question_draft(row: dict[str, Any]) -> QuestionDraft:
+    """A stored question row as a QuestionDraft (to re-validate or repair it)."""
+    return QuestionDraft(
+        key=row["key"],
+        tier=row["tier"],
+        kind=row["kind"],
+        prompt=row["prompt"],
+        choices=db.loads(row["choices_json"], []),
+        correct_choice=row["correct_choice"],
+        answer=row["answer"] or "",
+        answer_display=row["answer_display"] or "",
+        tolerance=row["tolerance"],
+        hints=db.loads(row["hints_json"], []),
+        solution=row["solution"] or "",
+        checklist=db.loads(row["checklist_json"], []),
+        targets=row["targets"] or "",
+        source_exercise=row["source_exercise"],
+        steps=[MultistepStep.model_validate(_STEP_DEFAULTS | s) for s in db.loads(row.get("steps_json"), []) or []],
+    )
+
+
+def capstone_defects(skill_id: str) -> list[str]:
+    """What is wrong with a skill's stored capstone ([] = fine): missing, withheld by verification, or failing the
+    capstone rules (a step whose answer is known in advance, a reference to a step that does not exist, …)."""
+    row = db.query_one(
+        "SELECT * FROM questions WHERE skill_id = ? AND role = 'capstone' AND key NOT LIKE 'old-%' ORDER BY rowid DESC",
+        (skill_id,),
+    )
+    if row is None:
+        return ["the lesson has no capstone"]
+    defects = [f"it is withheld from the learner — {row['flag_reason']}"] if row["flagged"] else []
+    try:
+        return defects + capstone_problems(question_draft(row))
+    except ValueError as e:
+        return defects + [f"capstone: unreadable ({e})"]
+
+
+async def rewrite_capstone(
+    course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec, lesson_text: str, prefix: str, problems: list[str]
+) -> QuestionDraft:
+    """Writer call (role "lesson") for a new capstone only, validated strictly; one retry with the new draft's
+    problems. Raises InvalidLesson when both drafts fail."""
+    base = "\n".join(
+        [
+            write_request(course, skill, spec, spec_figures(course, skill, spec)),
+            "",
+            CAPSTONE_REPAIR_NOTE,
+            "## The lesson (final except its capstone)",
+            lesson_text,
+            "",
+            "## Problems with the current capstone",
+            *[f"- {p}" for p in problems],
+        ]
+    )
+    request, issues = base, problems
+    for attempt in range(2):
+        out = await llm.structured(
+            role="lesson",
+            instructions=WRITER_INSTRUCTIONS,
+            shared_prefix=prefix,
+            text=request,
+            schema=CapstoneRepair,
+            max_output_tokens=16000,
+            label=f"capstone {skill['key']}{' (retry)' if attempt else ''}",
+            stream=True,
+        )
+        issues = capstone_problems(out.capstone)
+        if not issues:
+            capstone, _ = validate_capstone(out.capstone, strict=True)
+            assert capstone is not None
+            return capstone
+        request = base + "\n\n## Your new capstone was rejected\n" + "\n".join(f"- {i}" for i in issues)
+    raise InvalidLesson("capstone repair failed: " + "; ".join(issues))
+
+
+def replace_capstone(skill_id: str, capstone: QuestionDraft) -> int:
+    """Store a new capstone in one transaction: active tasks on the skill are abandoned (as when a lesson is
+    replaced), the old capstone is retired when the learner answered it (kept as flagged history, key 'old-capN') and
+    deleted otherwise. Returns the number of abandoned tasks."""
+    lesson = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (skill_id,))["lesson_json"], {}) or {}
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        abandoned = abandon_active_tasks(conn, skill_id)
+        old = conn.execute(
+            "SELECT id FROM questions WHERE skill_id = ? AND role = 'capstone' AND key NOT LIKE 'old-%'", (skill_id,)
+        ).fetchall()
+        for row in old:
+            if conn.execute("SELECT 1 FROM attempts WHERE question_id = ? LIMIT 1", (row["id"],)).fetchone():
+                n = conn.execute(
+                    "SELECT COUNT(*) FROM questions WHERE skill_id = ? AND key LIKE 'old-cap%'", (skill_id,)
+                ).fetchone()[0]
+                conn.execute(
+                    "UPDATE questions SET flagged = 1, flag_reason = ?, key = ? WHERE id = ?",
+                    (RETIRED_REASON, f"old-cap{n + 1}", row["id"]),
+                )
+            else:
+                conn.execute("DELETE FROM questions WHERE id = ?", (row["id"],))
+        insert_questions(conn, skill_id, len(lesson.get("knowledge_points") or []), [capstone], role="capstone")
+    return abandoned
+
+
+async def repair_stored_capstone(
+    ctx: BuildContext, skill_id: str, prefix: str, notes: list[str] | None = None, *, force: bool = False
+) -> str:
+    """Rewrite a stored v2 lesson's capstone when capstone_defects finds a problem (or `notes` name one, or force),
+    store and verify it; a new capstone that verification withholds gets one more rewrite. The old capstone stays
+    when the rewrite fails. Returns a one-line outcome for the report."""
+    skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
+    key = skill["key"]
+    lesson = db.loads(skill["lesson_json"], None) or {}
+    spec = stored_spec(lesson)
+    if spec is None:
+        return f"{key}: not a v2 lesson — capstone left as is"
+    problems = capstone_defects(skill_id) + list(notes or [])
+    if not problems and not force:
+        return f"{key}: capstone fine — left as is"
+    for _attempt in range(2):
+        pools, current = stored_questions(skill_id)
+        try:
+            capstone = await rewrite_capstone(
+                ctx.course, skill, spec, render_lesson(lesson, pools, current), prefix, problems or ["a rewrite was requested"]
+            )
+        except Exception as e:  # noqa: BLE001 — the old capstone stays
+            log.warning("capstone repair %s failed: %s", key, e)
+            return f"{key}: capstone repair failed ({e}) — the old capstone stays"
+        ctx.abandoned_tasks += replace_capstone(skill_id, capstone)
+        await verify_skill(skill_id)
+        problems = capstone_defects(skill_id)
+        if not problems:
+            return f"{key}: new {len(capstone.steps)}-step capstone stored and verified"
+    return f"{key}: new capstone stored, but {'; '.join(problems)}"
+
+
 def stored_spec(lesson: dict[str, Any]) -> TeachingSpec | None:
     """The TeachingSpec stored with a v2 lesson (None for v1 lessons)."""
     if lesson.get("format") != "v2" or not lesson.get("plan"):
@@ -1243,6 +1403,11 @@ def is_v2(lesson_json: str | None) -> bool:
 __all__ = [
     "BridgeIssue",
     "IDEA_BUDGET",
+    "capstone_defects",
+    "question_draft",
+    "repair_stored_capstone",
+    "replace_capstone",
+    "rewrite_capstone",
     "InvalidPlan",
     "clean_capstone",
     "content_problems",

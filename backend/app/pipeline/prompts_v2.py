@@ -608,6 +608,22 @@ Report only real problems — no clarity scores, no praise, no restating what wo
 {MATH_FORMAT}
 """
 
+CAPSTONE_REPAIR_NOTE = """\
+CAPSTONE REPAIR: the lesson below is final except its capstone (the final multistep problem). Return ONLY a new
+`capstone` that follows the CAPSTONE rules, fits this lesson as it stands and fixes every problem listed under it:
+- an earlier skill does real work in a step of its own (it computes the input — a sum or product written in the
+  problem is fine: computing it is that step), this lesson's method is applied once, unguided, and a last step makes a
+  different move with the result;
+- fresh numbers: not the running example's, a worked example's or a practice question's, and not the template of a
+  practice question;
+- no step's answer is written in the problem or in a step prompt up to it, forced by a definition, or an earlier
+  result again; each step asks for ONE value (never a tuple of several named quantities);
+- a step refers only to earlier steps ("your result from step 1"), and only to steps that exist;
+- in a choice step exactly one option is defensible: every distractor is plainly wrong (a wrong law, a wrong value),
+  never a less explicit but valid version of the key;
+- the lesson's notation; complex results in the form stated in the prompt.
+"""
+
 REVISION_NOTE = """\
 REVISION: below are your previous draft of this lesson and a review of it. Write the complete revised lesson:
 - fix every blocking issue with the smallest adequate repair the review suggests (or a better one), and the minor

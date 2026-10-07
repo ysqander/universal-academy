@@ -480,6 +480,12 @@ class LessonV2Draft(BaseModel):
     source_refs: list[str]
 
 
+class CapstoneRepair(BaseModel):
+    capstone: QuestionDraft = Field(
+        description="The new final multistep problem (kind 'multistep', key 'cap', 2-4 machine-checked steps) for the lesson as it stands."
+    )
+
+
 class BridgeIssue(BaseModel):
     location: str = Field(description="Block number (1-based) and heading, or the exercise key.")
     inference_required: str = Field(description="What the learner is being asked to infer.")

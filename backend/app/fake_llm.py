@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from .llm_schemas import (
     BridgeIssue,
+    CapstoneRepair,
     DependentLink,
     Foundation,
     IndependentAnswer,
@@ -1059,6 +1060,7 @@ _HANDLERS = {
     "TeachingPlan": _plan,
     "LessonV2Draft": _lesson_v2,
     "LessonReview": _review,
+    "CapstoneRepair": lambda _text, _prefix: CapstoneRepair(capstone=_capstone()),
     "VisualizationPlan": _viz,
     "IndependentAnswer": _independent,
     "TopUpDraft": _top_up,

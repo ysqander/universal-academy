@@ -1,13 +1,17 @@
 """Regenerate an existing course's lessons, visuals and/or verification in place, keeping the learner's progress.
 
     python scripts/regenerate.py --course <course_id> [--skills S1,S4]
-                                 [--only lessons,visuals,verify] [--dry-run] [--yes] [--no-backup] [--force]
+                                 [--only lessons,visuals,verify | --only capstone [--note "…"]]
+                                 [--dry-run] [--yes] [--no-backup] [--force]
 
 Use it after prompt or pipeline fixes to refresh a course that is already being studied:
 - lessons: each selected lesson is rewritten with the current prompts; the new version replaces the old one only
   if it validates (otherwise the old lesson stays). Questions the learner answered are retired (kept as flagged
   history), never deleted; an active task on a regenerated skill is abandoned when its new lesson is stored.
   Regenerated lessons also get a new visual and verification.
+- capstone (v2 lessons, not part of the default): rewrite only the lesson's final multistep problem when it is
+  missing, withheld by verification or breaks the capstone rules — or for the problem a --note describes (e.g.
+  "the problem asks to compute alpha but no step does") — then store and verify it.
 - visuals / verify: redo only the visual plans / the independent verification of machine-checkable questions
   (learner flags are never cleared). Questions stay servable while they are re-checked, and a visual is replaced
   only by a successful new plan.
@@ -35,7 +39,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-PARTS = ("lessons", "visuals", "verify")
+PARTS = ("lessons", "visuals", "verify", "capstone")
+DEFAULT_PARTS = ("lessons", "visuals", "verify")
 SERVER_HEALTH_URL = "http://127.0.0.1:8000/api/health"
 
 
@@ -44,7 +49,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-dir", type=Path, help="UA_DATA_DIR holding academy.sqlite3 (default: the app's data dir)")
     p.add_argument("--course", help="course id (omit to list the courses in the data dir)")
     p.add_argument("--skills", default="", help="comma-separated skill keys (default: every skill)")
-    p.add_argument("--only", default=",".join(PARTS), help="comma-separated parts: lessons,visuals,verify")
+    p.add_argument("--only", default=",".join(DEFAULT_PARTS), help="comma-separated parts: lessons,visuals,verify or capstone")
+    p.add_argument("--note", action="append", default=[], help="with --only capstone: a problem of the capstone to fix (repeatable)")
     p.add_argument("--dry-run", action="store_true", help="show what would be regenerated and the current quality")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     p.add_argument("--no-backup", action="store_true", help="skip the database backup")
@@ -117,7 +123,8 @@ def quality(course_id: str, keys: list[str]) -> None:
                 longest += 1
         # questions served per knowledge point (legacy: 2), + the multistep capstone, and legacy written questions
         targets = "/".join(map(str, kp_targets(db.loads(s["lesson_json"], None) or {}))) or "-"
-        targets += "+cap" if any(r.get("role") == "capstone" for r in rows) else ""
+        has_cap = any(r.get("role") == "capstone" for r in rows)  # rows are the servable (unflagged) questions
+        targets += "+cap" if has_cap else (" NO-CAP" if (db.loads(s["lesson_json"], None) or {}).get("format") == "v2" else "")
         fr = sum(1 for r in rows if r["kind"] == "free_response")
         targets += f" FR{fr}" if fr else ""
         viz = db.loads(s["viz_json"], None) or {}
@@ -180,8 +187,16 @@ async def main() -> int:
     if not args.no_backup:
         print("Backup:", backup())
     report = await regenerate(
-        args.course, keys or None, lessons="lessons" in parts, visuals="visuals" in parts, verify="verify" in parts
+        args.course,
+        keys or None,
+        lessons="lessons" in parts,
+        visuals="visuals" in parts,
+        verify="verify" in parts,
+        capstones="capstone" in parts,
+        capstone_notes=args.note,
     )
+    for line in report.capstones:
+        print("Capstone", line)
     print(f"\nRegenerated lessons: {', '.join(report.lessons_regenerated) or '—'}")
     if report.lessons_kept:
         print(f"Kept the old lesson (regeneration failed): {', '.join(report.lessons_kept)}")

@@ -179,3 +179,13 @@ Details: [SPEC.md §6.7](SPEC.md).
   given number is a computation, not a proof). Folding it into S2b/S2d would need a "merge" operation (not built).
 - Roll v2 out beyond S2/S3 skill by skill if the learner approves (§1).
 - Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).
+- Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys)
+  found these generator patterns for the next iteration:
+  1. The questions served first test recognition: target 1 per knowledge point plus the anti-drill rule push the
+     served slots to multiple choice; options state the result; keys don't change under the named misconception.
+  2. A learner's miss is re-tested only as a distractor on the same numbers. It should be re-tested on new numbers,
+     in the format it was missed, as a served question.
+  3. Lessons run long (11–13 blocks, 6–12 minutes): repeated cases cost nothing under the idea budget; generalize
+     and summary blocks repeat each other.
+  4. Blocking issues from the final review ship unfixed (one revision only).
+  5. Proof lessons replay the proofs they demonstrated as practice.

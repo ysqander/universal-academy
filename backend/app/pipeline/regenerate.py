@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from .. import db, llm
 from . import jobs
 from .context import BuildContext, load_course, skill_rows
-from .lesson_v2 import generate_v2_lesson, repair_stored_capstone, repair_stored_questions, stored_spec
+from .lesson_v2 import generate_v2_lesson, parse_question_note, repair_stored_capstone, repair_stored_questions, stored_spec
 from .lessons import ensure_lesson, lesson_prefix
 from .topup import release_stale_holds
 from .tracker import JobTracker
@@ -72,6 +72,10 @@ async def regenerate(
     if jobs.is_building(course_id):
         raise RuntimeError("The course is building; wait for the build to finish (or resume it) first.")
     selected = [s for s in skill_rows(course_id) if not keys or s["key"] in keys]
+    if questions and len(selected) != 1 and any(
+        (parsed := parse_question_note(n)) is not None and parsed[0] is None for n in question_notes or []
+    ):
+        raise ValueError("a question note without a skill ('k2q1: …') needs exactly one selected skill — write 'S8b k2q1: …'")
     unknown = sorted(set(keys or []) - {s["key"] for s in selected})
     if unknown:
         raise LookupError(f"Unknown skill keys: {', '.join(unknown)}")

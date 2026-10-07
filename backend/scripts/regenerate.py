@@ -32,7 +32,6 @@ import argparse
 import asyncio
 import logging
 import os
-import re
 import sqlite3
 import sys
 import urllib.error
@@ -45,7 +44,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 PARTS = ("lessons", "visuals", "verify", "capstone", "questions")
 DEFAULT_PARTS = ("lessons", "visuals", "verify")
-QUESTION_NOTE = re.compile(r"\s*k\d+q\d+\s*[:—-]")
 SERVER_HEALTH_URL = "http://127.0.0.1:8000/api/health"
 
 
@@ -74,6 +72,7 @@ if args.data_dir:
 from app import db  # noqa: E402  (UA_DATA_DIR must be set before the app is imported)
 from app.config import settings  # noqa: E402
 from app.pipeline import jobs  # noqa: E402
+from app.pipeline.lesson_v2 import parse_question_note  # noqa: E402
 from app.pipeline.lessons import is_proof_skill, kp_targets  # noqa: E402
 from app.pipeline.questions import visible_length  # noqa: E402
 from app.pipeline.regenerate import regenerate  # noqa: E402
@@ -165,6 +164,20 @@ async def main() -> int:
     if not parts or parts - set(PARTS):
         print(f"--only takes a subset of {','.join(PARTS)}")
         return 2
+    question_notes = [n for n in args.note if parse_question_note(n)]
+    capstone_notes = [n for n in args.note if not parse_question_note(n)]
+    if question_notes and "questions" not in parts:
+        print("These notes name a practice question but --only has no 'questions':\n  " + "\n  ".join(question_notes))
+        return 2
+    if capstone_notes and "capstone" not in parts:
+        print("These notes name no practice question (expected 'k2q1: …' or 'S8b k2q1: …') and --only has no 'capstone':\n  "
+              + "\n  ".join(capstone_notes))
+        return 2
+    unqualified = [n for n in question_notes if parse_question_note(n)[0] is None]
+    if (unqualified or capstone_notes) and len(keys) != 1:
+        print("A note without a skill ('k2q1: …', or a capstone note) needs exactly one --skills; name the skill "
+              "('S8b k2q1: …') or run one skill at a time.")
+        return 2
     job = jobs.get_job(args.course)
     if job and job.state in ("running", "queued"):
         print(f"The course's build job is {job.state}; let it finish (or restart the server) first.")
@@ -201,9 +214,9 @@ async def main() -> int:
         visuals="visuals" in parts,
         verify="verify" in parts,
         capstones="capstone" in parts,
-        capstone_notes=[n for n in args.note if not QUESTION_NOTE.match(n)],
+        capstone_notes=capstone_notes,
         questions="questions" in parts,
-        question_notes=[n for n in args.note if QUESTION_NOTE.match(n)],
+        question_notes=question_notes,
     )
     for line in report.questions:
         print("Question", line)

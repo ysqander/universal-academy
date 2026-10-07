@@ -474,8 +474,80 @@ def test_regenerate_rewrites_a_named_question_in_place_and_keeps_its_history(tmp
     assert any(line.startswith(f"{key} {target['key']} (served first): rewritten") for line in report.questions)
     assert any("k9q9: no such practice question" in line for line in report.questions)
     after = db.query("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 1 AND key NOT LIKE 'old-%' ORDER BY rowid", (sid,))
-    assert after[0]["id"] == target["id"] and after[0]["prompt"] != target["prompt"] and not after[0]["flagged"]
-    old = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND key = ?", (sid, f"old-{target['key']}"))
-    assert old is not None and old["flagged"] and old["prompt"] == target["prompt"]
-    moved = db.query_one("SELECT question_id FROM attempts WHERE task_id = ?", (task_id,))
-    assert moved["question_id"] == old["id"]  # the answer stays with the version that was asked
+    assert after[0]["key"] == target["key"] and after[0]["id"] != target["id"]  # the new version, in the old slot
+    assert after[0]["prompt"] != target["prompt"] and not after[0]["flagged"]
+    old = db.query_one("SELECT * FROM questions WHERE id = ?", (target["id"],))
+    assert old["key"] == f"old-{target['key']}" and old["flagged"] and old["prompt"] == target["prompt"]
+    kept = db.query_one("SELECT question_id FROM attempts WHERE task_id = ?", (task_id,))
+    assert kept["question_id"] == target["id"]  # the answer (and every task log) still points at what was asked
+    # an unqualified note is refused when several skills are selected
+    with pytest.raises(ValueError, match="needs exactly one selected skill"):
+        asyncio.run(regenerate(cid, None, lessons=False, visuals=False, verify=False, questions=True,
+                               question_notes=["k1q1: x"]))
+
+
+def test_question_notes_name_a_skill_and_question():
+    from app.pipeline.lesson_v2 import parse_question_note
+    assert parse_question_note("k2q1: wording") == (None, "k2q1", "wording")
+    assert parse_question_note("S8b k2q3 – elimination") == ("S8b", "k2q3", "elimination")
+    assert parse_question_note("s4A/K1Q2 — x") == ("S4a", "k1q2", "x")
+    assert parse_question_note("The capstone's step 2 shows the key") is None
+    assert parse_question_note("k2q1:") is None
+
+
+
+def test_expressions_still_to_compute_are_not_printed_answers_but_results_are():
+    from app.pipeline.questions import _printed_in
+    for text, answer in (("Compute $(a+bi)+(c+di)$.", "(a+c)+(b+d)*i"), ("$(a+bi)-(a-bi)$", "2*b*i"), ("$i(a+bi)$", "-b+a*i"),
+                         ("$\\overline{a+bi}$", "a-b*i"), ("$|a+bi|^2$", "a^2+b^2"), ("$(t+i)(1-i)$", "t+1+(1-t)*i")):
+        assert not _printed_in(answer, [text], small_integers=True), text
+    assert _printed_in("a*f+b*e+c*f+d*e", ["Bank: $(ae-bf+ce-df)+(af+be+cf+de)i$"], small_integers=True)
+    assert _printed_in("a/D-b/D*i", ["so $1/\\alpha=a/D-(b/D)i$"], small_integers=True)
+    # a huge printed power is skipped, not expanded (it could stall a build)
+    assert not _printed_in("a+b", ["$((a+b+c+d+e)g)^{50}$"], small_integers=True)
+
+
+def test_steps_found_by_elimination_by_repeat_or_in_a_worked_example():
+    elimination = capstone("Let $z$ satisfy $z^2=3+4i$.", [
+        step("Which number squares to $3+4i$?", "", kind="multiple_choice", choices=["$2+i$", "$2-i$", "$1+2i$"],
+             correct_choice=0, display="$2+i$"),
+        step("Enter that root $z$ in the form $a+bi$.", "2+i"),
+    ])
+    assert any("by elimination" in p for p in answer_known_problems(elimination))
+    repeat = capstone("Prove $\\alpha\\beta=\\beta\\alpha$ for $\\alpha=a+bi$, $\\beta=c+di$.", [
+        step("Enter the real coordinate of $\\alpha\\beta$.", "a*c-b*d"),
+        step("Enter the real coordinate of $\\beta\\alpha$.", "c*a-d*b"),
+    ])
+    assert any("an earlier step's result again" in p for p in answer_known_problems(repeat))
+    worked = ["Worked example: $e(a+c)-f(b+d)=ea+ec-fb-fd$ by real distributivity."]
+    replay = capstone("Prove right distributivity.", [
+        step("Enter the real coordinate of $(\\alpha+\\beta)\\lambda$.", "e*a+e*c-f*b-f*d"),
+        step("Is it equal to the other side? Enter 1 for yes.", "7", kind="numeric"),
+    ])
+    assert any("worked example" in p for p in answer_known_problems(replay, worked))
+    assert not any("worked example" in p for p in answer_known_problems(replay))
+
+
+def test_a_served_rewrite_keeps_the_served_questions_producing_answers():
+    from app.pipeline.lesson_v2 import _served_rule_problems
+    typed_q = typed("k1q1", "Compute $(2+i)^2$.", "3+4*i")
+    mc = QuestionDraft(key="k2q1", tier=1, kind="multiple_choice", prompt="Which law?", choices=["a", "b", "c"], correct_choice=0,
+                       answer="", answer_display="a", tolerance=None, hints=["a", "b", "c"], solution="s", checklist=[],
+                       targets="t", source_exercise=None, steps=[])
+    assert _served_rule_problems(mc, typed_q, [typed_q])  # a typed slot stays typed
+    assert _served_rule_problems(mc.model_copy(update={"key": "k3q1"}), mc, [mc])  # no second choice question
+    assert _served_rule_problems(typed_q, typed_q, [mc]) == []
+
+
+def test_a_question_a_quiz_refers_to_is_not_replaced(tmp_path, llm_calls):
+    from app.pipeline.lesson_v2 import replace_question
+    cid = built_course(tmp_path)
+    sid = asyncio.run(replan(cid, skill_by_title(cid, "Distinguish lists")["key"])).results[0].skill_id
+    row = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 0 AND key NOT LIKE 'old-%' ORDER BY rowid", (sid,))
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'quiz', 'completed', ?, ?)",
+        (db.new_id(), cid, sid, f'{{"set": ["{row["id"]}"]}}', db.now_iso()),
+    )
+    with pytest.raises(LookupError, match="a quiz refers to it"):
+        replace_question(sid, row, typed(row["key"], "Compute $(1+i)^2$.", "2*i"))
+    assert db.query_one("SELECT prompt FROM questions WHERE id = ?", (row["id"],))["prompt"] == row["prompt"]

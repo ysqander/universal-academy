@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import sqlite3
@@ -513,18 +514,31 @@ SMALL_INTEGER = 10  # a small integer printed in a prompt is usually a coinciden
 _MAX_PIECE = 200
 
 
+_STILL_TO_COMPUTE = (sp.Abs, sp.conjugate, sp.re, sp.im, sp.arg)
+
+
 def _is_computation(raw: sp.Basic | None) -> bool:
-    """A product of brackets or a power of one ('(t+i)(1-i)', '(a+bi)^2'): an expression to compute, not a result."""
+    """An expression still to compute, not a result: a product of brackets or a power of one ('(t+i)(1-i)',
+    '(a+bi)^2'), a modulus, conjugate, real/imaginary part or argument, a factor times a bracket holding i ('i(a+bi)',
+    '3(a+bi)', '-(c+di)'), or a sum with i in two or more terms (imaginary parts still to collect: '(a+bi)+(c+di)').
+    Results in standard form ('(ae-bf)+(af+be)i', 'a/D-(b/D)i') are not computations."""
     if raw is None:
         return False
     for node in sp.preorder_traversal(raw):
-        if isinstance(node, sp.Mul) and sum(isinstance(a, sp.Add) for a in node.args) >= 2:
+        if isinstance(node, _STILL_TO_COMPUTE):
             return True
         if isinstance(node, sp.Pow) and isinstance(node.base, sp.Add):
+            return True
+        if isinstance(node, sp.Mul):
+            adds = [a for a in node.args if isinstance(a, sp.Add)]
+            if len(adds) >= 2 or any(a.has(sp.I) for a in adds):
+                return True
+        if isinstance(node, sp.Add) and sum(1 for a in node.args if a.has(sp.I)) >= 2:
             return True
     return False
 
 
+@functools.lru_cache(maxsize=4096)
 def _symbolic(piece: str, *, results_only: bool = False) -> sp.Expr | None:
     """A printed expression with letters ('ae-bf+ce-df', '(ae-bf)+(af+be)i'), all letters real; None otherwise.
     results_only: None for an expression still to compute ('(t+i)(1-i)')."""
@@ -541,8 +555,19 @@ def _symbolic(piece: str, *, results_only: bool = False) -> sp.Expr | None:
     return node.expr.xreplace({x: sp.Symbol(x.name, real=True) for x in node.expr.free_symbols})
 
 
+_MAX_OPS, _MAX_EXPONENT = 80, 8  # beyond this an expansion could stall the build: no comparison (no match)
+
+
+def _too_big(expr: sp.Expr) -> bool:
+    if sp.count_ops(expr) > _MAX_OPS:
+        return True
+    return any(isinstance(n, sp.Pow) and n.exp.is_number and abs(n.exp) > _MAX_EXPONENT for n in sp.preorder_traversal(expr))
+
+
 def _same_expression(key: sp.Expr, printed: sp.Expr) -> bool:
     """key equals the printed expression, or its real or imaginary part (letters real)."""
+    if _too_big(key) or _too_big(printed):
+        return False
     try:
         if sp.expand(key - printed) == 0:
             return True
@@ -608,7 +633,10 @@ def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) ->
         if _printed_in(q.answer, [q.prompt], small_integers=False):
             problems.append(f"{q.key}: its answer {q.answer_display or q.answer} is written in its own prompt")
         elif context and _printed_in(q.answer, context, small_integers=False, letters_only=True):
-            problems.append(f"{q.key}: its answer {q.answer_display or q.answer} is shown in the teaching text — ask for something the lesson did not print")
+            problems.append(
+                f"{q.key}: its answer {q.answer_display or q.answer} equals a line printed in the teaching text or a worked "
+                "example — use other letters or values than the lesson's, or ask for something the lesson did not print"
+            )
         return problems
     if q.kind != "multistep":
         return problems
@@ -617,15 +645,32 @@ def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) ->
     except InvalidQuestion:
         return problems
     problems += [f"{q.key}: {message}" for _, message in capstone_issues(cleaned)]
+    earlier: list[sp.Expr] = []
     for i, step in enumerate(cleaned.steps):
-        if step.kind not in _TYPED or _value(step.answer) is not None:
-            continue  # numbers: capstone_issues already looked
-        shown = [q.prompt] + [x.prompt for x in cleaned.steps[: i + 1]] + [c for x in cleaned.steps[: i + 1] for c in x.choices]
+        if step.kind not in _TYPED:
+            continue
+        where = f"{q.key}: step {i + 1} ({step.answer_display or step.answer})"
+        choices = [c for x in cleaned.steps[: i + 1] for c in x.choices]
+        if _value(step.answer) is not None:  # numbers: capstone_issues looked at the prompts; the banks remain
+            if choices and _printed_in(step.answer, choices, small_integers=False):
+                problems.append(f"{where}: its answer is one of the options shown in a step — it can be found by elimination")
+            continue
+        shown = [q.prompt] + [x.prompt for x in cleaned.steps[: i + 1]] + choices
+        key = _symbolic(step.answer)
         if _printed_in(step.answer, shown, small_integers=True):
+            problems.append(f"{where}: its answer is printed in the problem, a step prompt or a bank of lines — ask for a line the learner derives")
+        elif key is not None and any(_same_expression(key, e) for e in earlier):
             problems.append(
-                f"{q.key}: step {i + 1} ({step.answer_display or step.answer}): its answer is printed in the problem, a "
-                "step prompt or a bank of lines — ask for a line the learner derives"
+                f"{where}: its answer is an earlier step's result again (the statement being proved forces it) — have "
+                "the learner type one side and let a choice step justify the equality"
             )
+        elif context and _printed_in(step.answer, context, small_integers=False, letters_only=True):
+            problems.append(
+                f"{where}: its answer equals a line printed in the teaching text or a worked example — use other letters "
+                "or values than the lesson's (e.g. α=p+qi), or ask for a line the lesson did not print"
+            )
+        if key is not None:
+            earlier.append(key)
     return problems
 
 

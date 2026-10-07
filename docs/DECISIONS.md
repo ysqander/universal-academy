@@ -12,7 +12,7 @@ When you change one of these decisions, update this file (and the SPEC section i
 | What | Runs where | Notes |
 |---|---|---|
 | In-app course build (Build course button) | OpenAI + NVIDIA APIs, inside the app | Lessons in the **v1** format (fixed sections), but with all question rules of §3, a capstone (§4) and verification (§6). No skill splitting, no teaching-sequence writer, no reviewer pass. |
-| Lesson generation **v2** (planner → writer → reviewer with a missing-bridge pass and a density/outcome pass → one revision; may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
+| Lesson generation **v2** (planner → writer → reviewer with a missing-bridge pass and a density/outcome pass → one revision, a second one only for what is still blocking; may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
 | Pedagogy / code / browser reviews by Claude Code agents | Development only | Not part of the app. |
 
 Decision (2026-10-06): keep v2 off the in-app build for now; use it per skill from the command line while the
@@ -48,9 +48,18 @@ generator is still being tuned.
   prerequisite fact, or the same move on another case or law, is not a new idea; in a proof the strategy counts once.
 - **Re-planning uses the learner's evidence.** The planner sees "This step isn't clear" notes and the learner's missed
   or hint-assisted answers on the skill (unanswered quiz questions, voided attempts and flagged questions left out).
-  A wrong answer that shows a misunderstanding becomes a "Learner's miss" misconception, which the lesson must test
-  with exactly that answer as a wrong option or near miss; a slip in a prerequisite (5+(−8) written as 3) gets a
-  one-line recall, not a new bridge.
+  A wrong answer that shows a misunderstanding becomes a "Learner's miss" misconception, which the lesson re-tests
+  with NEW numbers that set the same trap, in the format it was missed (typed when it was typed), as a question
+  served first or a capstone step — the missed problem with the wrong answer as an option is not a test (first run:
+  every miss came back only as a distractor on the same numbers). A slip in a prerequisite (5+(−8) written as 3) is
+  not a Learner's miss: a one-line recall and one typed served question with the case. At most 3 misconceptions per
+  skill, each with evidence.
+- **Short lessons** (decided 2026-10-07, after lessons of 11–13 blocks read as long): at most 9 blocks (10 when a case
+  the learner missed needs its own) and about 350 words of prose outside the math. A further case is a block only
+  when it needs a different decision; the same move on another case goes to a worked example or the practice. No
+  block duplicates a knowledge point's worked example, and the summary does not restate the generalize block. More
+  than 10 blocks or 420 words sends the draft to the revision. Proof lessons prove 1–2 representative statements
+  in the teaching; the rest of the family is proved in the practice.
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
 - **Checks inside the teaching sequence.** 1–3 inline checks before practice; a faded example's missing step is always
@@ -61,7 +70,12 @@ generator is still being tuned.
 ## 3. Questions
 
 - **Typed answers first.** Multiple-choice + true/false together ≤ 40 % of a lesson (drafts above 50 % are rejected).
-  A `true_false_set` with ≥ 3 statements does not count as choice-based.
+  A `true_false_set` with ≥ 3 statements does not count as choice-based. Among the questions **served first** (the
+  first `target_questions` of each knowledge point) at most one is choice-based and at least one asks for a typed
+  answer (decided 2026-10-07: with target 1 per point and "no drill", the served questions had drifted to multiple
+  choice answerable by elimination). A different demand with a value is typed (prediction → the value, spot the error
+  → the corrected value, reverse problem → the missing number). Distractors are computed answers of specific
+  misconceptions, the key differs from all of them, and no option states the result.
 - **Never "How many of these are true / belong to …".** It hides which statement was wrong. Use `true_false_set`
   (mark each statement; feedback names the wrong ones). Rejected at validation.
 - **No free-response "show your working" questions** in new content. Proofs and "explain why" become multistep
@@ -70,7 +84,9 @@ generator is still being tuned.
   demonstrate) and has target + 2 questions (extras for misses and reviews).
 - **Every question a different demand** — new case, prediction, spot the error in a shown working, reverse problem,
   interpretation — not the same procedure with new numbers. The main procedure appears at most once before the
-  capstone. Every question must need this lesson's idea (no bare prerequisite facts).
+  capstone, and it appears there exactly once, as a typed answer on fresh numbers. Every question must need this
+  lesson's idea (no bare prerequisite facts). Graded means served: inline checks are formative and spare questions
+  may never be served, so neither counts as testing a misconception.
 - **Answer forms.** Complex numbers are always asked and keyed as `a+bi` (never `(real, imaginary)` pairs). A tuple key
   becomes an unordered set only when the prompt says the order of the answers doesn't matter. One question asks for
   one answer.
@@ -179,13 +195,8 @@ Details: [SPEC.md §6.7](SPEC.md).
   given number is a computation, not a proof). Folding it into S2b/S2d would need a "merge" operation (not built).
 - Roll v2 out beyond S2/S3 skill by skill if the learner approves (§1).
 - Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).
-- Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys)
-  found these generator patterns for the next iteration:
-  1. The questions served first test recognition: target 1 per knowledge point plus the anti-drill rule push the
-     served slots to multiple choice; options state the result; keys don't change under the named misconception.
-  2. A learner's miss is re-tested only as a distractor on the same numbers. It should be re-tested on new numbers,
-     in the format it was missed, as a served question.
-  3. Lessons run long (11–13 blocks, 6–12 minutes): repeated cases cost nothing under the idea budget; generalize
-     and summary blocks repeat each other.
-  4. Blocking issues from the final review ship unfixed (one revision only).
-  5. Proof lessons replay the proofs they demonstrated as practice.
+- Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys):
+  the patterns it found — recognition-heavy served questions, misses re-tested only on the same numbers, long
+  lessons, blocking issues left after one revision, proof practice replaying the teaching — were addressed the same
+  day (§2, §3; second revision for what is still blocking; blocked spare questions left out). Not addressed: capstone
+  chains that are nominal (a one-line prerequisite step), undeclared notation in generalize blocks (prompt rule only).

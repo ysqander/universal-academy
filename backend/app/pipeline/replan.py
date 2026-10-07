@@ -420,7 +420,8 @@ def report_lines(report: ReplanReport) -> list[str]:
         lines.append(f"Initial review: {review_summary(result.initial_review)}")
         lines += [f"  {line}" for line in review_lines(result.initial_review)]
         if result.revised:
-            lines.append(f"Final review (after one revision): {review_summary(result.final_review)}")
+            n = result.revisions or 1
+            lines.append(f"Final review (after {n} revision{'s' * (n != 1)}): {review_summary(result.final_review)}")
             lines += [f"  {line}" for line in review_lines(result.final_review)]
         else:
             lines.append("Not revised (the first review reported nothing that needs a revision).")

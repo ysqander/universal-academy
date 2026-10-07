@@ -93,7 +93,11 @@ Rules:
 Planner (`TeachingPlan`, may split a node into separate outcomes; sees block feedback and the learner's missed or
 assisted answers on the skill) → writer (`LessonV2Draft`: ordered teaching blocks, each declaring its one `new_idea`,
 with inline checks and faded examples, then practice knowledge points) → reviewer (`LessonReview`: missing-bridge pass
-`issues` + density/outcome pass `density_issues`) → one revision when either pass reports anything. Stored as
+`issues` + density/outcome pass `density_issues`) → one revision when either pass reports anything, a second one
+only for blocking issues or validation problems left (`MAX_REVISIONS`). Validation sends a draft back when the
+teaching sequence has more than 10 blocks or 420 words of prose, or when the questions served first hold more than one
+choice question or no typed answer. Questions the final review still blocks are left out while each knowledge point
+keeps a spare. Stored as
 `lesson_json.format = "v2"`; the API returns `Lesson.format/blocks/goal_line/assumed/out_of_scope/deeper`. Applied per
 skill with `backend/scripts/replan.py --course <id> --skill S2 [--dry-run] [--no-split]`; a split
 replaces the node by narrower skills (keys S2a, S2b, …, kept at the original's place in the learning order), rewires

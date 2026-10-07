@@ -372,9 +372,9 @@ def test_prompts_carry_the_iteration_3_rules():
     assert "a free_response question, or any question that asks the learner to show" in reviewer
     assert "written as the lesson's CAPSTONE" in planner and "plan fewer: one or two is fine" in planner
     # live run 1 (S3b served a quotient, the same quotient as an equation, then the capstone): the served sequence
-    assert SERVED_SEQUENCE_RULE in QUESTION_RULES and "appears at most once before the capstone" in SERVED_SEQUENCE_RULE
+    assert SERVED_SEQUENCE_RULE in QUESTION_RULES and "appears exactly once before the capstone, as one independent typed answer" in SERVED_SEQUENCE_RULE
     assert "the served sequence (the first target_questions questions of each knowledge point" in reviewer
-    assert "ONE straightforward independent application of the lesson's main procedure before the capstone is fine" in reviewer
+    assert "ONE straightforward independent, typed application of the lesson's main procedure belongs in the served sequence" in reviewer
     # a deliberately false statement is not a defect (it flagged a correct true_false_set in the live run)
     assert "A statement or option that is false on purpose is not a defect" in " ".join(VERIFY_INSTRUCTIONS.split())
     assert VERIFY_INSTRUCTIONS in VERIFY_STEP_INSTRUCTIONS

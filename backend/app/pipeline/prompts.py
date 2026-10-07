@@ -15,7 +15,9 @@ COMPLEX_FORM_RULE = (
     'the answer is SymPy "a+b*i" (e.g. "1/5+2*i/5", "-3*i", "4") — as in every lesson of the course, including '
     "multistep steps and the capstone. Never ask for a complex number as a coordinate pair \"(real coordinate, "
     'imaginary coordinate)" unless the skill is about the ordered-pair definition itself; when only one coordinate '
-    "matters, ask for that coordinate alone as a numeric answer."
+    "matters, ask for that coordinate alone as a numeric answer. When the problem already uses the letter $a$ or $b$ "
+    '(e.g. $\\alpha=a+bi$ with arbitrary real $a,b$, or a scalar $a$), say "Enter it in the form $x+yi$ with $x,y$ '
+    'real" instead.'
 )
 
 # Question format rule for every question generator (v1 lessons, top-ups, v2 lessons and their inline checks).
@@ -66,6 +68,19 @@ DISTINCT_DEMANDS_RULE = (
     "not one whose answer follows from a prerequisite or outside fact alone, or is the only special value the prompt "
     'allows (e.g. "for real $a,b$ with $a^2+b^2=0$, what is $b$?" needs only that real squares are nonnegative) — '
     "make such a question a decision with a near miss that needs the lesson's idea."
+)
+# The evaluation of the 2026-10-07 re-plans: target 1 per knowledge point + "no drill" pushed every question served
+# first to multiple choice — the learner recognised answers instead of producing them.
+TYPED_FIRST_RULE = (
+    "TYPED ANSWERS FIRST: the learner should produce answers, not recognise them. A different demand is still a typed "
+    "numeric/expression answer whenever it has a value: a prediction → the predicted value; spotting an error → the "
+    "corrected value; a reverse problem → the missing number; a decision about one candidate → the value that settles "
+    "it (several candidates → a true_false_set). multiple_choice and true_false only when choosing a method, a law or "
+    "a justification is itself the demand. Among the questions served first (the first target_questions of each "
+    "knowledge point) at most one is multiple_choice or true_false, and at least one is a typed independent answer (a "
+    "multistep question with typed steps counts). A choice question's distractors are the answers a learner holding a "
+    "specific misconception would give (computed, not strawmen), the key differs from every one of them, and no "
+    "option states the result the question asks for."
 )
 NO_WRITTEN_ANSWERS_RULE = (
     'No free_response questions and no "show your working": the app checks only the answer, so an instruction to '

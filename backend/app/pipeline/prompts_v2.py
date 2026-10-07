@@ -13,6 +13,7 @@ from .prompts import (
     NO_WRITTEN_ANSWERS_RULE,
     ONE_ANSWER_RULE,
     OUTCOME_RULE,
+    TYPED_FIRST_RULE,
     TARGET_RULE,
     TF_SET_KIND,
     UNORDERED_RULE,
@@ -154,8 +155,9 @@ the point: getting the real part right is not enough — the imaginary part, inc
 SERVED_SEQUENCE_RULE = (
     "Read what the learner is actually served as ONE sequence: the first target_questions questions of knowledge "
     "point 1, then those of knowledge point 2, …, then the capstone. In that sequence the lesson's main procedure "
-    "from scratch (e.g. a whole quotient) appears at most once before the capstone — the faded example already had "
-    "the learner carry it out. A later knowledge point leads with ITS new demand (for \"interpret an equation as a "
+    "from scratch (e.g. a whole quotient) appears exactly once before the capstone, as one independent typed answer on "
+    "fresh numbers — normally the first served question of knowledge point 1 (the faded example was guided, so it does "
+    "not count). A later knowledge point leads with ITS new demand (for \"interpret an equation as a "
     "quotient\": which quotient solves it, or whether a candidate satisfies it — not another full quotient in a new "
     "wrapper); a plain repeat of the procedure may only be one of its spare questions. The capstone then applies the "
     "main procedure once more, but to an input an earlier skill produces (or a case that needs a decision), in one "
@@ -175,8 +177,9 @@ PRACTICE QUESTIONS (knowledge_points[].questions)
   figure. Use ONLY methods the teaching sequence taught (or the stated prerequisites): no question may need a new
   method, and nothing listed as out of scope.
 - Make the learner produce the answer: computations → numeric or expression; conceptual claims → true_false (reason
-  or counterexample in the solution) or true_false_set; spotting an error or choosing a method → multiple_choice; a
-  chain of reasoning → multistep. Choice-based questions (multiple_choice, true_false and a true_false_set of only 2
+  or counterexample in the solution) or true_false_set; spotting an error → the corrected value (typed); choosing a
+  method or a justification → multiple_choice; a chain of reasoning → multistep.
+- {TYPED_FIRST_RULE} Choice-based questions (multiple_choice, true_false and a true_false_set of only 2
   statements) are guessable: at most 40% of the lesson's questions and at most one of each per knowledge point
   (choices inside a multistep step do not count).
 - {COUNT_QUESTION_RULE}
@@ -202,12 +205,19 @@ PRACTICE QUESTIONS (knowledge_points[].questions)
   the question again from scratch and make sure answer, answer_display, the correct choice and the solution agree."""
 
 PROOF_RULE = """\
-PROOF SKILLS (kind 'proof', or an objective starting with Prove / Justify / Show): the learner never writes a proof as
-free text. Each knowledge point practises its proof as a multistep walkthrough (2–4 machine-checked steps: which
-definition to apply first, the next justified line computed, which law or hypothesis justifies a step), and its
-other questions check ingredients with different demands (which law a step uses, true_false_set claims about a step,
-the invalid step in a shown argument, a computed instance). The capstone walks through the lesson's main proof or
-uses its result."""
+PROOF SKILLS (kind 'proof', or an objective starting with Prove / Justify): the learner never writes a proof as free
+text. The teaching proves 1–2 representative statements in full. Its setup displays every definition the proofs
+apply, with its number, and says how it relates to the way an earlier lesson used it (e.g. an earlier lesson found
+the product of complex numbers by distributing brackets; here Definition 1.1 IS the product, so distributing complex
+brackets would assume what we are proving). Practice walks through statements of the same family that the teaching
+did NOT prove (the teaching proves commutativity of multiplication → practice proves
+$(\\alpha+\\beta)\\lambda=\\alpha\\lambda+\\beta\\lambda$, or $0\\cdot\\alpha=0$) as multistep walkthroughs (2–4 machine-checked steps:
+which definition to apply first, the next justified line computed, which law or hypothesis justifies a step). A
+walkthrough never re-asks a proof shown in the blocks or a worked example, and its justification steps use varied
+distractors (a wrong law, a wrong line, a hypothesis that is not available), not the same slogans in every step. Other
+questions check ingredients with different demands (which law a step uses, true_false_set claims about a step, the
+invalid step in a shown argument, a computed instance). The capstone walks through a proof of the family or uses its
+result."""
 
 VISUAL_FORMAT_RULES = """\
 A block's `visual` (a VisualizationPlan) — only when a representation planned for this block earns its place:
@@ -263,10 +273,12 @@ DECIDE FIRST: KEEP OR SPLIT
   versions). Treat them as evidence. For each WRONG answer that shows a misunderstanding, put the misunderstanding
   that produces exactly that answer first in `misconceptions`, starting "Learner's miss: " (e.g. "Learner's miss:
   stops at the square — took $(-1+i)^2=-2i$ for the cube"); make the reasoning sequence teach what was missing (e.g.
-  which case of a case split survives, and why), and plan a practice step whose near miss is exactly that answer. An
-  answer that was right with a hint, or given after the solution was shown, only shows where the learner was unsure.
-  A slip in a prerequisite or outside skill (writing $5+(-8)$ as $3$) gets no bridge: a one-line recall where it is
-  first needed, and practice that includes the case (a coordinate whose sum is negative).
+  which case of a case split survives, and why), and plan a practice step that re-tests it with NEW numbers that set
+  the same trap, in the format the learner missed it (typed when the miss was typed) — the missed problem may be the
+  running example, but repeating it with the wrong answer as an option is not a test. An answer that was right with
+  a hint, or given after the solution was shown, only shows where the learner was unsure. A slip in a prerequisite or
+  outside skill (writing $5+(-8)$ as $3$) is not a Learner's miss and gets no bridge: a one-line recall where it is
+  first needed, and one typed served question that includes the case (a coordinate whose sum is negative).
 - If splitting is not allowed, never drop a case the learner missed or one the node's book exercises need to meet the
   idea budget: keep it, with its own bridge on the running example.
 
@@ -313,8 +325,12 @@ FOR EACH SKILL (TeachingSpec)
   (a remark about a tempting move comes after that move). Bridges look like "each term of the first bracket
   multiplies each term of the second, giving four products"; "$(3i)(2i)$ has two factors of $i$, so it contains
   $i^2$"; "replacing $i^2$ by $-1$ turns that product into a real number"; "the real terms and the $i$ terms are
-  collected separately". If more than about 10 bridges or 4 new ideas seem needed, ask whether the node holds two
-  outcomes; if it does not, drop what the outcome can do without.
+  collected separately". At most 7 bridges: a further case is a bridge only when it needs a different decision (a
+  case the learner missed, or one whose outcome differs, e.g. a real target that forces a zero coordinate); the same
+  move on another case belongs in a knowledge point's worked example or the practice. If more than 7 bridges or about
+  4 new ideas seem needed, ask whether the node holds two outcomes; if it does not, drop what the outcome can do
+  without. For a proof skill the teaching proves 1–2 representative statements in full; the rest of the family is
+  proved in the knowledge points' worked examples and practice.
 - success_check: what would demonstrate the objective without requiring a new method, written as the lesson's
   CAPSTONE: one fresh problem of 2–4 guided steps, each using the previous result, that chains this skill with an
   earlier one — the earlier skill produces the input (or uses the result) in its own step, this skill's method is
@@ -333,8 +349,9 @@ FOR EACH SKILL (TeachingSpec)
   decision, a reverse problem) — never the same procedure again on harder numbers. If a further knowledge point
   would only repeat, plan fewer: one or two is fine.
 - source_pages: PDF page indexes (from the <<page N>> markers) where this is taught; source_refs: printed item
-  numbers only ("1.1", "Example 1.2", "Exercise 1A.7"); difficulty 1–5; est_minutes 5–15; misconceptions: specific
-  confusions for THIS skill.
+  numbers only ("1.1", "Example 1.2", "Exercise 1A.7"); difficulty 1–5; est_minutes 5–15; misconceptions: at most 3
+  specific confusions for THIS skill, each a Learner's miss or one that produces a specific wrong answer the book or
+  the method invites — not generic slips the learner never showed.
 {MATH_FORMAT}
 """
 
@@ -354,8 +371,13 @@ neighbours in the graph and the figures you may use.
 {V3_FEEDBACK}
 
 THE TEACHING SEQUENCE (`blocks`)
-An ordered sequence of blocks, each with ONE job — not filled-in headings. Typically 5–10 blocks; each block is
-short (2–6 sentences, or one computation laid out in display math); the whole sequence reads in about 5 minutes.
+An ordered sequence of blocks, each with ONE job — not filled-in headings. At most 9 blocks (10 only when the spec
+plans a case the learner missed) and about 350 words of prose outside the math; each block is short (2–6 sentences,
+or one computation laid out in display math); the whole sequence reads in about 5 minutes. No redundant blocks: a
+teaching block never shows the same case as a knowledge point's worked example; the summary never restates the
+generalize block (when they would say the same, keep one); a generalize block reuses the lesson's letters or the
+book's statement, never re-defines notation a prerequisite introduced (recall it in a clause), and each new symbol it
+introduces counts as a new idea.
 Write to the learner ("you", "we"), plainly and precisely, like the reference example. Headings, when used, say
 what the step does ("First, account for all four products"), not a topic name.
 - setup: pose the problem the lesson answers (the spec's starting point) — for a procedure, the task the learner
@@ -399,10 +421,13 @@ DENSITY — ONE NEW IDEA AT A TIME (see 9–12 above)
   the same objects are never renamed again (numbers → $\\alpha,\\beta$ → $a,b$ → $z$ is three renamings too many).
   This is for computation and procedure lessons: in a proof or definition lesson the book's letters come with the
   statement, and writing an object in coordinates ($\\alpha=a+bi$) is not a renaming.
-- Every misconception the lesson names (in a block, a warning or the summary) is tested: an inline check or a practice
-  question whose wrong option or near miss is exactly that misconception. Do not name one you do not test. A
-  "Learner's miss" in the spec's misconceptions is what this learner actually got wrong: test each one this way. A
-  'reflect' check that asks why a tempting alternative fails names it but does not test it.
+- Every misconception the lesson names (in a block, a warning or the summary) is tested by a GRADED question the
+  learner is actually served — a question served first in its knowledge point, or a capstone step — whose key differs
+  from the answer a learner holding the misconception would give (inline checks are formative and spare questions
+  may never be served, so neither counts). Do not name one you do not test. A "Learner's miss" in the spec's
+  misconceptions is what this learner actually got wrong: re-test it with NEW numbers that set the same trap, in the
+  format it was missed (typed when it was typed) — the missed problem itself with the wrong answer as an option is
+  not a test. A 'reflect' check that asks why a tempting alternative fails names it but does not test it.
 - The outcome first and last: the setup poses the task, the main path solves the starting problem before the
   generalization, and the summary says how to do the task.
 
@@ -434,7 +459,9 @@ RULES FOR THE SEQUENCE
   the learner must supply — never for a value they could compute (that is a graded check). Ask it before the text
   spells out the reason, or ask why a tempting alternative fails (e.g. "Why did the bottom-right entry become a real
   number?", "Why is $2-3i$ not itself the reciprocal of $2+3i$?"); its model answer must not repeat a line the learner
-  has just read.
+  has just read. A graded check asks for the value or decision that a preceding block's new idea produces; neither
+  its stem nor the text just before it states the deciding fact. The faded example's missing step is the lesson's
+  key move or decision — not arithmetic already printed in the block.
 - Nothing essential in `deeper`: if an explanation is necessary for the objective it belongs in the main path.
   `deeper` is only an alternative explanation, a deeper derivation or a reminder — '' is fine.
 - Nothing extra in the main path either: a related result the book states nearby that the objective and its practice
@@ -540,8 +567,9 @@ Look specifically for:
   answer is checked) → issue (blocking) at its key; repair: a typed numeric/expression answer, or a multistep
   walkthrough;
 - drill without a new demand: a practice question that asks for the same procedure as an earlier question of the
-  lesson (the teaching checks and the faded example included) on new numbers → issue (blocking) at its key — ONE
-  straightforward independent application of the lesson's main procedure before the capstone is fine; repair:
+  lesson (the teaching checks and the faded example included) on new numbers → issue (blocking) at its key — exactly
+  ONE straightforward independent, typed application of the lesson's main procedure belongs in the served sequence
+  before the capstone (none → issue, blocking, at knowledge point 1); repair:
   replace it with a different demand (a new case, a prediction without the full computation, spotting the error in
   a shown working, a reverse problem, interpreting a result, choosing the method) or drop it and lower
   target_questions;
@@ -550,6 +578,12 @@ Look specifically for:
   point whose first question is the earlier computation in a new wrapper ("solve $(1+2i)z=4+3i$" after "compute
   $(2+3i)/(1+2i)$") → issue (blocking) at that key; repair: lead that knowledge point with its own new demand
   (reorder its questions or replace the question);
+- recognition instead of production: a served question (the first target_questions of a knowledge point) that is
+  multiple_choice or true_false although its demand has a value the learner could type, more than one served choice
+  question, a choice question whose correct option states the result or whose distractors are not the answers of
+  specific misconceptions, or a key that a learner holding the targeted misconception would also reach → issue
+  (blocking for a served question, minor for a spare) at its key; repair: make it typed (the predicted, corrected or
+  missing value) or rebuild the options from computed misconception answers;
 - a knowledge point that demonstrates nothing new over the previous one, or a target_questions larger than the
   point's real variety (the learner would repeat themselves) → issue (blocking for a repeating knowledge point,
   minor for an inflated target); repair: drop / merge it, or lower target_questions;
@@ -596,11 +630,15 @@ the main method, else minor):
   (repair: one clause in the main path; the derivation to `deeper`);
 - something used before it is taught: a check, example or exercise that needs a technique a later block introduces;
 - "you already know" without the fact: a block that relies on a prerequisite's result without showing it in one line;
+- a redundant block: the same move on a case with no new decision, a duplicate of a knowledge point's worked
+  example, a summary that restates the generalize block, or a generalize block that re-defines a prerequisite's
+  notation (repair: cut or merge; blocking when the sequence has more than 10 blocks);
 - shifting notation: the same objects renamed more than once (numbers → $\\alpha,\\beta$ → $a,b$ …); in a proof or
   definition the book's letters from the statement on, and coordinates such as $\\alpha=a+bi$, are fine;
-- a misconception the lesson names (a block, a warning, the summary, a 'reflect' check), or a "Learner's miss" in the
-  spec, that no graded inline check or practice question tests as a wrong option or near miss (a 'reflect' check does
-  not count);
+- a misconception the lesson names (a block, a warning, the summary, a 'reflect' check), or one in the spec, that no
+  served question (the first target_questions of its knowledge point) or capstone step tests with a key that differs
+  from the misconception's answer (inline checks and spare questions do not count); a "Learner's miss" re-tested only
+  on its original numbers, only as a choice option, or only in a spare question → blocking;
 - the outcome missing: the setup does not pose the task the objective names, or the main path never solves the
   starting problem.
 split_recommended: true only when a needed repair would add another substantial objective; say why in split_reason.

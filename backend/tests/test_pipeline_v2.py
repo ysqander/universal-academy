@@ -31,8 +31,12 @@ from app.pipeline.context import key_number, load_course
 from app.pipeline.lesson_v2 import (
     InvalidPlan,
     PlanGraph,
+    blocked_locations,
+    blocking_count,
     clean_inline_check,
+    drop_blocked_questions,
     idea_lines,
+    quality_problems,
     learner_misses,
     needs_revision,
     plan_request,
@@ -472,7 +476,7 @@ def test_density_pass_sees_the_declared_new_ideas(tmp_path):
     assert declared and all(not b.new_idea for b in draft.blocks if b.kind in ("check", "faded_example", "summary"))
     lines = idea_lines(draft)
     assert lines[0] == f"{len(draft.blocks)} blocks; {len(declared)} declare a new idea (budget: about 4 per lesson)."
-    assert len(lines) == 1 + len(declared)
+    assert len(lines) == 2 + len(declared) and lines[-1].startswith(f"Length: {len(draft.blocks)} blocks (at most 9)")
     spec = fake_llm.respond(schema=TeachingPlan, role="graph", instructions="", text="Plan the teaching of skill S1: Multiply").skills[0]
     text = review_request(spec, draft, key="S1", revised=False)
     assert "COUNTS FOR THE DENSITY PASS" in text and lines[1] in text and f"Starting point (the outcome problem" in text
@@ -541,6 +545,88 @@ def test_the_planner_sees_the_learners_misses(tmp_path):
     request = plan_request(load_course(cid), skill, allow_split=False, blockers=["1 answered attempt"])
     assert "How the learner did on this skill so far" in request and "wrong-typed-answer" in request
     assert "found overloaded" not in request
+
+
+def _fake_draft(key: str = "S1") -> LessonV2Draft:
+    return fake_llm.respond(schema=LessonV2Draft, role="lesson", instructions="", text=f"Write the lesson for skill {key}: x")
+
+
+def test_quality_rules_for_length_and_typed_answers_served_first():
+    draft = _fake_draft()
+    assert quality_problems(draft) == []
+    long = draft.model_copy(update={"blocks": draft.blocks + draft.blocks[1:3]})  # 11 blocks
+    assert any("too long (11 blocks" in p for p in quality_problems(long))
+    wordy = draft.model_copy(update={"blocks": [draft.blocks[0].model_copy(update={"body": "word " * 430})] + draft.blocks[1:]})
+    assert any("too long" in p and "words of prose" in p for p in quality_problems(wordy))
+    # math does not count as prose
+    mathy = draft.model_copy(update={"blocks": [draft.blocks[0].model_copy(update={"body": "$$" + "x+" * 500 + "x$$"})] + draft.blocks[1:]})
+    assert quality_problems(mathy) == []
+    kp1, kp2 = draft.knowledge_points[:2]
+    mc = next(q for kp in draft.knowledge_points for q in kp.questions if q.kind == "multiple_choice")
+    two_choice = draft.model_copy(update={"knowledge_points": [
+        kp1.model_copy(update={"target_questions": 1, "questions": [mc, *kp1.questions]}),
+        kp2.model_copy(update={"target_questions": 1, "questions": [mc.model_copy(update={"key": "k2q9"}), *kp2.questions]}),
+    ]})
+    problems = quality_problems(two_choice)
+    assert any("2 of the questions served first are choice questions" in p for p in problems)
+    assert any("no question served first asks for a typed answer" in p for p in problems)
+
+
+def _issue(location: str, severity: str = "blocking") -> BridgeIssue:
+    return BridgeIssue(location=location, inference_required="x", why_insufficient="a repeat of k1q1", repair="replace it",
+                       severity=severity)
+
+
+def test_questions_the_final_review_still_blocks_are_left_out_while_spares_last():
+    draft = _fake_draft()
+    kp = draft.knowledge_points[0]
+    keys = [q.key for q in kp.questions]
+    target = kp.target_questions
+    review = LessonReview(issues=[_issue(keys[0]), _issue(keys[-1]), _issue("Block 2", "blocking"), _issue(keys[1], "minor")],
+                          density_issues=[_issue("cap — step 2")], untaught_method_exercises=[f"{keys[-2]}: needs division"],
+                          out_of_scope_violations=[], optional_content_needed=[], math_errors=[], split_recommended=False,
+                          split_reason="")
+    assert blocking_count(review) == 5
+    blocked, capstone = blocked_locations(review)
+    assert set(blocked) == {keys[0], keys[-1], keys[-2]} and len(capstone) == 1 and capstone[0].startswith("cap — step 2")
+    trimmed, notes = drop_blocked_questions(draft, blocked)
+    left = [q.key for q in trimmed.knowledge_points[0].questions]
+    assert len(left) == max(target + 1, len(keys) - 3) and keys[0] not in left  # the blocked served question goes first
+    assert all(n.startswith(("left out", "kept")) for n in notes)
+    assert [q.key for q in trimmed.knowledge_points[1].questions] == [q.key for q in draft.knowledge_points[1].questions]
+
+
+def test_a_second_revision_runs_only_for_what_is_still_blocking(tmp_path, llm_calls, monkeypatch):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    original = fake_llm.respond
+    reviews = {"n": 0}
+
+    def still_blocking_once(**kwargs):
+        if kwargs["schema"] is LessonReview:
+            reviews["n"] += 1
+            if reviews["n"] == 2:  # the first revision's review still finds a blocking issue
+                kwargs = {**kwargs, "text": kwargs["text"] + " (first draft)"}
+        return original(**kwargs)
+
+    monkeypatch.setattr(fake_llm, "respond", still_blocking_once)
+    llm_calls.clear()
+    result = asyncio.run(replan(cid, key)).results[0]
+    assert result.ok and result.revisions == 2
+    assert llm_calls["LessonV2Draft"] == 3 and llm_calls["LessonReview"] == 3
+    assert blocking_count(result.final_review) == 0
+    # the review gets the in-chapter prerequisites, so their methods count as taught
+    skill = db.query_one("SELECT * FROM skills WHERE id = ?", (result.skill_id,))
+    lesson = db.loads(skill["lesson_json"])
+    assert lesson["initial_review"]["issues"] and lesson["review"]["issues"] == []
+
+
+def test_review_request_lists_the_prerequisite_skills():
+    draft = _fake_draft()
+    spec = fake_llm.respond(schema=TeachingPlan, role="graph", instructions="", text="Plan the teaching of skill S1: x").skills[0]
+    text = review_request(spec, draft, key="S1", revised=False, prereqs=["- S7 · Add vectors — Compute sums"])
+    assert "In-chapter prerequisite skills the learner has learned" in text and "- S7 · Add vectors" in text
+    assert "In-chapter prerequisite skills" not in review_request(spec, draft, key="S1", revised=False)
 
 
 def test_invalid_draft_is_revised_with_the_validation_problem(tmp_path, monkeypatch, llm_calls):

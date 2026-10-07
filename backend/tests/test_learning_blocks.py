@@ -41,7 +41,7 @@ def _check(kind: str, prompt: str, *, answer: str = "", choices=(), correct=None
 
 
 def _block(kind: str, body: str, check: dict | None = None, heading: str | None = None) -> dict:
-    block = TeachingBlock(kind=kind, job=f"{kind} job", heading=heading, body=body, visual=None, check=check)
+    block = TeachingBlock(kind=kind, job=f"{kind} job", new_idea="", heading=heading, body=body, visual=None, check=check)
     return block.model_dump()
 
 

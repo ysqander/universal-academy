@@ -12,7 +12,7 @@ When you change one of these decisions, update this file (and the SPEC section i
 | What | Runs where | Notes |
 |---|---|---|
 | In-app course build (Build course button) | OpenAI + NVIDIA APIs, inside the app | Lessons in the **v1** format (fixed sections), but with all question rules of §3, a capstone (§4) and verification (§6). No skill splitting, no teaching-sequence writer, no reviewer pass. |
-| Lesson generation **v2** (planner → writer → missing-bridge reviewer → one revision; may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
+| Lesson generation **v2** (planner → writer → reviewer with a missing-bridge pass and a density/outcome pass → one revision; may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
 | Pedagogy / code / browser reviews by Claude Code agents | Development only | Not part of the app. |
 
 Decision (2026-10-06): keep v2 off the in-app build for now; use it per skill from the command line while the
@@ -20,14 +20,37 @@ generator is still being tuned.
 
 ## 2. Lessons
 
-- **One coherent objective per lesson.** The v2 planner applies a split test — *could someone succeed at one
-  substantial part and fail another because they need different reasoning?* — and may split a skill (S2 → S2a–S2d,
-  S3 → S3a–S3b). Split parts keep the original's place in the learning order, in the planner's letter order.
-  Checking a supplied answer and constructing one are different skills.
+- **Skills are outcomes** (decided 2026-10-07, from the learner's review of S3b). A skill names a task the learner
+  can do at the end — solve an equation, find all roots, construct an example, **prove or show a statement (a proof
+  is an outcome, so proof skills stay separate units)**. In the learner's words: "learn to do something, not just
+  identify or evaluate unless it is really really complex." Evaluating, checking a supplied answer or identifying
+  are steps inside the skill that uses them (a knowledge point, an inline check, a capstone step) — e.g. computing
+  $\beta/\alpha$ is part of "solve $\alpha z=\beta$", not a lesson before it. A judgement keeps its own skill only
+  when it is itself the hard part (is this a vector space? is this sum direct?). Applies to the graph builder (in-app
+  builds) and the v2 planner. **This replaced** the earlier rule "checking a supplied answer and constructing one are
+  different skills", which had produced S2c ("verify a supplied cube root").
+- **One coherent outcome per lesson.** The v2 planner's split test asks whether a node holds *separate outcomes* —
+  tasks someone could do one of and not the other, each worth doing alone — and may split a skill (S2 → S2a–S2d,
+  S3 → S3a–S3b). A step on the way to the outcome stays in the lesson even when it needs its own reasoning. Split parts
+  keep the original's place in the learning order, in the planner's letter order. The lesson opens with the outcome
+  problem and solves it on the main path.
 - **Teach, don't summarise.** "Reduce the number of new ideas the learner handles at once; do not reduce the
   reasoning that connects them." Concrete case before the general formula (for procedures), one running example,
   notation introduced before use, the goal of a transformation explained before doing it (e.g. why make a product
   real), every algebra line shown on first encounter.
+- **One new idea at a time** (v2 lessons; decided 2026-10-07; S3b was "a little dense and unclear": division as multiplication
+  by the reciprocal + a second layout + a general formula in new letters + a derivation from associativity). Each
+  block introduces at most one new idea and declares it (`new_idea`, not shown); about four per lesson. One method,
+  shown one way (alternatives go to "Go deeper"); routine justifications are a clause unless the skill is a proof;
+  nothing is used before it is taught; a prerequisite fact the lesson relies on is recalled in one line, not "as you
+  already know"; notation stays stable; every misconception the lesson names is tested (S3b's summary warned "β/α,
+  not α/β" without teaching or checking it — the learner's one miss was exactly that). Counting: a recalled
+  prerequisite fact, or the same move on another case or law, is not a new idea; in a proof the strategy counts once.
+- **Re-planning uses the learner's evidence.** The planner sees "This step isn't clear" notes and the learner's missed
+  or hint-assisted answers on the skill (unanswered quiz questions, voided attempts and flagged questions left out).
+  A wrong answer that shows a misunderstanding becomes a "Learner's miss" misconception, which the lesson must test
+  with exactly that answer as a wrong option or near miss; a slip in a prerequisite (5+(−8) written as 3) gets a
+  one-line recall, not a new bridge.
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
 - **Checks inside the teaching sequence.** 1–3 inline checks before practice; a faded example's missing step is always
@@ -125,6 +148,11 @@ Details: [SPEC.md §6.7](SPEC.md).
 - Test servers must run with blank keys (`OPENAI_API_KEY= NVIDIA_API_KEY=`) or `UA_FAKE_LLM=1`: background question
   top-ups otherwise make live API calls.
 - Stop the app before `replan.py` / `regenerate.py` (they refuse while :8000 answers); both back up the database.
+- **Tests can't reach live data or paid APIs** (added 2026-10-07): when `pytest` is loaded, `config.py` forces the
+  fake LLM, blank keys and a temporary data dir (also when `UA_DATA_DIR` names the live dir), even if
+  `tests/conftest.py` was bypassed. Why: a review agent imported a test module from outside `backend/tests`; the run
+  wrote a "Tiny" test course into the live database and made paid OpenAI calls. Run tests from `backend/` as in
+  CLAUDE.md.
 - The project lives in ProtonDrive: after parallel edits, look for `*conflict*` copies and re-run all tests.
 - **Live data lives outside the synced project folder** (decided 2026-10-07): `~/Library/Application Support/
   UniversalAcademy` on macOS (`UA_DATA_DIR` overrides). Why: on 2026-10-06 ProtonDrive left two torn "Edit conflict"
@@ -139,5 +167,8 @@ Details: [SPEC.md §6.7](SPEC.md).
   a lesson (`scripts/regenerate.py`, keeps progress) applies the current rules. Three S27 multiple-choice questions
   with several correct options are withheld and need rewriting.
 - Generation-time check for "more than one correct option" (§3).
+- S2c ("verify a supplied cube root") predates the outcome rule. The learner has attempted it, so `replan.py` can't
+  split or remove it; it is re-planned as a kept skill whose objective is the computation (a "show that" about one
+  given number is a computation, not a proof). Folding it into S2b/S2d would need a "merge" operation (not built).
 - Roll v2 out beyond S2/S3 skill by skill if the learner approves (§1).
 - Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).

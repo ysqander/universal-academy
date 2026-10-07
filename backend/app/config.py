@@ -21,6 +21,25 @@ def default_data_dir() -> Path:
     return Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "universal-academy"
 
 
+def _isolate_test_runs() -> None:
+    """A pytest run that did not load tests/conftest.py (e.g. a test module imported from another directory) must
+    never touch the learner's data or a paid API: force the fake LLM, blank keys and a temporary data dir. (On
+    2026-10-07 such a run wrote a test course into the live database and made paid calls.)"""
+    if "pytest" not in sys.modules or os.getenv("UA_ALLOW_LIVE_TESTS") == "1":
+        return
+    os.environ["UA_FAKE_LLM"] = "1"
+    os.environ["OPENAI_API_KEY"] = ""
+    os.environ["NVIDIA_API_KEY"] = ""
+    data_dir = os.getenv("UA_DATA_DIR", "").strip()
+    if not data_dir or Path(data_dir).expanduser().resolve() == default_data_dir().resolve():
+        import tempfile
+
+        os.environ["UA_DATA_DIR"] = tempfile.mkdtemp(prefix="ua-test-")
+
+
+_isolate_test_runs()
+
+
 def _env(name: str, default: str) -> str:
     value = os.getenv(name, "").strip()
     return value or default

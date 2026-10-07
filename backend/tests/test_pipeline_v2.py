@@ -17,6 +17,7 @@ from test_pipeline_build import build, llm_calls, tiny_course  # noqa: F401  (fi
 
 from app import db, fake_llm
 from app.llm_schemas import (
+    BridgeIssue,
     DependentLink,
     InlineCheck,
     LessonReview,
@@ -26,12 +27,19 @@ from app.llm_schemas import (
     TeachingPlan,
 )
 from app.pipeline import jobs
-from app.pipeline.context import key_number
+from app.pipeline.context import key_number, load_course
 from app.pipeline.lesson_v2 import (
     InvalidPlan,
     PlanGraph,
     clean_inline_check,
+    idea_lines,
+    learner_misses,
     needs_revision,
+    plan_request,
+    render_lesson,
+    review_lines,
+    review_request,
+    review_summary,
     validate_plan,
     validate_v2,
 )
@@ -166,17 +174,28 @@ def test_question_format_rule_is_in_every_question_generating_prompt():
 
 
 def test_v2_prompts_follow_the_design():
+    from app.pipeline.prompts import GRAPH_INSTRUCTIONS
     from app.pipeline.prompts_v2 import PLANNER_INSTRUCTIONS, REFERENCE_EXAMPLE, REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
 
     principle = "Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects"
     for prompt in (PLANNER_INSTRUCTIONS, WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS):
         assert principle in prompt
-    assert "Checking a supplied answer and constructing an answer are different" in PLANNER_INSTRUCTIONS
+    # skills are outcomes (the learner's S3b review): checking / evaluating is a step inside the task, a proof is a task
+    assert "Checking a supplied answer and constructing an answer are different" not in PLANNER_INSTRUCTIONS
+    for prompt in (PLANNER_INSTRUCTIONS, GRAPH_INSTRUCTIONS):
+        assert "SKILLS ARE OUTCOMES" in prompt and "a proof is an outcome" in prompt
+    assert "separate OUTCOMES" in PLANNER_INSTRUCTIONS and "A step on the way to the node's outcome stays" in PLANNER_INSTRUCTIONS
     assert REFERENCE_EXAMPLE in WRITER_INSTRUCTIONS and "never copy its content" in WRITER_INSTRUCTIONS
     writer, reviewer = (" ".join(t.split()) for t in (WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS))
     assert "the formula is a record of the steps" in writer and "Explain consequential transitions where they happen" in writer
     assert "This representation helps the learner notice ___" in writer and "Nothing essential in `deeper`" in writer
     assert "the smallest adequate repair" in reviewer and "No clarity scores" not in reviewer and "no clarity scores" in reviewer
+    # density (the learner's S3b review): one new idea per block, one method, teach before use, a pass that checks it
+    assert "DENSITY — ONE NEW IDEA AT A TIME" in writer and "One method, shown one way" in writer
+    assert "Teach before use" in writer and "Recall in one line" in writer and "Every misconception the lesson names" in writer
+    assert "Second pass (density and outcome, `density_issues`)" in reviewer and "the outcome missing" in reviewer
+    for prompt in (PLANNER_INSTRUCTIONS, WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS):
+        assert "AFTER THE THIRD ROUND" in prompt
 
 
 def test_verification_lists_true_false_set_statements(tmp_path):
@@ -426,15 +445,102 @@ def test_no_revision_when_the_first_review_is_clean(tmp_path, llm_calls, monkeyp
 
 
 def test_review_triggers_revision_rules():
-    clean = LessonReview(issues=[], untaught_method_exercises=[], out_of_scope_violations=[], optional_content_needed=[],
+    clean = LessonReview(issues=[], density_issues=[], untaught_method_exercises=[], out_of_scope_violations=[], optional_content_needed=[],
                          math_errors=[], split_recommended=False, split_reason="")
     assert not needs_revision(clean)
     for field in ("untaught_method_exercises", "out_of_scope_violations", "optional_content_needed", "math_errors"):
         assert needs_revision(clean.model_copy(update={field: ["x"]}))
+    dense = BridgeIssue(location="Block 4", inference_required="a second layout", why_insufficient="two methods at once",
+                        repair="move the second layout to deeper", severity="minor")
+    assert needs_revision(clean.model_copy(update={"density_issues": [dense]}))
+    with_density = clean.model_copy(update={"density_issues": [dense]})
+    assert "1 density (0 blocking)" in review_summary(with_density)
+    assert any(line.startswith("- [density, minor] Block 4") for line in review_lines(with_density))
+    # reviews stored before the density pass existed still render
+    legacy = clean.model_dump()
+    del legacy["density_issues"]
+    assert review_lines(legacy) == [] and review_summary(legacy).startswith("0 blocking")
     minor = fake_llm.respond(schema=LessonReview, role="graph", instructions="", text="(first draft)")
     assert needs_revision(minor)
     minor.issues[0].severity = "minor"
     assert needs_revision(minor)  # minor bridges (e.g. notation before introduction) are repaired too
+
+
+def test_density_pass_sees_the_declared_new_ideas(tmp_path):
+    draft = fake_llm.respond(schema=LessonV2Draft, role="lesson", instructions="", text="Write the lesson for skill S1: Multiply")
+    declared = [b for b in draft.blocks if b.new_idea]
+    assert declared and all(not b.new_idea for b in draft.blocks if b.kind in ("check", "faded_example", "summary"))
+    lines = idea_lines(draft)
+    assert lines[0] == f"{len(draft.blocks)} blocks; {len(declared)} declare a new idea (budget: about 4 per lesson)."
+    assert len(lines) == 1 + len(declared)
+    spec = fake_llm.respond(schema=TeachingPlan, role="graph", instructions="", text="Plan the teaching of skill S1: Multiply").skills[0]
+    text = review_request(spec, draft, key="S1", revised=False)
+    assert "COUNTS FOR THE DENSITY PASS" in text and lines[1] in text and f"Starting point (the outcome problem" in text
+    assert f"(declared new idea: {declared[0].new_idea})" in render_lesson(draft)
+
+
+def test_the_planner_sees_the_learners_misses(tmp_path):
+    cid = built_course(tmp_path)
+    skill = skill_by_title(cid, "Add and multiply")
+    sid = skill["id"]
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'lesson', 'completed', '{}', ?)",
+        (task_id, cid, sid, db.now_iso()),
+    )
+    questions = db.query("SELECT * FROM questions WHERE skill_id = ? ORDER BY rowid", (sid,))
+    typed = next(q for q in questions if q["kind"] in ("numeric", "expression"))
+    choice = next((q for q in questions if q["kind"] == "multiple_choice"), None)
+
+    def attempt(q, response, *, correct=0, independent=0, status="incorrect", hints=0, revealed=0):
+        db.execute(
+            "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, independent, response, hints_used, "
+            "revealed, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (db.new_id(), task_id, q["id"], sid, correct, status, independent, response, hints, revealed, db.now_iso()),
+        )
+
+    attempt(typed, "wrong-typed-answer")
+    attempt(typed, "helped-answer", correct=1, independent=0, status="correct", hints=1)
+    attempt(typed, "independent-right", correct=1, independent=1, status="correct")
+    attempt(typed, "voided-answer", status="voided")
+    if choice is not None:
+        attempt(choice, str((choice["correct_choice"] + 1) % len(db.loads(choice["choices_json"], []))))
+    lines = learner_misses(sid)
+    text = "\n".join(lines)
+    assert "wrong-typed-answer" in text and "(" + typed["kind"] + ", wrong)" in text
+    assert "helped-answer" in text and "right with a hint" in text
+    assert "independent-right" not in text and "voided-answer" not in text
+    if choice is not None:  # a choice is shown as the option's text, not its index
+        wrong = db.loads(choice["choices_json"], [])[(choice["correct_choice"] + 1) % len(db.loads(choice["choices_json"], []))]
+        assert f"learner answered: {wrong[:50]}" in text
+    # never reached in a quiz (no response): not a miss
+    attempt(typed, "", status="incorrect")
+    assert len(learner_misses(sid)) == len(lines)
+    # a question flagged as faulty (its key may be wrong) is left out
+    other = next(q for q in questions if q["id"] != typed["id"] and q["kind"] in ("numeric", "expression"))
+    attempt(other, "answer-to-a-flagged-question")
+    db.execute("UPDATE questions SET flagged = 1, flag_reason = 'learner: wrong key' WHERE id = ?", (other["id"],))
+    assert "answer-to-a-flagged-question" not in "\n".join(learner_misses(sid))
+    # a capstone answered right with one hinted step is no 'wrong'; each step shows the option text and the help used
+    steps = [
+        {"kind": "expression", "prompt": "Enter $w$.", "choices": [], "answer": "1+i", "answer_display": "$1+i$"},
+        {"kind": "multiple_choice", "prompt": "Which quotient?", "choices": ["$a/b$", "$b/a$"], "correct_choice": 1, "answer": "",
+         "answer_display": "$b/a$"},
+    ]
+    cap_id = db.new_id()
+    db.execute(
+        "INSERT INTO questions(id, skill_id, kp_index, key, kind, tier, prompt, choices_json, steps_json, role, answer, "
+        "answer_display, created_at) VALUES (?, ?, 9, 'cap', 'multistep', 3, 'Solve it.', '[]', ?, 'capstone', '', '', ?)",
+        (cap_id, sid, json.dumps(steps), db.now_iso()),
+    )
+    taken = {"steps": [{"index": 0, "response": "1+i", "correct": True, "hinted": True, "revealed": False},
+                       {"index": 1, "response": "1", "correct": True, "hinted": False, "revealed": False}]}
+    attempt({"id": cap_id}, json.dumps(taken), correct=0, independent=0, status="correct")
+    cap_line = learner_misses(sid)[-1]
+    assert "(multistep, right with help)" in cap_line and "→ 1+i (hint)" in cap_line and "→ $b/a$" in cap_line
+    request = plan_request(load_course(cid), skill, allow_split=False, blockers=["1 answered attempt"])
+    assert "How the learner did on this skill so far" in request and "wrong-typed-answer" in request
+    assert "found overloaded" not in request
 
 
 def test_invalid_draft_is_revised_with_the_validation_problem(tmp_path, monkeypatch, llm_calls):

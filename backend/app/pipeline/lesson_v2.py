@@ -18,6 +18,7 @@ because visuals live in the blocks.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections import Counter
@@ -52,6 +53,7 @@ from .context import (
     page_marker,
 )
 from .lessons import (
+    RETIRED_REASON,
     InvalidLesson,
     abandon_active_tasks,
     capstone_problems,
@@ -76,6 +78,12 @@ LOCAL_IDS = "abcde"
 MIN_BLOCKS, MAX_BLOCKS = 3, 14
 CHECK_BLOCKS = {"check", "faded_example"}
 FADED_CHECK_KINDS = {"numeric", "expression", "true_false_set", "multiple_choice", "true_false"}  # machine-checked
+IDEA_BUDGET = 4  # about this many new ideas per lesson (the learner's S3b review, docs/DECISIONS.md §2)
+MISCONCEPTIONS_HEADER = (
+    "Known misconceptions (a line starting \"Learner's miss\" is what this learner actually got wrong: a graded "
+    "inline check or practice question must offer exactly that answer as a wrong option or near miss):"
+)
+MAX_SHOWN_MISSES = 10  # learner misses on this skill (any lesson version) shown to the planner
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
 V2_VIZ = {"format": "none"}  # skills.viz_json of a v2 lesson: its visuals live in the blocks
 _GOAL_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*your goal\s*:?\s*(?:\*\*)?\s*:?\s*", re.IGNORECASE)
@@ -187,8 +195,13 @@ def plan_request(course: CourseInfo, skill: dict[str, Any], *, allow_split: bool
         lines += ["Known misconceptions:"] + [f"- {m}" for m in misconceptions]
     current = db.loads(skill["lesson_json"], None) or {}
     if current.get("knowledge_points"):
-        lines += ["", "The current lesson (which the learner found overloaded) practises these knowledge points:"]
+        lines += ["", "The current lesson practises these knowledge points:"]
         lines += [f"- {kp.get('title', '')}: {kp.get('explanation', '')}" for kp in current["knowledge_points"]]
+    misses = learner_misses(skill["id"])
+    if misses:
+        lines += ["", "How the learner did on this skill so far (current and earlier lesson versions) — the questions they "
+                  "missed or needed help with:"]
+        lines += misses
     feedback = db.query(
         "SELECT block_index, note, lesson_hash FROM block_feedback WHERE skill_id = ? AND note != '' "
         "ORDER BY created_at, rowid",
@@ -225,6 +238,94 @@ def plan_request(course: CourseInfo, skill: dict[str, Any], *, allow_split: bool
     figures = [f for f in course_figures(course) if f.page in set(focus_pages(pages, course))]
     lines += ["## Figures on these pages"] + ([figure_line(f) for f in figures] or ["(none)"])
     return "\n".join(lines)
+
+
+def _json_or(text: str | None, default: Any) -> Any:
+    try:
+        return json.loads(text) if text else default
+    except ValueError:
+        return default
+
+
+def _choice_text(choices: list[str], response: str) -> str:
+    """The option the learner picked (choice answers are stored as the option's index)."""
+    if response.strip().isdigit() and 0 <= int(response) < len(choices):
+        return choices[int(response)]
+    return response
+
+
+def _tf_marks(statements: list[str], response: str, key: str) -> str:
+    """'1. False (wrong); 2. False; 3. True (wrong)' — no lining up of letters needed."""
+    letters, key = response.strip().upper(), key.strip().upper()
+    if not letters or set(letters) - {"T", "F"}:
+        return response
+    marks = []
+    for i, c in enumerate(letters):
+        wrong = i < len(key) and c != key[i]
+        marks.append(f"{i + 1}. {'True' if c == 'T' else 'False'}{' (wrong)' if wrong else ''}")
+    return "; ".join(marks)
+
+
+def _miss_line(r: dict[str, Any]) -> str:
+    kind = r["kind"]
+    prompt = " ".join((r["prompt"] or "").split())[:500]
+    earlier = "[earlier lesson version] " if (r["key"] or "").startswith("old-") else ""
+    response = r["response"] or ""
+    if kind == "multistep":
+        data = _json_or(response, {})
+        taken = {s.get("index"): s for s in (data.get("steps") or [])} if isinstance(data, dict) else {}
+        steps = _json_or(r["steps_json"], []) or []
+        wrong = any(not s.get("correct") for s in taken.values())
+        how = "a step wrong" if wrong else ("solution shown first" if r["revealed"] else "right with help")
+        parts = []
+        for i, step in enumerate(steps):
+            s = taken.get(i)
+            if s is None:
+                continue
+            answer = s.get("response") or "—"
+            if step.get("kind") in ("multiple_choice", "true_false"):
+                answer = _choice_text(step.get("choices") or [], answer)
+            elif step.get("kind") == "true_false_set":
+                answer = _tf_marks(step.get("choices") or [], answer, step.get("answer") or "")
+            note = ""
+            if not s.get("correct"):
+                note = f" (wrong; correct: {step.get('answer_display') or '—'})"
+            elif s.get("revealed"):
+                note = " (solution shown)"
+            elif s.get("hinted"):
+                note = " (hint)"
+            parts.append(f"step {i + 1}: {' '.join((step.get('prompt') or '').split())[:200]} → {answer[:120]}{note}")
+        return f"- {earlier}({kind}, {how}) {prompt} — " + (" | ".join(parts) or "no step answered")
+    if not r["correct"]:
+        how = "solution viewed, no answer" if r["revealed"] and not response.strip() else "wrong"
+    else:
+        how = "solution shown first" if r["revealed"] else "right with a hint"
+    choices = _json_or(r["choices_json"], []) or []
+    if kind == "true_false_set":
+        prompt += " Statements: " + " | ".join(f"{i + 1}. {st}" for i, st in enumerate(choices))
+        shown = _tf_marks(choices, response, r["answer"] or "")
+    elif kind in ("multiple_choice", "true_false"):
+        shown = _choice_text(choices, response)
+    else:
+        shown = response
+    return f"- {earlier}({kind}, {how}) {prompt} — learner answered: {shown[:200] or '—'} — correct: {r['answer_display'] or '—'}"
+
+
+def learner_misses(skill_id: str, limit: int = MAX_SHOWN_MISSES) -> list[str]:
+    """The learner's missed or assisted answers on this skill (current and earlier lesson versions — the earlier ones
+    marked), oldest first, for the planner: evidence of what the lesson did not teach. Left out: voided attempts,
+    unanswered quiz questions (skipped, timed out or never reached: no response), questions flagged as faulty (their
+    key may be wrong) and self-graded legacy free-response answers (no key, self-assessed)."""
+    rows = db.query(
+        "SELECT a.correct, a.independent, a.hints_used, a.revealed, a.response, a.created_at, "
+        "q.key, q.kind, q.prompt, q.choices_json, q.answer, q.answer_display, q.steps_json FROM attempts a "
+        "JOIN questions q ON q.id = a.question_id "
+        "WHERE a.skill_id = ? AND a.status NOT IN ('voided', 'self_graded') AND (a.correct = 0 OR a.independent = 0) "
+        "AND (COALESCE(a.response, '') != '' OR a.revealed = 1) AND (q.flagged = 0 OR q.flag_reason = ?) "
+        "ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?",
+        (skill_id, RETIRED_REASON, limit),
+    )
+    return [_miss_line(r) for r in reversed(rows)]
 
 
 async def plan_skill(
@@ -450,7 +551,7 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
         *[f"{i}. {step}" for i, step in enumerate(spec.practice_steps, start=1)],
     ]
     if spec.misconceptions:
-        lines += ["Known misconceptions:"] + [f"- {m}" for m in spec.misconceptions]
+        lines += [MISCONCEPTIONS_HEADER] + [f"- {m}" for m in spec.misconceptions]
     if spec.source_refs:
         lines.append("Book items: " + ", ".join(spec.source_refs))
     if spec.source_pages:
@@ -605,7 +706,8 @@ def render_lesson(
     lines = [f"Title: {d.get('title', '')}", f"Your goal: {d.get('goal_line', '')}", "", "TEACHING SEQUENCE"]
     for i, b in enumerate(d.get("blocks") or [], start=1):
         heading = f" — {b['heading']}" if b.get("heading") else ""
-        lines += [f"Block {i} [{b['kind']}]{heading}", b.get("body", "")]
+        idea = f"  (declared new idea: {b['new_idea']})" if b.get("new_idea") else ""
+        lines += [f"Block {i} [{b['kind']}]{heading}{idea}", b.get("body", "")]
         lines += _visual_lines(b.get("visual"))
         if b.get("check"):
             lines += _check_lines(b["check"])
@@ -671,11 +773,24 @@ def review_request(spec: TeachingSpec, draft: LessonV2Draft, *, key: str, revise
         "Planned reasoning sequence:",
         *[f"{i}. {s}" for i, s in enumerate(spec.reasoning_sequence, start=1)],
         f"Success check (the planner's idea for the capstone; the capstone rules take precedence): {spec.success_check}",
+        f"Starting point (the outcome problem the lesson should pose and solve): {spec.starting_point}",
+        *([MISCONCEPTIONS_HEADER] + [f"- {m}" for m in spec.misconceptions] if spec.misconceptions else []),
+        "",
+        "COUNTS FOR THE DENSITY PASS (from the writer's own labels — judge the content too)",
+        *idea_lines(draft),
         "",
         "LESSON DRAFT",
         render_lesson(draft),
     ]
     return "\n".join(lines)
+
+
+def idea_lines(draft: LessonV2Draft) -> list[str]:
+    """The blocks' declared new ideas, counted against the lesson budget (the reviewer's density pass)."""
+    ideas = [(i, b.new_idea.strip()) for i, b in enumerate(draft.blocks, start=1) if b.new_idea.strip()]
+    lines = [f"{len(draft.blocks)} blocks; {len(ideas)} declare a new idea (budget: about {IDEA_BUDGET} per lesson)."]
+    lines += [f"- block {i}: {idea}" for i, idea in ideas]
+    return lines
 
 
 async def review_lesson(spec: TeachingSpec, draft: LessonV2Draft, *, key: str = "", revised: bool = False) -> LessonReview:
@@ -693,10 +808,12 @@ async def review_lesson(spec: TeachingSpec, draft: LessonV2Draft, *, key: str = 
 
 def needs_revision(review: LessonReview) -> bool:
     """Revise once when the review reports any missing bridge (minor ones too — e.g. notation used before it is
-    introduced), an exercise needing an untaught method, out-of-scope content, reasoning that sits only in the
-    optional section, or a math error."""
+    introduced), any density problem (too many new ideas, a second method, something used before it is taught, …),
+    an exercise needing an untaught method, out-of-scope content, reasoning that sits only in the optional section,
+    or a math error."""
     return bool(
         review.issues
+        or review.density_issues
         or review.untaught_method_exercises
         or review.out_of_scope_violations
         or review.optional_content_needed
@@ -704,14 +821,26 @@ def needs_revision(review: LessonReview) -> bool:
     )
 
 
+def as_review(review: LessonReview | dict[str, Any]) -> LessonReview:
+    """A review object (reviews stored before the density pass existed have no density_issues)."""
+    if isinstance(review, LessonReview):
+        return review
+    return LessonReview.model_validate({"density_issues": [], **review})
+
+
 def review_lines(review: LessonReview | dict[str, Any] | None) -> list[str]:
     if review is None:
         return []
-    r = review if isinstance(review, LessonReview) else LessonReview.model_validate(review)
+    r = as_review(review)
     lines = []
     for issue in r.issues:
         lines.append(
             f"- [{issue.severity}] {issue.location}: the learner must infer {issue.inference_required} — "
+            f"{issue.why_insufficient} → repair: {issue.repair}"
+        )
+    for issue in r.density_issues:
+        lines.append(
+            f"- [density, {issue.severity}] {issue.location}: the learner must handle {issue.inference_required} — "
             f"{issue.why_insufficient} → repair: {issue.repair}"
         )
     for label, items in (
@@ -729,9 +858,12 @@ def review_lines(review: LessonReview | dict[str, Any] | None) -> list[str]:
 def review_summary(review: LessonReview | dict[str, Any] | None) -> str:
     if review is None:
         return "not reviewed"
-    r = review if isinstance(review, LessonReview) else LessonReview.model_validate(review)
+    r = as_review(review)
     counts = Counter(i.severity for i in r.issues)
     parts = [f"{counts['blocking']} blocking", f"{counts['minor']} minor"]
+    if r.density_issues:
+        dense = Counter(i.severity for i in r.density_issues)
+        parts.append(f"{len(r.density_issues)} density ({dense['blocking']} blocking)")
     for label, items in (
         ("untaught-method exercises", r.untaught_method_exercises),
         ("out of scope", r.out_of_scope_violations),
@@ -868,6 +1000,7 @@ async def validate_v2(
             {
                 "kind": kind,
                 "job": block.job.strip(),
+                "new_idea": block.new_idea.strip(),
                 "heading": (block.heading or "").strip() or None,
                 "body": body,
                 "visual": visual,
@@ -1109,15 +1242,19 @@ def is_v2(lesson_json: str | None) -> bool:
 
 __all__ = [
     "BridgeIssue",
+    "IDEA_BUDGET",
     "InvalidPlan",
     "clean_capstone",
     "content_problems",
     "PlanGraph",
     "V2Result",
     "clean_inline_check",
+    "as_review",
     "describe_plan",
     "generate_v2_lesson",
+    "idea_lines",
     "is_v2",
+    "learner_misses",
     "needs_revision",
     "new_keys",
     "persist_v2_lesson",

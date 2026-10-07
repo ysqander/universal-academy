@@ -35,6 +35,7 @@ from . import jobs
 from .context import BuildContext, load_course
 from .graph import reorder_course
 from .lesson_v2 import (
+    IDEA_BUDGET,
     V2Result,
     describe_plan,
     generate_v2_lesson,
@@ -389,7 +390,11 @@ def report_lines(report: ReplanReport) -> list[str]:
                 extra.append(f"visual {block['visual']['format']}")
             if block.get("check"):
                 extra.append(f"check {block['check']['kind']}")
+            if block.get("new_idea"):
+                extra.append(f"new idea: {block['new_idea']}")
             lines.append(f"  {i}. [{block['kind']}] {block.get('heading') or '—'}" + (f"  ({', '.join(extra)})" if extra else ""))
+        ideas = sum(1 for b in lesson.get("blocks") or [] if b.get("new_idea"))
+        lines.append(f"Declared new ideas: {ideas} (budget about {IDEA_BUDGET})")
         checks = [b["check"] for b in lesson.get("blocks") or [] if b.get("check")]
         if checks:
             lines.append("Checks:")

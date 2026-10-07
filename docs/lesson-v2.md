@@ -23,11 +23,13 @@ dense, mixed several skills, and put needed reasoning in optional sections). Pri
 
 1. **Planner** (`TeachingPlan`) — teaching spec per node: objective, assumed prerequisites, out of scope, starting
    example/question, reasoning sequence (bridges), success check, representation choice ("helps the learner notice
-   ___", how to read it), practice steps. Split test: *could someone succeed at one substantial part of this objective
-   and fail another because they require different reasoning?* → may return `split` with 2–5 narrower skills (each a
-   meaningful ability — "Multiply two complex numbers", not "multiply the first two terms") and, for every dependent of
-   the original node, which new skills it needs. Checking a supplied answer and constructing an answer are different
-   learning tasks.
+   ___", how to read it), practice steps. Skills are outcomes: the objective names a task the learner can do at the end
+   (solve, find, construct, prove — a proof is an outcome); evaluating or checking is a step inside it. Split test:
+   *does this node hold separate outcomes — tasks someone could do one of and not the other, each worth doing alone?*
+   → may return `split` with 2–5 narrower skills (each a meaningful task — "Multiply two complex numbers", not
+   "multiply the first two terms") and, for every dependent of the original node, which new skills it needs. The
+   planner also sees learner evidence on the skill: "This step isn't clear" notes and the questions the learner missed
+   or needed help with (their answer and the correct one).
 2. **Writer** (`LessonV2Draft`) — an ordered teaching sequence of blocks, each with a job (setup / explain /
    demonstrate / check / faded example / generalize / summary), not filled-in headings. Rules: keep one running
    example; explain consequential transitions where they happen ("because i² = −1" next to the substitution);
@@ -45,12 +47,16 @@ dense, mixed several skills, and put needed reasoning in optional sections). Pri
    - interpretation: the picture ↔ algebra correspondence, read explicitly.
    Every visual must finish "This representation helps the learner notice ___" and say how it is read; "no additional
    visual" is valid; an annotated equation sequence may be best.
-3. **Reviewer** (`LessonReview`) — reviews the lesson as a first explanation for a learner who knows only the stated
-   prerequisites. For each equation transition, new symbol, example, table and exercise: is its meaning and required
+3. **Reviewer** (`LessonReview`) — two passes. The first reviews the lesson as a first explanation for a learner who
+   knows only the stated prerequisites. For each equation transition, new symbol, example, table and exercise: is its meaning and required
    reasoning already established? Reports *location → what the learner must infer → why the explanation is
    insufficient → the smallest adequate repair*; flags exercises needing untaught methods, tables with unexplained
    candidates, essential reasoning only in optional sections, out-of-scope content, math errors; recommends a split
-   when a repair would add another substantial objective. No "clarity scores".
+   when a repair would add another substantial objective. No "clarity scores". The second pass (`density_issues`)
+   reads the lesson as a whole for *too much at once or out of order*: a block with more than one new idea (the writer
+   declares each block's `new_idea`; the request counts them against a budget of about four), a second method or
+   layout, a long routine justification, something used before it is taught, "you already know" without the fact,
+   shifting notation, a named misconception nothing tests, the outcome problem never solved.
 4. **Revision** — the writer revises once with the review; the final review is stored with the lesson.
 5. Questions are verified as before (a `true_false_set` disagreement is re-solved once by the stronger model;
    `agree_on_recheck` keeps it servable); the learner can mark any block "This step isn't clear" (stored per block
@@ -62,6 +68,16 @@ check); non-obvious algebraic moves are motivated before they are made ("if we a
 subtracting would isolate a² and b²"), and first encounters show every algebra line; a lesson about *checking*
 supplied answers includes a near miss (a candidate matching one coordinate but not the other) and says why it fails;
 split skills keep the original's place in the learning order and follow the planner's letter order.
+
+Rules added after the third round (S3b, complex quotients — "a little dense and unclear", 2026-10-07): skills are
+outcomes (above); one new idea per block and about four per lesson; one method shown one way; routine justifications
+are a clause unless the skill is a proof; teach before use; recall a prerequisite fact in one line; stable notation;
+every misconception the lesson names is tested; the lesson opens with the outcome problem and solves it before
+generalizing. Any density issue triggers the one revision, like a missing bridge. Counting new ideas: a recalled
+prerequisite fact or the same move on another case is not new; in a proof the strategy counts once and the laws it
+cites are the content. A learner's wrong answer on the skill becomes a "Learner's miss" misconception that the lesson
+must test with exactly that answer as a wrong option or near miss. A "show that" about one given object is a
+computation (kind `computation`), not a proof.
 
 ## Reference example (approved by the learner) — procedure skill
 
@@ -101,10 +117,9 @@ become a real number?")
 
 *Not included:* roots, fourth powers, exponent rules, a second example needing a new method.
 
-## Reference structure — checking supplied answers (a different task from constructing them)
+## Reference structure — checking supplied answers (a knowledge point of the skill that finds them)
 
-"We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below. We are not finding
-solutions from scratch yet — we are checking whether these suggestions work. A suggestion works only if squaring it
-gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
+"We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below; we check whether
+these suggestions work. A suggestion works only if squaring it gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
 (suggestion | what we get when we square it | matches?), then the point: *getting the real part right is not enough —
-the imaginary part, including its sign, must match too.* Finding the candidates belongs to a later lesson.
+the imaginary part, including its sign, must match too.*

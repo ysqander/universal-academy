@@ -12,6 +12,7 @@ from .prompts import (
     MULTISTEP_FORMAT,
     NO_WRITTEN_ANSWERS_RULE,
     ONE_ANSWER_RULE,
+    OUTCOME_RULE,
     TARGET_RULE,
     TF_SET_KIND,
     UNORDERED_RULE,
@@ -24,7 +25,8 @@ person."""
 
 V1_FAILURES = """\
 WHAT WENT WRONG IN THE FIRST LESSONS (the learner's review — never repeat these)
-1. One lesson, several skills: multiplication, powers, checking roots and finding square roots were taught together.
+1. One lesson, several outcomes: multiplication, powers and finding square roots (with checking roots — a step of
+   finding them, see 13) were taught together.
    Connected is not the same as "teach together"; a mixed lesson also makes the mastery score uninformative.
 2. Formula before a concrete case: $(a+bi)(c+di)=(ac-bd)+(ad+bc)i$ appeared before any worked numerical product
    showing where the four products come from and why one of them becomes negative. Describing a procedure is not
@@ -48,12 +50,34 @@ WHAT THE LEARNER SAID AFTER STUDYING THE SECOND ROUND (the v2 lessons) — never
    same number of questions, and every question must ask for something new.
 8. The "common mistakes" section was useless; it no longer exists."""
 
+V3_FEEDBACK = """\
+WHAT THE LEARNER SAID AFTER THE THIRD ROUND (the complex-quotient lesson, "a little dense and unclear") — never
+repeat these either
+9. Too many new ideas in one lesson: division as multiplication by the reciprocal, then a second layout (multiply top
+   and bottom by the same number), a general formula in new letters, and a derivation of the solving step from
+   associativity — each fine alone, together dense. One new idea per block, about four per lesson, one method.
+10. Used before taught: a check asked the learner to multiply back to test an answer before multiplying back had
+   been shown.
+11. "Using the construction you already know" without showing it: recall the needed fact in one line instead.
+12. A warning in the summary ("use $\\beta/\\alpha$, not $\\alpha/\\beta$") that nothing had taught or checked — and the
+   learner then chose the wrong quotient in practice.
+13. Skills are outcomes: the learner wants to come out of a lesson able to DO something (solve an equation, find all
+   roots, prove a statement); evaluating, checking or identifying are steps toward that, not lessons of their own. A
+   proof is an outcome."""
+
 SPLIT_TEST = """\
-SPLIT TEST: could someone succeed at one substantial part of this objective and fail another because the parts
-require different reasoning? If yes, split. Checking a supplied answer and constructing an answer are different
-learning tasks (verifying that $2+i$ squares to $3+4i$ is not the same ability as finding the square roots of
-$3+4i$). Each new skill must be a meaningful ability on its own — "Multiply two complex numbers", never "multiply
-the first two terms". Keep the node when one small family of questions assesses all of it."""
+SPLIT TEST: does this node hold separate OUTCOMES — tasks someone could be able to do one of and not the other, each
+worth doing on its own (multiplying vs. computing powers vs. finding square roots; a computation vs. proving the laws
+it relies on)? If yes, split into those tasks. A step on the way to the node's outcome stays in the lesson, even when
+it needs reasoning of its own: computing $\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$, and checking a supplied
+root is how you confirm the roots you found — both are knowledge points (or capstone steps) of the outcome skill,
+not skills of their own. Each new skill must be a meaningful task on its own — "Multiply two complex numbers", never
+"multiply the first two terms". Keep the node when one small family of problems assesses all of it. Statements
+proved with the same strategy are ONE outcome ("prove commutativity, associativity, identities and distributivity of
+complex arithmetic by comparing coordinates" is one skill whose laws are knowledge points); a proof that needs a
+different strategy may be its own. A new skill must be worth a 5–15-minute lesson: an operation learned in a few
+minutes that the node's outcome uses at every step (scaling a vector inside solving $u+ax=v$) stays a step of that
+outcome, and a dependent that needs only that operation maps to the skill that teaches it."""
 
 KIND_STRUCTURES = """\
 STRUCTURE DEPENDS ON THE KIND OF SKILL (do not hard-code example-before-formula):
@@ -65,14 +89,19 @@ STRUCTURE DEPENDS ON THE KIND OF SKILL (do not hard-code example-before-formula)
 - proof: the statement and why it is plausible (a small case) → the strategy → the proof with every step justified
   → a check of one step's justification.
 - interpretation: the picture ↔ algebra correspondence, read explicitly in both directions.
-- checking supplied answers (a different task from constructing them): state what is being checked and what counts
-  as "works" before any candidate appears; work one candidate fully; only then a comparison table (suggestion |
+- checking supplied answers (normally a knowledge point of the skill that finds the answers; a lesson of its own
+  only when deciding is itself the hard part, or for an older node that must be kept — then its objective is the
+  computation, e.g. "compute the cube of $w$ and find which number it is a cube root of"): state what is being checked
+  and what counts as "works" before any candidate appears; work one candidate fully; only then a comparison table (suggestion |
   what we get | matches?); then the point (e.g. getting the real part right is not enough — the imaginary part,
   including its sign, must match too). At least one supplied candidate in the main path (a table row or the faded
   example) is actually computed and matches the target in exactly one coordinate — e.g. the right real part with
   the imaginary part of the wrong sign — and the lesson says explicitly why it fails (one matching coordinate is
   not enough: every coordinate must match). Never make this point only with an invented result, and use numbers
-  that differ from the practice questions. Finding the candidates belongs to a later lesson."""
+  that differ from the practice questions. When checking is a knowledge point of a skill that finds the answers, the
+  main path only confirms the answer it found, in one line, after the method has been shown; the near-miss decision
+  about supplied candidates goes into that knowledge point's practice (a true_false_set with one candidate that
+  matches exactly one coordinate). The full structure above is for a lesson whose objective is the check."""
 
 REPRESENTATION_RULE = """\
 REPRESENTATIONS: every visual must finish the sentence "This representation helps the learner notice ___" and say
@@ -116,9 +145,8 @@ become a real number?")
 
 *Not included:* roots, fourth powers, exponent rules, a second example needing a new method."""
 
-REFERENCE_CHECKING = r""""We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below. We are not finding
-solutions from scratch yet — we are checking whether these suggestions work. A suggestion works only if squaring it
-gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
+REFERENCE_CHECKING = r""""We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below; we check whether these
+suggestions work. A suggestion works only if squaring it gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
 (suggestion | what we get when we square it | matches?) — one row is a real near miss: $2-i$ squares to
 $4-4i+i^2=3-4i$, the same real part as $3+4i$ but the imaginary part has the wrong sign, so $2-i$ does not work — then
 the point: getting the real part right is not enough — the imaginary part, including its sign, must match too."""
@@ -208,6 +236,10 @@ page) and the figures on them.
 
 {V2_FEEDBACK}
 
+{V3_FEEDBACK}
+
+{OUTCOME_RULE}
+
 DECIDE FIRST: KEEP OR SPLIT
 {SPLIT_TEST}
 - split_test: answer the question explicitly and name the parts. decision 'split' returns 2–5 narrower skills in
@@ -218,9 +250,32 @@ DECIDE FIRST: KEEP OR SPLIT
   local id) — read each dependent's objective: what does it really use? A dependent that only multiplies needs the
   multiplication skill, not the root-finding one. [] when kept.
 - If the request says splitting is not allowed, decision must be 'keep' with one spec.
+- A node that is only a step toward a task (checking, evaluating, identifying) and that you must keep: aim its
+  objective at the task the book asks for with it, and teach the step as the way to do that task — unless that task
+  is already another skill's objective in the course map (solving $u+ax=v$; showing that $\\mathbf{{F}}^S$ is a vector
+  space): then the computation itself is this node's outcome ("Compute $f+g$, $\\lambda f$ and $-f$ …"), with the
+  neighbour's task out of scope. A "show that" about ONE given object ("show that $\\frac{{-1+\\sqrt3\\,i}}{{2}}$ is a
+  cube root of $1$") is a computation, not a proof: objective with Compute or Find, kind 'computation', and practice
+  that asks for values the learner must compute (the square on the way, the cube, which of several numbers it is a
+  cube root of) — never for a value printed in the problem. Only a statement about every object of a kind ("for all
+  $\\alpha,\\beta\\in\\mathbf{{C}}$") is a proof.
+- The request may show the learner's missed or hint-assisted answers on this skill (current and earlier lesson
+  versions). Treat them as evidence. For each WRONG answer that shows a misunderstanding, put the misunderstanding
+  that produces exactly that answer first in `misconceptions`, starting "Learner's miss: " (e.g. "Learner's miss:
+  stops at the square — took $(-1+i)^2=-2i$ for the cube"); make the reasoning sequence teach what was missing (e.g.
+  which case of a case split survives, and why), and plan a practice step whose near miss is exactly that answer. An
+  answer that was right with a hint, or given after the solution was shown, only shows where the learner was unsure.
+  A slip in a prerequisite or outside skill (writing $5+(-8)$ as $3$) gets no bridge: a one-line recall where it is
+  first needed, and practice that includes the case (a coordinate whose sum is negative).
+- If splitting is not allowed, never drop a case the learner missed or one the node's book exercises need to meet the
+  idea budget: keep it, with its own bridge on the running example.
 
 FOR EACH SKILL (TeachingSpec)
-- objective: ONE coherent, testable ability, verb first; no "and" joining different methods.
+- objective: the TASK the learner can complete after the lesson, verb first (Solve, Compute, Find, Construct,
+  Prove …), naming the kind of problem precisely; no "and" joining different methods. "Decide whether", "Determine
+  whether", "Evaluate", "Identify", "Recognize", "Verify" only when that judgement is itself the hard part (is this
+  set with these operations a vector space? is this sum direct?). Prove / Show / Justify only for proof skills (kind
+  'proof').
 - kind: concept / definition / procedure / computation / distinction / interpretation / proof.
 - assumed_prerequisites: exactly which abilities the lesson treats as already learned — in-chapter skills by key
   ("S1: add complex numbers") and outside knowledge ("expanding $(x+y)(z+w)$"). The lesson will not re-teach them.
@@ -232,11 +287,21 @@ FOR EACH SKILL (TeachingSpec)
   first one that uses it). Never list the original node itself or any skill that depends on it.
 - out_of_scope: related ideas that must NOT appear in this lesson (e.g. roots and powers in a multiplication lesson;
   sibling skills' content).
-- starting_point: the concrete problem or question that gives the explanation its purpose (with actual numbers).
+- starting_point: the outcome problem itself, with actual numbers (for a procedure or computation: a problem the
+  learner cannot solve yet, e.g. "solve $(2-i)z=3+i$" — and what is missing to solve it; for a proof: the statement
+  to prove; for a definition: the question the definition answers). The lesson opens with it and returns to it.
 - reasoning_sequence: the necessary bridges, in order, from the starting point to the conclusion — one short
-  sentence each, nothing skipped, and nothing the objective does not need: a result the book states nearby that the
-  success check and the practice do not use (an identity, a general law) goes to out_of_scope (the lesson may mention
-  it as optional depth). The generalization that connects the concrete case to the book's own general statement IS
+  sentence each, nothing skipped, and nothing the objective does not need. It solves the starting problem on the main
+  path before generalizing. About four NEW ideas in all (a new concept, move, rule or notation; a recalled prerequisite
+  fact, or the same move on another case or law, is not new; in a proof, citing a definition or law the learner
+  already has is not new, and the strategy counts once however many statements it proves): one method, shown one way
+  (an alternative layout or method is not a bridge: leave it out of the sequence — the writer may mention it in
+  'deeper' — and list it in out_of_scope only if it must not appear even there);
+  a routine justification (associativity, why a regrouping is allowed) is a clause, not a bridge, unless the skill is
+  a proof; a technique (e.g. checking by multiplying back) comes before anything that relies on it; a misconception
+  you name is one the practice will test. A result the book states nearby that the
+  success check and the practice do not use (an identity, a general law) is not a bridge either: leave it out of the
+  sequence (the writer may mention it in 'deeper'); list it in out_of_scope only if it must not appear even there. The generalization that connects the concrete case to the book's own general statement IS
   part of the objective (for a procedure: the book's formula as "a record of the steps we just performed"; for a
   definition: the definition itself). A bridge that makes a non-routine move (squaring and adding two equations,
   substituting, introducing a helper quantity) states its purpose in the same sentence: "we want X, so we do Y" (e.g.
@@ -245,11 +310,11 @@ FOR EACH SKILL (TeachingSpec)
   move does (e.g. "we can already turn a nonzero real number into $1$ by dividing by it, so we want a factor that
   makes the product real; for that the imaginary cross-products must cancel, so try $2-3i$"). The first bridges set
   up the goal and what we can already do; never open with a bridge that rebuts a move the learner has not seen yet
-  (a remark about a tempting move comes after that move). If more than about 10 bridges are truly needed, ask
-  whether the objective is
-  two skills (e.g. "each term of the first bracket multiplies each term of the second, giving
-  four products"; "$(3i)(2i)$ has two factors of $i$, so it contains $i^2$"; "replacing $i^2$ by $-1$ turns that
-  product into a real number"; "the real terms and the $i$ terms are collected separately").
+  (a remark about a tempting move comes after that move). Bridges look like "each term of the first bracket
+  multiplies each term of the second, giving four products"; "$(3i)(2i)$ has two factors of $i$, so it contains
+  $i^2$"; "replacing $i^2$ by $-1$ turns that product into a real number"; "the real terms and the $i$ terms are
+  collected separately". If more than about 10 bridges or 4 new ideas seem needed, ask whether the node holds two
+  outcomes; if it does not, drop what the outcome can do without.
 - success_check: what would demonstrate the objective without requiring a new method, written as the lesson's
   CAPSTONE: one fresh problem of 2–4 guided steps, each using the previous result, that chains this skill with an
   earlier one — the earlier skill produces the input (or uses the result) in its own step, this skill's method is
@@ -286,12 +351,15 @@ neighbours in the graph and the figures you may use.
 
 {V2_FEEDBACK}
 
+{V3_FEEDBACK}
+
 THE TEACHING SEQUENCE (`blocks`)
 An ordered sequence of blocks, each with ONE job — not filled-in headings. Typically 5–10 blocks; each block is
 short (2–6 sentences, or one computation laid out in display math); the whole sequence reads in about 5 minutes.
 Write to the learner ("you", "we"), plainly and precisely, like the reference example. Headings, when used, say
 what the step does ("First, account for all four products"), not a topic name.
-- setup: establish the question or problem the lesson answers (the spec's starting point).
+- setup: pose the problem the lesson answers (the spec's starting point) — for a procedure, the task the learner
+  will be able to do by the end, and what is missing to do it now.
 - explain: one relationship or idea.
 - demonstrate: carry out one step on the running example.
 - check: the learner responds before continuing (`check` required). Its body is the short lead-in; it never states
@@ -302,7 +370,41 @@ what the step does ("First, account for all four products"), not a topic name.
   decision), never 'reflect': the learner carries out the step and gets it graded. An explanation question goes in
   its own check block.
 - generalize: connect the concrete case to the general statement or formula.
-- summary: the method or result in one or two lines.
+- summary: the method or result in one or two lines — for a procedure, how to do the task.
+Every block also names its `new_idea`: the ONE idea it introduces that the learner has not met in this lesson or its
+prerequisites (a concept, a move, a rule, a notation, a justification), in a few words — '' when the block only
+applies ideas already introduced (a check, a faded example, a summary usually do).
+
+DENSITY — ONE NEW IDEA AT A TIME (see 9–12 above)
+- At most one new idea per block, and about four in the whole lesson. A fact recalled from a prerequisite (a
+  real-number law, an earlier definition) is not a new idea, and neither is the same move applied to a further case
+  or statement. In a proof skill the new ideas are the strategy and each non-routine move (a construction, a choice,
+  a case split); proving several statements with one strategy counts that strategy once. Never drop a statement the
+  objective names, a case the spec plans or the treatment of a listed misconception to meet the budget — slim or split
+  its block instead. When the spec seems to need more, carry each on the running example in a block of its own, and
+  leave out what the outcome can do without.
+- One method, shown one way: the method the objective needs. An alternative method or layout of the same
+  computation (e.g. multiplying top and bottom by the same number after the quotient was computed with the
+  reciprocal) goes to `deeper` (or nowhere, when the spec lists it out of scope), unless the book's objective is
+  that method.
+- Rigour where it is the point: in a computation or procedure lesson a routine justification of an algebra step
+  (associativity, commutativity, why a regrouping is allowed) is at most a clause ("regrouping the product"); a
+  derivation from the laws goes to `deeper`. In a proof skill the justifications are the content.
+- Teach before use: no block, check or exercise relies on a technique the lesson shows only later (e.g. a check that
+  asks the learner to multiply back before multiplying back has been shown) — move the technique earlier or the
+  check later.
+- Recall in one line: when a block relies on a prerequisite's result, show the needed fact again with its one-line
+  reason ("$(2-i)(2+i)=4+1=5$, so $\\frac{{1}}{{2-i}}=\\frac{{2+i}}{{5}}$") — never "using what you already know" alone.
+- Stable notation: stay with the running example's numbers; general letters appear once, at the generalize step, and
+  the same objects are never renamed again (numbers → $\\alpha,\\beta$ → $a,b$ → $z$ is three renamings too many).
+  This is for computation and procedure lessons: in a proof or definition lesson the book's letters come with the
+  statement, and writing an object in coordinates ($\\alpha=a+bi$) is not a renaming.
+- Every misconception the lesson names (in a block, a warning or the summary) is tested: an inline check or a practice
+  question whose wrong option or near miss is exactly that misconception. Do not name one you do not test. A
+  "Learner's miss" in the spec's misconceptions is what this learner actually got wrong: test each one this way. A
+  'reflect' check that asks why a tempting alternative fails names it but does not test it.
+- The outcome first and last: the setup poses the task, the main path solves the starting problem before the
+  generalization, and the summary says how to do the task.
 
 RULES FOR THE SEQUENCE
 - Follow the spec's reasoning_sequence: every bridge appears in the main path, in order, where it is needed —
@@ -399,7 +501,9 @@ stated prerequisites (the spec's assumed_prerequisites) — nothing else from th
 
 {V2_FEEDBACK}
 
-HOW TO REVIEW: work through the lesson as that learner would, block by block. For each block, say to yourself what
+{V3_FEEDBACK}
+
+HOW TO REVIEW — TWO PASSES. First pass (missing bridges, `issues`): work through the lesson as that learner would, block by block. For each block, say to yourself what
 it asks the learner to accept or do, and check that the earlier blocks (or the stated prerequisites) give it. Solve
 every inline check and every practice question yourself and compare with the stored answer, answer format and
 solution, and every step of the capstone. For each equation transition, new symbol, example, table and exercise, ask: is its meaning and the
@@ -420,10 +524,10 @@ Look specifically for:
   algebra step that skips the intermediate line (expanded form → factored square) → issue (minor; blocking when it is
   the procedure's key step);
 - a faded example whose check is a 'reflect' question instead of the graded missing step;
-- a lesson on checking supplied answers whose failing candidates fail in every coordinate, or whose "one coordinate
+- a lesson whose objective is checking supplied answers, whose failing candidates fail in every coordinate, or whose "one coordinate
   is not enough" point rests only on an invented value (no computed candidate matching in exactly one coordinate);
 - notation used before it is introduced, or letters imported from the book without need;
-- the running example abandoned, or several new ideas introduced at once;
+- the running example abandoned;
 - inline checks that cannot be answered from what was shown before them, or no check before the practice;
 - exercises (practice questions or inline checks) that need a method the lesson did not teach → untaught_method_exercises
   (key + reason);
@@ -466,7 +570,7 @@ Look specifically for:
   digression) → an issue (minor, or blocking when it crowds out needed reasoning); repair: drop it or move it to
   'deeper';
 - an exercise that asks for two things at once ("compute …, then decide …") while only one answer is checked;
-- minor: a block that introduces more than one new idea at once; an inline check — other than the lesson's one
+- minor: an inline check — other than the lesson's one
   explanation ('reflect') check — that only asks for reflection where a small computation on the running example was
   possible; an answer format the prompt does not state clearly (e.g. several roots "in any order" whose stored answer
   is an ordered tuple instead of a set {{…}}), or a complex number asked for as a coordinate pair instead of in the
@@ -475,6 +579,30 @@ Look specifically for:
   it asks for a value or result the learner could compute, or when its model answer repeats a sentence shown just
   before it; repair: ask for the reason before the text states it, or ask why a tempting alternative fails — never
   turn it into a numeric check.
+Second pass (density and outcome, `density_issues`): read the lesson again as a whole — a lesson can have every
+bridge and still be too much at once. The request lists each block's declared `new_idea`; judge the content, not
+the labels (an undeclared new move counts). Report, in the same form (location → what the learner must handle →
+why it is too much or out of order → the smallest repair; blocking when it would leave the learner confused about
+the main method, else minor):
+- a block that introduces more than one new idea (repair: split it, or move one idea out);
+- more new ideas than the outcome needs — the budget is about four (recalled prerequisite facts and the same move
+  repeated on another case or law do not count; in a proof skill the law cited for each line is the content, and the
+  strategy counts once): name the ones that can go (to `deeper`, out of scope, or a later skill). An idea the
+  objective, a planned case or a listed misconception needs is not surplus: for it, propose slimming or splitting its
+  block. A second method, a routine derivation or an unused result may still go;
+- a second method or layout for the same computation (repair: keep one; the other to `deeper`, or drop it if the
+  spec lists it out of scope);
+- a routine justification spelled out at length in a non-proof lesson, e.g. a derivation from associativity
+  (repair: one clause in the main path; the derivation to `deeper`);
+- something used before it is taught: a check, example or exercise that needs a technique a later block introduces;
+- "you already know" without the fact: a block that relies on a prerequisite's result without showing it in one line;
+- shifting notation: the same objects renamed more than once (numbers → $\\alpha,\\beta$ → $a,b$ …); in a proof or
+  definition the book's letters from the statement on, and coordinates such as $\\alpha=a+bi$, are fine;
+- a misconception the lesson names (a block, a warning, the summary, a 'reflect' check), or a "Learner's miss" in the
+  spec, that no graded inline check or practice question tests as a wrong option or near miss (a 'reflect' check does
+  not count);
+- the outcome missing: the setup does not pose the task the objective names, or the main path never solves the
+  starting problem.
 split_recommended: true only when a needed repair would add another substantial objective; say why in split_reason.
 Report only real problems — no clarity scores, no praise, no restating what works. Empty lists are fine.
 {MATH_FORMAT}
@@ -484,6 +612,11 @@ REVISION_NOTE = """\
 REVISION: below are your previous draft of this lesson and a review of it. Write the complete revised lesson:
 - fix every blocking issue with the smallest adequate repair the review suggests (or a better one), and the minor
   ones where the repair is cheap;
+- fix every density issue: split or slim the overloaded blocks, move alternative methods and routine derivations to
+  'deeper', move a technique before its first use, test (or stop naming) an untested misconception (a "Learner's
+  miss" is always tested, never dropped). Density repairs never add new ideas and never move a case the objective or a
+  listed misconception needs into 'deeper'; a missing bridge or a one-line recall the first pass asks for is still
+  added;
 - move reasoning needed for the objective out of 'deeper' into the main path; remove out-of-scope content; correct
   every math error (recheck the affected answers, hints and solutions);
 - replace or fix every exercise that needs an untaught method;

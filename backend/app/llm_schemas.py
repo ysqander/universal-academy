@@ -371,14 +371,22 @@ class PlannedPrereq(BaseModel):
 class TeachingSpec(BaseModel):
     local_id: str = Field(description="'a', 'b', 'c', ... in learning order (just 'a' when the skill is kept).")
     title: str = Field(description="Short ability name, e.g. 'Multiply two complex numbers'.")
-    objective: str = Field(description="One coherent, testable ability (verb first). No 'and' joining different methods.")
+    objective: str = Field(
+        description=(
+            "The task the learner can complete after the lesson, verb first (Solve, Compute, Find, Construct, "
+            "Prove, ...). Decide / determine whether / evaluate / identify / verify only when that judgement is itself "
+            "the hard part; Prove / Show / Justify only for kind 'proof'. No 'and' joining different methods."
+        )
+    )
     kind: SkillKind
     assumed_prerequisites: list[str] = Field(
         description="Exactly which abilities are treated as already learned (name in-chapter skills by key, e.g. 'S1: add complex numbers')."
     )
     prerequisites: list[PlannedPrereq] = Field(description="Direct in-chapter prerequisites (existing keys and/or earlier siblings).")
     out_of_scope: list[str] = Field(description="Related ideas that must NOT be introduced in this lesson.")
-    starting_point: str = Field(description="The concrete problem or question that gives the explanation its purpose.")
+    starting_point: str = Field(
+        description="The outcome problem itself, with actual numbers (or the statement to prove); the lesson opens with it and solves it."
+    )
     reasoning_sequence: list[str] = Field(
         description="The necessary bridges, in order, from the starting point to the conclusion (one short sentence each)."
     )
@@ -400,8 +408,8 @@ class DependentLink(BaseModel):
 class TeachingPlan(BaseModel):
     split_test: str = Field(
         description=(
-            "Answer: could someone succeed at one substantial part of this objective and fail another because they "
-            "require different reasoning? Name the parts."
+            "Answer: does this node hold separate outcomes — tasks someone could do one of and not the other, each "
+            "worth doing on its own? Name them. A step on the way to the outcome (evaluating, checking) is not one."
         )
     )
     decision: Literal["keep", "split"]
@@ -438,6 +446,12 @@ class TeachingBlock(BaseModel):
         )
     )
     job: str = Field(description="One line: what this block establishes for the learner (used for review, not shown).")
+    new_idea: str = Field(
+        description=(
+            "The ONE idea this block introduces that the learner has not met in this lesson or its prerequisites, in a "
+            "few words; '' when the block only applies ideas already introduced (used for review, not shown)."
+        )
+    )
     heading: str | None = Field(description="Optional short heading, e.g. 'First, account for all four products'.")
     body: str = Field(description="Markdown + LaTeX. Explain consequential transitions where they happen.")
     visual: VisualizationPlan | None = Field(description="Only when a representation planned for this block earns its place.")
@@ -476,6 +490,14 @@ class BridgeIssue(BaseModel):
 
 class LessonReview(BaseModel):
     issues: list[BridgeIssue]
+    density_issues: list[BridgeIssue] = Field(
+        description=(
+            "Second pass: too much at once or out of order — a block with more than one new idea, more new ideas than "
+            "the outcome needs, a second method, a long routine justification, something used before it is taught, "
+            "a prerequisite fact assumed without showing it, shifting notation, a named misconception never tested, "
+            "the outcome problem never solved."
+        )
+    )
     untaught_method_exercises: list[str] = Field(description="Exercise keys that need a method the lesson did not teach, with the reason.")
     out_of_scope_violations: list[str]
     optional_content_needed: list[str] = Field(description="Reasoning needed for the objective that sits only in 'deeper'.")

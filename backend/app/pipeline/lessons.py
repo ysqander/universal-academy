@@ -43,7 +43,9 @@ TARGET_RANGE = (1, 3)  # knowledge_points[].target_questions: questions served t
 LEGACY_TARGET = 2  # lessons stored before targets existed
 ATTEMPTS = 2
 RETIRED_REASON = "retired: lesson regenerated"
-_PROOF_VERBS = re.compile(r"^\s*(prove|justify|show)\b", re.IGNORECASE)
+# "Show that …" is not on the list: a "show that" about one given object (show that $w$ is a cube root of $1$) is a
+# computation; general statements are planned with kind 'proof'.
+_PROOF_VERBS = re.compile(r"^\s*(prove|justify)\b", re.IGNORECASE)
 
 
 def is_proof_skill(skill: dict[str, Any]) -> bool:

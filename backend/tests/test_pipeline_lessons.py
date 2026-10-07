@@ -68,7 +68,8 @@ def test_source_refs_keep_short_item_references_only():
 def test_proof_skill_detection():
     assert is_proof_skill({"kind": "proof", "objective": "Compute"})
     assert is_proof_skill({"kind": "concept", "objective": "Justify why $0v=0$."})
-    assert is_proof_skill({"kind": "concept", "objective": "Show that addition is commutative."})
+    assert is_proof_skill({"kind": "proof", "objective": "Show that addition is commutative."})
+    assert not is_proof_skill({"kind": "computation", "objective": "Show that $w$ is a cube root of $1$."})
     assert not is_proof_skill({"kind": "computation", "objective": "Compute $(a+bi)(c+di)$."})
 
 

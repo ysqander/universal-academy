@@ -120,6 +120,16 @@ CAPSTONE (`capstone`) — the lesson's final problem, served after the practice
   results in the form $a+bi$, never as coordinate pairs. The question prompt states the whole problem and its goal;
   each step prompt says exactly what to do now and the form to enter."""
 
+OUTCOME_RULE = """\
+SKILLS ARE OUTCOMES (the learner's rule): a skill is defined by what the learner can DO at the end of its lesson — a
+task they complete: solve an equation, compute a result, find all solutions, construct an example, prove a general
+statement (a proof is an outcome). Ask "which problem can the learner solve after this lesson that they could not
+solve before?" — the objective names that problem. Evaluating an expression, checking a supplied answer, identifying
+or recognising something are steps on the way to such a task: they belong inside the skill that uses them (a
+knowledge point, an inline check, a capstone step), not in a skill of their own — unless the judgement itself is the
+hard part (deciding whether a set with given operations is a vector space; whether a sum is direct). Computing
+$\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$; checking a candidate root is how you confirm the roots you found."""
+
 GRAPH_INSTRUCTIONS = f"""\
 You design the knowledge graph of a Math-Academy-style course generated from pages of a textbook the learner owns.
 The user message holds a faithful transcription of the selected pages: page markers <<page N · p.L>> (N = PDF page
@@ -133,17 +143,22 @@ reviews of a node give implicit review credit to its prerequisites in proportion
 WHAT A NODE IS
 - An ABILITY the learner can be asked to DO, which a small family of questions can check — not a heading or a topic
   name. "Multiply two complex numbers given as $a+bi$" is a node; "Complex numbers" is not.
-- objective: one sentence starting with a verb (Compute, Decide, Distinguish, Explain, Justify, Prove, Interpret,
-  Translate, Recognize, Apply …) that names the objects and conditions precisely enough that two teachers would
-  write similar questions for it.
-- Split when parts can be learned or forgotten independently, or when cases are practised separately (adding vs.
-  multiplying; a computation vs. proving the general property; real vs. complex scalars). Merge when one family of
-  questions assesses both. Stop splitting when a single problem type checks the ability.
-- Include conceptual abilities, not only procedures: distinguish confusable notions, explain why a definition is
-  set up the way it is, predict or interpret, justify a step, prove a result. Proof-oriented books need "prove /
-  justify" skills (kind 'proof'); they are practised with guided multistep walkthroughs of the proofs.
+{OUTCOME_RULE}
+- objective: one sentence starting with a verb that names the task (Solve, Compute, Find, Construct, Prove …) and
+  the objects and conditions precisely enough that two teachers would write similar questions for it. "Decide
+  whether", "Determine whether", "Evaluate", "Identify", "Recognize" or "Verify" only when that judgement is itself
+  the hard part (is this set with these operations a vector space? is this sum direct?); otherwise name the task it
+  serves ("Solve $\\alpha z=\\beta$ for $z$", not "Evaluate a quotient"). Prove / Show / Justify only for proof skills
+  (kind 'proof'); a "show that" about one given object is a computation.
+- Split when the parts are separate outcomes — tasks that can be learned or forgotten independently, or cases that
+  are practised separately (adding vs. multiplying; a computation vs. proving the general property; real vs.
+  complex scalars). A step on the way to a task stays with the task. Merge when one family of problems assesses
+  both. Stop splitting when a single problem type checks the ability.
+- Include conceptual abilities, not only procedures — as tasks: predict or interpret a result, prove a result. Proof-oriented books need "prove / justify" skills (kind 'proof'); they are practised with guided
+  multistep walkthroughs of the proofs.
 - A confusable pair (e.g. a list vs. a set, the number 0 vs. the zero vector, $\\mathbf{{F}}^n$ vs. $\\mathbf{{F}}^\\infty$)
-  deserves its own 'distinction' skill.
+  is taught where it matters: a knowledge point (a decision with a near miss) of the skill that uses it. It gets its
+  own 'distinction' skill only when telling the two apart is itself the hard part and the book treats it as such.
 - SIZE: each skill is worth a ~10-minute lesson with 2–3 knowledge points (basic case → harder case → transfer).
   Cases that are practised with the same kind of problem are KNOWLEDGE POINTS of one skill, not separate skills:
   "prove commutativity / associativity / distributivity of complex arithmetic" is ONE proof skill; "multiply a

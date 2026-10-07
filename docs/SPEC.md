@@ -83,15 +83,17 @@ Rules:
 - Skill count sanity: if < 5 or > 40, log a warning (no retry in MVP).
 
 ### 4.2 Prompting principles (graph + lessons)
-- Nodes are **abilities**, not headings: objective starts with a verb; split when abilities can be learned/forgotten independently; stop when one small family of questions assesses it.
-- Include conceptual abilities (explain / distinguish / predict / interpret / justify), not only procedures. Proof-oriented books (Axler) need "prove/justify" skills with free-response questions + checklists.
+- Nodes are **outcomes**, not headings: the objective names a task the learner can do at the end (solve, compute, find, construct, prove — a proof is an outcome); evaluating, checking or identifying is a step inside the skill that uses it, unless the judgement is itself the hard part (is this a vector space? is this sum direct?). Split only into separate outcomes; stop when one small family of problems assesses it ([DECISIONS.md §2](DECISIONS.md)).
+- Include conceptual abilities as tasks (predict, interpret, prove), not only procedures. Proof-oriented books (Axler) need proof skills (kind `proof`), practised with multistep walkthroughs; a "show that" about one given object is a computation.
 - Edges mean "needed before"; encompassing weight says how much practising the dependent skill exercises the prerequisite (drives FIRe-lite).
 - Preserve the author's notation and definitions; cite printed item numbers (1.3) and pages.
 - Lessons: Why it matters → The idea → Worked example → Your turn (tier ramp 1→3) → Connection; short main path; depth behind "Show the missing steps". Questions must be self-contained, assess the stated objective, use only taught or prerequisite material; prefer machine-checkable forms; adapt book exercises when suitable (cite them).
 
 ### 4.2b Lesson generation v2 (experimental — see [lesson-v2.md](lesson-v2.md))
-Planner (`TeachingPlan`, may split a node) → writer (`LessonV2Draft`: ordered teaching blocks with inline checks and
-faded examples, then practice knowledge points) → missing-bridge reviewer (`LessonReview`) → one revision. Stored as
+Planner (`TeachingPlan`, may split a node into separate outcomes; sees block feedback and the learner's missed or
+assisted answers on the skill) → writer (`LessonV2Draft`: ordered teaching blocks, each declaring its one `new_idea`,
+with inline checks and faded examples, then practice knowledge points) → reviewer (`LessonReview`: missing-bridge pass
+`issues` + density/outcome pass `density_issues`) → one revision when either pass reports anything. Stored as
 `lesson_json.format = "v2"`; the API returns `Lesson.format/blocks/goal_line/assumed/out_of_scope/deeper`. Applied per
 skill with `backend/scripts/replan.py --course <id> --skill S2 [--dry-run] [--no-split]`; a split
 replaces the node by narrower skills (keys S2a, S2b, …, kept at the original's place in the learning order), rewires

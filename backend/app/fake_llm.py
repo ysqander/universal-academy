@@ -762,7 +762,10 @@ def _check(**fields: Any) -> InlineCheck:
 
 
 def _block(kind: str, heading: str | None, body: str, *, check: InlineCheck | None = None, visual: VisualizationPlan | None = None) -> TeachingBlock:
-    return TeachingBlock(kind=kind, job=f"{kind}: {heading or body[:40]}", heading=heading, body=body, visual=visual, check=check)
+    idea = "" if kind in ("check", "faded_example", "summary") else (heading or body[:40])
+    return TeachingBlock(
+        kind=kind, job=f"{kind}: {heading or body[:40]}", new_idea=idea, heading=heading, body=body, visual=visual, check=check
+    )
 
 
 def _lesson_v2(text: str, _prefix: str) -> LessonV2Draft:
@@ -848,6 +851,7 @@ def _review(text: str, _prefix: str) -> LessonReview:
     )
     return LessonReview(
         issues=issues,
+        density_issues=[],
         untaught_method_exercises=[],
         out_of_scope_violations=[],
         optional_content_needed=[],

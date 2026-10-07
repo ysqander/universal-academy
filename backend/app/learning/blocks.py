@@ -88,14 +88,16 @@ def _correct_choice(check: dict[str, Any]) -> int | None:
 
 
 def answer_display(check: dict[str, Any]) -> str:
-    """The check's answer as shown after a response (its own answer_display when the writer gave one)."""
-    if str(check.get("answer_display") or "").strip():
-        return str(check["answer_display"])
+    """The check's answer as shown after a response: for a choice check the correct option's own text (the client
+    marks the right option by matching it — a paraphrase would mark none after a wrong pick), otherwise the writer's
+    answer_display when given."""
     kind, answer = check["kind"], str(check.get("answer") or "")
     choices = _choices(check)
     correct = _correct_choice(check)
     if kind in ("multiple_choice", "true_false") and correct is not None and 0 <= correct < len(choices):
         return choices[correct]
+    if str(check.get("answer_display") or "").strip():
+        return str(check["answer_display"])
     if kind == "true_false_set":
         return grading.true_false_set_display(answer)
     return answer

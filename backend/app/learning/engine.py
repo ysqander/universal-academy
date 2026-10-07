@@ -320,12 +320,16 @@ def _answer_display(q: dict[str, Any]) -> str:
 
 
 def _step_display(step: dict[str, Any]) -> str:
+    """The answer shown after a step. A choice step shows the correct option's own text — the client marks the right
+    option by matching it, so a paraphrase would leave no option marked after a wrong pick."""
+    choices = step.get("choices") or []
+    cc = _int_or_none(step.get("correct_choice"))
+    if step["kind"] in ("multiple_choice", "true_false") and cc is not None and 0 <= cc < len(choices):
+        return str(choices[cc])
     if step.get("answer_display"):
         return str(step["answer_display"])
     if step["kind"] == "true_false_set":
         return grading.true_false_set_display(str(step.get("answer") or ""))
-    choices = step.get("choices") or []
-    cc = _int_or_none(step.get("correct_choice"))
     if cc is not None and 0 <= cc < len(choices):
         return str(choices[cc])
     return str(step.get("answer") or "")

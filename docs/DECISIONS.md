@@ -225,3 +225,6 @@ Details: [SPEC.md §6.7](SPEC.md).
   4. Proof practice still specialises statements the teaching proved (no `practice_statements` in the spec).
   5. Capstone chains are often nominal (a one-line prerequisite step) or a special case.
   6. Inline checks and faded examples sometimes print the arithmetic they ask for.
+  7. Proof walkthroughs: a justification choice can often be answered from the stem (a distractor uses the very law
+     the prompt forbids), and a walkthrough may type one side or non-matching coordinates, leaving the comparison to
+     the explanation (judges' check of the rewritten S4a questions, 2026-10-07).

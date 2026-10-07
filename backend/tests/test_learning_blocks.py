@@ -516,3 +516,17 @@ def test_review_with_true_false_set_questions(client: TestClient) -> None:
     log = db.loads(db.query_one("SELECT state_json FROM tasks WHERE id = ?", (task_id,))["state_json"])["log"]
     assert [e["credit"] for e in log] == [1.0, 0.0, 0.5]
     assert third.task.outcome == "failed"  # (2 + 0 + 1) / 6 = 0.5 < pass score
+
+
+def test_a_choice_check_shows_the_correct_option_text_so_the_client_can_mark_it():
+    """2026-10-07: a paraphrased answer_display left no option marked after a wrong pick (the client matches text)."""
+    from app.learning import blocks as blocks_mod
+    from app.learning.engine import _step_display
+
+    check = {"kind": "multiple_choice", "choices": ["Reorder", "Apply Definition 1.1 to both sides"], "correct_choice": 1,
+             "answer": "", "answer_display": "Compute both sides from the definition"}
+    assert blocks_mod.answer_display(check) == "Apply Definition 1.1 to both sides"
+    step = {"kind": "multiple_choice", "choices": ["a", "b"], "correct_choice": 0, "answer": "", "answer_display": "paraphrase"}
+    assert _step_display(step) == "a"
+    typed = {"kind": "expression", "choices": [], "correct_choice": None, "answer": "1+i", "answer_display": "$1+i$"}
+    assert _step_display(typed) == "$1+i$" and blocks_mod.answer_display(typed) == "$1+i$"

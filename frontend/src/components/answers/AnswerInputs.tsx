@@ -192,6 +192,7 @@ const PALETTE: { label: string; insert: string; caret?: number; title: string }[
   { label: "i", insert: "i", title: "Imaginary unit" },
   { label: "π", insert: "pi", title: "Pi" },
   { label: "( , )", insert: "(, )", caret: 1, title: "List / tuple" },
+  { label: "∅", insert: "∅", title: "Empty set (no value works)" },
 ];
 
 interface MathInputProps {
@@ -268,7 +269,8 @@ export function MathInput({ value, onChange, disabled, kind, autoFocus, compact 
       </div>
       {!compact && (
         <p id={`${id}-help`} className="field__hint">
-          Use <code>i</code> for √−1 and <code>(a, b)</code> for lists. Powers with <code>^</code>, roots with <code>sqrt()</code>.
+          Use <code>i</code> for √−1 and <code>(a, b)</code> for lists. Powers with <code>^</code>, roots with <code>sqrt()</code>,
+          and <code>{"{}"}</code> or ∅ for the empty set.
         </p>
       )}
     </div>

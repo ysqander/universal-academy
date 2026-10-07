@@ -232,9 +232,13 @@ class Parser {
  * LaTeX for a learner's typed answer, or null when it can't be parsed (the UI then shows the raw text).
  * Input that already looks like LaTeX (contains a backslash) is passed through unchanged.
  */
+/** The empty set in the notations the grader accepts (∅, Ø, {}, "empty", "empty set", EmptySet). */
+const EMPTY_SET = /^(?:∅|Ø|\{\s*\}|empty(?:\s+set)?|emptyset)$/i;
+
 export function asciiToLatex(input: string): string | null {
   const text = input.trim();
   if (!text) return null;
+  if (EMPTY_SET.test(text)) return "\\varnothing";
   if (text.includes("\\")) return text;
   const tokens = tokenize(normalizeUnicode(text));
   if (!tokens || tokens.length === 0) return null;

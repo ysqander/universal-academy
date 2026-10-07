@@ -205,5 +205,13 @@ Details: [SPEC.md §6.7](SPEC.md).
 - Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys):
   the patterns it found — recognition-heavy served questions, misses re-tested only on the same numbers, long
   lessons, blocking issues left after one revision, proof practice replaying the teaching — were addressed the same
-  day (§2, §3; second revision for what is still blocking; blocked spare questions left out). Not addressed: capstone
-  chains that are nominal (a one-line prerequisite step), undeclared notation in generalize blocks (prompt rule only).
+  day (§2, §3; second revision for what is still blocking; blocked spare questions left out). Re-evaluated after
+  regenerating the 8 lessons (round 2): all better than round 1, 8–9 blocks, at most one served choice question, misses
+  re-tested typed on new numbers, no wrong keys. Still open (next iteration):
+  1. Served questions whose answer is printed, forced (e.g. "= 1" by definition) or reachable by elimination pass the
+     typed-format rule — the "known in advance" check exists for capstone steps only.
+  2. Misconceptions are often tested only by a capstone choice, a spare, or a key the misconception also reaches.
+  3. A served question the final review blocks is kept (no question-only rewrite yet).
+  4. Proof practice still specialises statements the teaching proved (no `practice_statements` in the spec).
+  5. Capstone chains are often nominal (a one-line prerequisite step) or a special case.
+  6. Inline checks and faded examples sometimes print the arithmetic they ask for.

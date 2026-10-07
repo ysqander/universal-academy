@@ -85,6 +85,7 @@ async def regenerate(
     token = llm.current_usage.set(usage)
     tracker = JobTracker.load(course_id)
     final_state = tracker.state if tracker.state not in ("running", "queued") else "done"
+    interrupted_now = False
     tracker.state = "running"  # the UI shows progress; another process sees the course as building
     ctx = BuildContext(course=course, tracker=tracker, usage=usage)
     parts = [
@@ -151,7 +152,7 @@ async def regenerate(
         report.cost_usd = usage.cost_usd
         tracker.log(f"Regeneration finished · {jobs._cost_summary(usage)}")
     except (asyncio.CancelledError, KeyboardInterrupt):
-        final_state = "interrupted"  # → Resume in the app finishes what is missing
+        final_state, interrupted_now = "interrupted", True  # → Resume in the app finishes what is missing
         tracker.log(
             "Regeneration interrupted — every lesson keeps its old or its new version; resume to finish visuals and "
             f"verification · {jobs._cost_summary(usage)}",
@@ -160,6 +161,8 @@ async def regenerate(
         raise
     finally:
         report.abandoned_tasks = ctx.abandoned_tasks
+        if final_state == "interrupted" and not interrupted_now:  # inherited: done if nothing is left to resume
+            final_state = jobs.settled_state(course_id, final_state)
         tracker.finish(final_state, tracker.error)
         llm.current_usage.reset(token)
         jobs._active.discard(course_id)

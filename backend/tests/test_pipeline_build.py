@@ -944,3 +944,30 @@ def test_regenerate_script_refuses_while_the_app_server_runs(tmp_path):
     stopped = run(f"http://127.0.0.1:{free}/api/health")
     assert stopped.returncode == 0, stopped.stdout + stopped.stderr
     assert "Regeneration finished" in jobs.get_job(cid).log[-1] and jobs.get_job(cid).state == "done"
+
+
+def test_an_interrupted_job_with_nothing_left_to_resume_is_settled(tmp_path):
+    """2026-10-07: a regeneration interrupted on 10-06 left 'interrupted'; later maintenance finished the work but kept
+    the inherited state, so the course page offered a stale 'Resume build' with every stage done."""
+    from app.pipeline.regenerate import regenerate
+
+    cid = tiny_course(tmp_path)
+    build(cid)
+    db.execute("UPDATE jobs SET state = 'interrupted' WHERE course_id = ?", (cid,))
+    assert jobs.pipeline_complete(cid)
+    assert jobs.mark_interrupted_jobs() == 0  # server start: nothing newly interrupted…
+    job = jobs.get_job(cid)
+    assert job.state == "done" and job.log[-1].endswith(jobs.NOTHING_TO_RESUME_LINE)  # …and the stale state settled
+    # work left to do (an unverified question): the job stays interrupted, so Resume is still offered
+    db.execute("UPDATE jobs SET state = 'interrupted' WHERE course_id = ?", (cid,))
+    qid = db.query_one(
+        "SELECT q.id FROM questions q JOIN skills s ON s.id = q.skill_id WHERE s.course_id = ? AND q.kind != 'free_response' LIMIT 1",
+        (cid,),
+    )["id"]
+    db.execute("UPDATE questions SET verify_json = '{}' WHERE id = ?", (qid,))
+    assert not jobs.pipeline_complete(cid)
+    jobs.mark_interrupted_jobs()
+    assert jobs.get_job(cid).state == "interrupted"
+    # maintenance that finishes the work leaves the inherited 'interrupted' as 'done'
+    asyncio.run(regenerate(cid, None, lessons=False, visuals=False, verify=True))
+    assert jobs.get_job(cid).state == "done"

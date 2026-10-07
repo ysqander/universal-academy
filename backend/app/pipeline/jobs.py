@@ -129,6 +129,27 @@ def resume_build(course_id: str) -> JobStatus:
 
 
 INTERRUPTED_LINE = "Interrupted — the server stopped during the build. Resume to continue."
+NOTHING_TO_RESUME_LINE = "Nothing left to resume — every stage has finished."
+
+
+def pipeline_complete(course_id: str) -> bool:
+    """Nothing is left for a resume to do: the course is ready, every stage of its job finished, every lesson is
+    written, every visual planned and every machine-checkable question verified."""
+    course = db.query_one("SELECT status FROM courses WHERE id = ?", (course_id,))
+    row = db.query_one("SELECT stages_json FROM jobs WHERE course_id = ?", (course_id,))
+    if course is None or row is None or course["status"] != "ready":
+        return False
+    stages = db.loads(row["stages_json"], [])
+    if not stages or any(s.get("status") != "done" for s in stages):
+        return False
+    c = _pipeline_counts(course_id)
+    return c["failed"] == 0 and c["ready"] == c["skills"] and c["visuals"] == c["ready"] and c["verified"] == c["questions"]
+
+
+def settled_state(course_id: str, state: str) -> str:
+    """The state to leave a job in after maintenance (replan, regenerate): an 'interrupted' it inherited becomes
+    'done' when the course has nothing left to resume, so the course page stops offering a resume."""
+    return "done" if state == "interrupted" and pipeline_complete(course_id) else state
 
 
 def _mark_interrupted(tracker: JobTracker, line: str | None) -> None:
@@ -165,6 +186,10 @@ def mark_interrupted_jobs(
             stale = any(s.get("status") == "running" for s in db.loads(row["stages_json"], []))
             if stale or row["course_status"] == "building":
                 _mark_interrupted(JobTracker.load(row["course_id"]), None)
+            elif pipeline_complete(row["course_id"]):  # e.g. left by maintenance that finished the work later
+                tracker = JobTracker.load(row["course_id"])
+                tracker.log(NOTHING_TO_RESUME_LINE)
+                tracker.finish("done")
             continue
         _mark_interrupted(JobTracker.load(row["course_id"]), line)
         count += 1

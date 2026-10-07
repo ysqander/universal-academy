@@ -270,6 +270,7 @@ async def apply_replan(course_id: str, key: str, planned: PlanResult, *, usage: 
     jobs._active.add(course_id)  # no build may start in this process meanwhile
     tracker = JobTracker.load(course_id)
     final_state = tracker.state if tracker.state not in ("running", "queued") else "done"
+    interrupted_now = False
     tracker.state = "running"  # the UI shows progress; another process sees the course as building
     ctx = BuildContext(course=course, tracker=tracker, usage=usage)
     tracker.log(f"Replanning {key} with lesson generation v2: {plan.decision} ({len(plan.skills)} skill{'s' * (len(plan.skills) != 1)})")
@@ -302,7 +303,7 @@ async def apply_replan(course_id: str, key: str, planned: PlanResult, *, usage: 
         report.cost_usd = usage.cost_usd
         tracker.log(f"Replan of {key} finished · ${usage.cost_usd - cost_before:.2f} · {jobs._cost_summary(usage)}")
     except (asyncio.CancelledError, KeyboardInterrupt):
-        final_state = "interrupted"  # → Resume in the app writes (v1) lessons for new skills still pending
+        final_state, interrupted_now = "interrupted", True  # → Resume in the app writes (v1) lessons for new skills still pending
         tracker.log(
             f"Replan of {key} interrupted — the course stays servable; resume to write missing lessons · "
             f"{jobs._cost_summary(usage)}",
@@ -310,6 +311,8 @@ async def apply_replan(course_id: str, key: str, planned: PlanResult, *, usage: 
         )
         raise
     finally:
+        if final_state == "interrupted" and not interrupted_now:  # inherited: done if nothing is left to resume
+            final_state = jobs.settled_state(course_id, final_state)
         tracker.finish(final_state, tracker.error)
         llm.current_usage.reset(token)
         jobs._active.discard(course_id)

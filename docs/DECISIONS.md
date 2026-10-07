@@ -49,11 +49,13 @@ generator is still being tuned.
 - **Re-planning uses the learner's evidence.** The planner sees "This step isn't clear" notes and the learner's missed
   or hint-assisted answers on the skill (unanswered quiz questions, voided attempts and flagged questions left out).
   A wrong answer that shows a misunderstanding becomes a "Learner's miss" misconception, which the lesson re-tests
-  with NEW numbers that set the same trap, in the format it was missed (typed when it was typed), as a question
-  served first or a capstone step — the missed problem with the wrong answer as an option is not a test (first run:
-  every miss came back only as a distractor on the same numbers). A slip in a prerequisite (5+(−8) written as 3) is
-  not a Learner's miss: a one-line recall and one typed served question with the case. At most 3 misconceptions per
-  skill, each with evidence.
+  with NEW numbers that set the same trap, in a format at least as demanding as the one it was missed in (a typed
+  miss typed; a miss on a choice question typed when its demand has a value), as a question served first or a
+  capstone step — the missed problem with the wrong answer as an option is not a test (first run: every miss came
+  back only as a distractor on the same numbers). Such a re-test is a new case, never drill. A slip in a prerequisite
+  (5+(−8) written as 3) is a "Prerequisite slip", not a Learner's miss: no bridge, a one-line recall and one typed
+  question served first with the case. At most 3 misconceptions per skill (slips included), each with evidence, and
+  all of them tested.
 - **Short lessons** (decided 2026-10-07, after lessons of 11–13 blocks read as long): at most 9 blocks (10 when a case
   the learner missed needs its own) and about 350 words of prose outside the math. A further case is a block only
   when it needs a different decision; the same move on another case goes to a worked example or the practice. No
@@ -62,8 +64,9 @@ generator is still being tuned.
   in the teaching; the rest of the family is proved in the practice.
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
-- **Checks inside the teaching sequence.** 1–3 inline checks before practice; a faded example's missing step is always
-  machine-checked; at most one ungraded "why" reflect check.
+- **Checks inside the teaching sequence.** 1–2 graded inline checks plus one ungraded "why" reflect check, all within
+  the 9 blocks; a faded example's missing step is always machine-checked and is the lesson's key move, not printed
+  arithmetic.
 - **No "Common mistakes" sections** (the learner found them useless). Known misconceptions still feed distractors.
 - **Visuals must earn their place**: "this helps the learner notice ___"; "none" is valid; never 3D or decorative.
 
@@ -72,7 +75,7 @@ generator is still being tuned.
 - **Typed answers first.** Multiple-choice + true/false together ≤ 40 % of a lesson (drafts above 50 % are rejected).
   A `true_false_set` with ≥ 3 statements does not count as choice-based. Among the questions **served first** (the
   first `target_questions` of each knowledge point) at most one is choice-based and at least one asks for a typed
-  answer (decided 2026-10-07: with target 1 per point and "no drill", the served questions had drifted to multiple
+  answer (v1 and v2 prompts; a draft-time check for v2) (decided 2026-10-07: with target 1 per point and "no drill", the served questions had drifted to multiple
   choice answerable by elimination). A different demand with a value is typed (prediction → the value, spot the error
   → the corrected value, reverse problem → the missing number). Distractors are computed answers of specific
   misconceptions, the key differs from all of them, and no option states the result.
@@ -83,11 +86,15 @@ generator is still being tuned.
 - **Honest question counts.** Each knowledge point sets `target_questions` (1–3: how much there really is to
   demonstrate) and has target + 2 questions (extras for misses and reviews).
 - **Every question a different demand** — new case, prediction, spot the error in a shown working, reverse problem,
-  interpretation — not the same procedure with new numbers. The main procedure appears at most once before the
-  capstone, and it appears there exactly once, as a typed answer on fresh numbers. Every question must need this
+  interpretation — not the same procedure with new numbers. Among the questions served before the capstone the main
+  procedure appears exactly once, as a typed answer on fresh numbers (the general case; procedure and computation
+  skills — in a proof skill each knowledge point's first question walks through a statement the teaching did not
+  prove). A spare may repeat a served demand once on new numbers: it is the recovery question after a miss. Every question must need this
   lesson's idea (no bare prerequisite facts). Graded means served: inline checks are formative and spare questions
   may never be served, so neither counts as testing a misconception.
-- **Answer forms.** Complex numbers are always asked and keyed as `a+bi` (never `(real, imaginary)` pairs). A tuple key
+- **Answer forms.** Complex numbers are always asked and keyed as `a+bi` (never `(real, imaginary)` pairs); when the
+  problem already uses the letters a or b, the prompt says "enter it as a complex number in standard form (e.g.
+  $3-2i$)" instead. A tuple key
   becomes an unordered set only when the prompt says the order of the answers doesn't matter. One question asks for
   one answer.
 - **Known gap:** a multiple-choice question with more than one correct option is only caught by verification

@@ -16,8 +16,9 @@ COMPLEX_FORM_RULE = (
     "multistep steps and the capstone. Never ask for a complex number as a coordinate pair \"(real coordinate, "
     'imaginary coordinate)" unless the skill is about the ordered-pair definition itself; when only one coordinate '
     "matters, ask for that coordinate alone as a numeric answer. When the problem already uses the letter $a$ or $b$ "
-    '(e.g. $\\alpha=a+bi$ with arbitrary real $a,b$, or a scalar $a$), say "Enter it in the form $x+yi$ with $x,y$ '
-    'real" instead.'
+    '(e.g. $\\alpha=a+bi$ with arbitrary real $a,b$, or a scalar $a$), say "Enter it as a complex number in standard '
+    'form (e.g. $3-2i$)" instead, or use two letters the problem does not use — never letters that name an unknown, '
+    "a vector, an input or a parameter."
 )
 
 # Question format rule for every question generator (v1 lessons, top-ups, v2 lessons and their inline checks).
@@ -32,7 +33,8 @@ ONE_ANSWER_RULE = (
     "Each question asks for exactly ONE answer, the one the app checks: never \"compute X, then decide Y\" (only "
     "`answer` is checked, so the decision goes unassessed and the expected input is unclear). To assess a decision "
     "about several candidates or claims, use true_false_set with one statement per candidate (e.g. \"$2+i$ is a square "
-    "root of $3+4i$\"); for a single decision, true_false."
+    "root of $3+4i$\"); for a single decision, ask for the value that settles it (typed), and true_false only when "
+    "no value settles it (a general always / sometimes claim)."
 )
 UNORDERED_RULE = (
     'Several values whose order does not matter (both square roots, all solutions) are a set in braces, e.g. answer '
@@ -50,7 +52,7 @@ TF_SET_KIND = (
 # multistep problem at the end that chains the ideas. Shared by every question generator.
 TARGET_RULE = (
     "target_questions (1–3) = how many answers really demonstrate THIS knowledge point. Be honest: 1 when a single "
-    "answer shows it (the method was already demonstrated and practised before the questions), 2–3 only when the "
+    "answer shows it (the method was already demonstrated before the questions), 2–3 only when the "
     "point has real variety (cases that need different thinking). Write target_questions + 2 questions: the first "
     "target_questions are served as the knowledge point's test; the 2 extra ones are served only after a miss (so "
     "the learner can recover) and in later reviews. Knowledge points need not have the same number of questions — "
@@ -59,10 +61,10 @@ TARGET_RULE = (
 DISTINCT_DEMANDS_RULE = (
     "Every question makes a DIFFERENT demand — never the same procedure again with new numbers: a learner who has "
     "shown the method once experiences a second identical exercise as pointless drill. Demands to choose from: one "
-    "straightforward application (at most once per knowledge point); a new case that needs a different thought (a "
+    "straightforward application of the method (once among the questions served first; otherwise only as a spare); a new case that needs a different thought (a "
     "negative or zero part, a real or pure imaginary number, an edge case); a prediction or decision without the full "
-    "computation (is it real? which sign? which is larger?); spotting the error in a shown working (multiple_choice: "
-    "which line is wrong, or what the correct line is); a reverse problem (find the missing number or factor that "
+    "computation (is it real? which sign? which is larger?); spotting the error in a shown working (typed: the "
+    "corrected value; multiple_choice \"which line is wrong\" only when locating the error is itself the demand); a reverse problem (find the missing number or factor that "
     "gives a stated result); interpreting a result; deciding which method or fact applies. Questions stay inside the "
     "objective: a different demand, not a new method. Every question needs THIS knowledge point's idea to answer: "
     "not one whose answer follows from a prerequisite or outside fact alone, or is the only special value the prompt "
@@ -71,17 +73,22 @@ DISTINCT_DEMANDS_RULE = (
 )
 # The evaluation of the 2026-10-07 re-plans: target 1 per knowledge point + "no drill" pushed every question served
 # first to multiple choice — the learner recognised answers instead of producing them.
-TYPED_FIRST_RULE = (
+TYPED_DEMAND_RULE = (
     "TYPED ANSWERS FIRST: the learner should produce answers, not recognise them. A different demand is still a typed "
     "numeric/expression answer whenever it has a value: a prediction → the predicted value; spotting an error → the "
     "corrected value; a reverse problem → the missing number; a decision about one candidate → the value that settles "
-    "it (several candidates → a true_false_set). multiple_choice and true_false only when choosing a method, a law or "
-    "a justification is itself the demand. Among the questions served first (the first target_questions of each "
-    "knowledge point) at most one is multiple_choice or true_false, and at least one is a typed independent answer (a "
-    "multistep question with typed steps counts). A choice question's distractors are the answers a learner holding a "
-    "specific misconception would give (computed, not strawmen), the key differs from every one of them, and no "
-    "option states the result the question asks for."
+    "it (several candidates → a true_false_set). multiple_choice and true_false only when the demand has no value to "
+    "type: choosing a method, a law or a justification, or judging a general claim. A choice question's distractors "
+    "are the answers a learner holding a specific misconception would give (computed, not strawmen), the key differs "
+    "from every one of them, and no option carries a computed result the learner should produce (e.g. a method option "
+    '"multiply by $2-3i$, giving $\\frac{7-4i}{13}$").'
 )
+SERVED_FIRST_RULE = (
+    "Among the questions served first (the first target_questions of each knowledge point) at most one is "
+    "choice-based (multiple_choice, true_false, or a true_false_set of only 2 statements), and at least one is a typed "
+    "independent answer (a multistep question counts when at least one of its steps is typed)."
+)
+TYPED_FIRST_RULE = f"{TYPED_DEMAND_RULE} {SERVED_FIRST_RULE}"
 NO_WRITTEN_ANSWERS_RULE = (
     'No free_response questions and no "show your working": the app checks only the answer, so an instruction to '
     "write out the steps, the products or a proof is never assessed. A computation is a typed numeric/expression "
@@ -250,14 +257,16 @@ LESSON ANATOMY
 - source_refs: printed item numbers used — short references only: "1.3", "Example 1.4", "Exercise 1A.3". Never
   captions, page numbers ("p.8") or notes.
 
-PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove / Justify / Show)
-- The learner never writes a proof as free text. Every knowledge point has a multistep walkthrough of a proof of its
-  statement (or of a variant): 2–4 machine-checked steps — which definition to apply first, the next justified line
+PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove / Justify)
+- The learner never writes a proof as free text. Every knowledge point has a multistep walkthrough of a statement (or
+  a variant) that its worked example did not prove: 2–4 machine-checked steps — which definition to apply first, the next justified line
   (computed: "what is the first coordinate of $x+y$?"), which law or hypothesis justifies a step.
 - The other questions check the ingredients with different demands: which law a step uses, true_false or
   true_false_set claims about a step (the reason or a counterexample in the solution), spotting the invalid step in
   a shown argument, a computed instance.
-- The capstone walks through the lesson's main proof or uses its result in a computation.
+- The capstone walks through a statement of the family that nothing else in the lesson proves, or uses a proved
+  result in a computation; its proof step asks for a line the learner computes (typed), never a choice among complete
+  proofs that differ in one sign.
 
 QUESTIONS
 - {NO_WRITTEN_ANSWERS_RULE}
@@ -272,6 +281,7 @@ QUESTIONS
   each per knowledge point. Even conceptual knowledge points can usually be checked with typed answers: ask for a
   concrete instance (compute the element, give the length, the coordinate, the missing value); "explain why"
   becomes a multistep walkthrough.
+- {TYPED_DEMAND_RULE} {SERVED_FIRST_RULE}
 - {COUNT_QUESTION_RULE}
 - {ONE_ANSWER_RULE}
 - Every question is machine-checkable:
@@ -415,7 +425,7 @@ passage and the questions that already exist.
 - Machine-checkable, and the learner produces the answer: computations → numeric/expression,
   conceptual claims → true_false (reason or counterexample in the solution) or true_false_set for several related
   claims, multiple_choice only when choosing is the skill; choice-based questions (multiple_choice, true_false, a
-  true_false_set of only 2 statements) at most 40% — prefer typed answers. numeric: a plain number in SymPy
+  true_false_set of only 2 statements) at most 40% — prefer typed answers. {TYPED_DEMAND_RULE} numeric: a plain number in SymPy
   syntax. expression: SymPy syntax with ** for powers, * for products, i for the imaginary unit, tuples
   "(1, -2, 3)" for lists, and the prompt states the form to enter. {COMPLEX_FORM_RULE} {UNORDERED_RULE}
   multiple_choice: 3–5 choices with

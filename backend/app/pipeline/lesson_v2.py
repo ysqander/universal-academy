@@ -100,9 +100,11 @@ _QUESTION_KEY = re.compile(r"\bk\d+q\d+\b")
 _CAPSTONE_LOCATION = re.compile(r"\bcap\b|capstone", re.IGNORECASE)
 MISCONCEPTIONS_HEADER = (
     "Known misconceptions (a line starting \"Learner's miss\" is what this learner actually got wrong: re-test it with "
-    "NEW numbers that set the same trap, in the format it was missed (typed when it was typed), as a question served "
-    "first in its knowledge point or a capstone step — the missed problem itself with the wrong answer as an option "
-    "is not a test):"
+    "NEW numbers that set the same trap, in a format at least as demanding as the one it was missed in (a typed miss "
+    "typed; a miss on a choice question typed when its demand has a value), as a question served first in its "
+    "knowledge point or a capstone step — the missed problem itself with the wrong answer as an option is not a test; "
+    "a line starting \"Prerequisite slip\" needs no bridge: a one-line recall where it is first needed and one typed "
+    "question served first that includes the case):"
 )
 MAX_SHOWN_MISSES = 10  # learner misses on this skill (any lesson version) shown to the planner
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
@@ -213,7 +215,10 @@ def plan_request(course: CourseInfo, skill: dict[str, Any], *, allow_split: bool
         lines.append("Taught on: " + ", ".join(page_marker(p, course.label(p)) for p in pages))
     misconceptions = db.loads(skill["misconceptions_json"], [])
     if misconceptions:
-        lines += ["Known misconceptions:"] + [f"- {m}" for m in misconceptions]
+        lines += [
+            "Misconceptions in the current plan (their labels may be outdated — re-classify them from the evidence "
+            "below; keep at most 3):"
+        ] + [f"- {m}" for m in misconceptions]
     current = db.loads(skill["lesson_json"], None) or {}
     if current.get("knowledge_points"):
         lines += ["", "The current lesson practises these knowledge points:"]
@@ -614,8 +619,17 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
     return "\n".join(lines)
 
 
-def revision_request(request: str, draft: LessonV2Draft, review: LessonReview, problems: list[str]) -> str:
-    lines = [request, "", REVISION_NOTE, "", "## Your previous draft (JSON)", draft.model_dump_json(), "", "## Review"]
+SECOND_REVISION_NOTE = (
+    "SECOND REVISION: fix only the [blocking] items, the untaught-method exercises, the math errors and the validation "
+    "problems below; change nothing else — every other block, question and the capstone stay exactly as they are."
+)
+
+
+def revision_request(
+    request: str, draft: LessonV2Draft, review: LessonReview, problems: list[str], round_: int = 0
+) -> str:
+    note = [REVISION_NOTE] if round_ == 0 else [REVISION_NOTE, "", SECOND_REVISION_NOTE]
+    lines = [request, "", *note, "", "## Your previous draft (JSON)", draft.model_dump_json(), "", "## Review"]
     lines += review_lines(review) or ["(no issues reported)"]
     if problems:
         lines += ["", "## Validation problems (the app cannot use the draft until these are fixed)"]
@@ -631,12 +645,13 @@ async def write_lesson(
     prefix: str,
     figures: list[FigureInfo] | None = None,
     revision: tuple[LessonV2Draft, LessonReview, list[str]] | None = None,
+    round_: int = 0,
 ) -> LessonV2Draft:
     """Writer call (role "lesson"): the chapter text + course map is the cached shared prefix, as in v1."""
     figures = spec_figures(course, skill, spec) if figures is None else figures
     text = write_request(course, skill, spec, figures)
     if revision is not None:
-        text = revision_request(text, *revision)
+        text = revision_request(text, *revision, round_=round_)
     return await llm.structured(
         role="lesson",
         instructions=WRITER_INSTRUCTIONS,
@@ -789,7 +804,8 @@ def review_request(
         f"Skill {key}: {spec.title}",
         f"Objective: {spec.objective}",
         f"Kind: {spec.kind}",
-        "Assumed prerequisites — the learner knows ONLY these (plus ordinary school algebra):",
+        "Assumed prerequisites — the learner knows ONLY these and the in-chapter prerequisite skills below (plus "
+        "ordinary school algebra):",
         *([f"- {a}" for a in spec.assumed_prerequisites] or ["- (none)"]),
         *(
             ["In-chapter prerequisite skills the learner has learned (their methods count as taught):", *prereqs]
@@ -820,8 +836,8 @@ def idea_lines(draft: LessonV2Draft) -> list[str]:
     lines += [f"- block {i}: {idea}" for i, idea in ideas]
     words = sum(prose_words(b.body) for b in draft.blocks)
     lines.append(
-        f"Length: {len(draft.blocks)} blocks (at most {TARGET_BLOCKS}), about {words} words of prose outside the math "
-        f"(about {TARGET_PROSE_WORDS})."
+        f"Length: {len(draft.blocks)} blocks (at most {TARGET_BLOCKS}; {MAX_TEACHING_BLOCKS} when the spec plans a "
+        f"case the learner missed), about {words} words of prose outside the math (about {TARGET_PROSE_WORDS})."
     )
     return lines
 
@@ -1102,7 +1118,18 @@ def served_questions(draft: LessonV2Draft) -> list[QuestionDraft]:
     return [q for kp in draft.knowledge_points for q in kp.questions[: clamp_target(kp.target_questions)]]
 
 
-def quality_problems(draft: LessonV2Draft) -> list[str]:
+def is_typed(q: QuestionDraft) -> bool:
+    """The learner produces the answer: numeric / expression, or a multistep question with a typed step."""
+    return q.kind in ("numeric", "expression") or (
+        q.kind == "multistep" and any(s.kind in ("numeric", "expression") for s in q.steps)
+    )
+
+
+def _counts_as_choice(q: QuestionDraft) -> bool:
+    return is_choice_based(q.kind, len(q.choices)) or (q.kind == "multistep" and not is_typed(q))
+
+
+def quality_problems(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
     """Rules a draft must meet before it is stored as is (each one sends it to the revision; a last draft that still
     breaks them is stored anyway): a teaching sequence of at most MAX_TEACHING_BLOCKS blocks and MAX_PROSE_WORDS words
     of prose, and questions served first that make the learner produce answers — at most one choice question among
@@ -1112,20 +1139,25 @@ def quality_problems(draft: LessonV2Draft) -> list[str]:
     if n > MAX_TEACHING_BLOCKS or words > MAX_PROSE_WORDS:
         problems.append(
             f"the teaching sequence is too long ({n} blocks, about {words} words of prose; at most {TARGET_BLOCKS} "
-            f"blocks and about {TARGET_PROSE_WORDS} words): merge or cut blocks that repeat a move on another case, "
-            "duplicate a worked example or restate the generalize block"
+            f"blocks — {MAX_TEACHING_BLOCKS} when the spec plans a case the learner missed — and about "
+            f"{TARGET_PROSE_WORDS} words): merge or cut blocks that repeat a move on another case, duplicate a worked "
+            "example or restate the generalize block, and keep every case the spec marks as a Learner's miss"
         )
     served = served_questions(draft)
-    choice = [q.key for q in served if is_choice_based(q.kind, len(q.choices))]
+    choice = [q.key for q in served if _counts_as_choice(q)]
     if len(choice) > 1:
         problems.append(
             f"{len(choice)} of the questions served first are choice questions ({', '.join(choice)}); at most one — "
             "make the others typed (the predicted, corrected or missing value)"
         )
-    if served and not any(q.kind in ("numeric", "expression", "multistep") for q in served):
+    if served and not any(is_typed(q) for q in served):
         problems.append(
-            "no question served first asks for a typed answer: lead knowledge point 1 with one independent, typed "
-            "application of the method on fresh numbers"
+            "no question served first asks for a typed answer: "
+            + (
+                "lead knowledge point 1 with a walkthrough that has a typed step (the next line computed)"
+                if proof
+                else "lead knowledge point 1 with one independent, typed application of the method on fresh numbers"
+            )
         )
     return problems
 
@@ -1150,29 +1182,54 @@ def blocked_locations(review: LessonReview) -> tuple[dict[str, str], list[str]]:
         if issue.severity != "blocking":
             continue
         text = f"{issue.location}: {issue.why_insufficient} → repair: {issue.repair}"
-        for key in _QUESTION_KEY.findall(issue.location):
-            keys.setdefault(key, text)
-        if _CAPSTONE_LOCATION.search(issue.location):
+        named = set(_QUESTION_KEY.findall(issue.location))
+        if len(named) == 1:  # a location naming several questions blocks none of them on its own
+            keys.setdefault(named.pop(), text)
+        elif not named and _CAPSTONE_LOCATION.search(issue.location):
             capstone.append(text)
     for item in [*review.untaught_method_exercises, *review.math_errors]:
-        for key in _QUESTION_KEY.findall(item):
-            keys.setdefault(key, item)
-        if _CAPSTONE_LOCATION.search(item.split(":", 1)[0]):
+        head, sep, _ = item.partition(":")
+        named = set(_QUESTION_KEY.findall(head if sep else item[:40]))
+        if len(named) == 1:
+            keys.setdefault(named.pop(), item)
+        elif not named and _CAPSTONE_LOCATION.search(head if sep else item[:40]):
             capstone.append(item)
     return keys, capstone
 
 
+def _usable(q: QuestionDraft) -> bool:
+    """A question the lenient validation will keep (it drops free_response and invalid questions)."""
+    if q.kind == "free_response":
+        return False
+    try:
+        clean_question(q)
+    except InvalidQuestion:
+        return False
+    return True
+
+
 def drop_blocked_questions(draft: LessonV2Draft, blocked: dict[str, str]) -> tuple[LessonV2Draft, list[str]]:
-    """Leave out the questions the final review still blocks, as long as each knowledge point keeps target + 1
-    questions (one spare for a miss). A blocked question served first is replaced by the next question of its point."""
+    """Leave out the SPARE questions the final review still blocks, as long as each knowledge point keeps target + 1
+    usable questions (one spare for a miss). A blocked question served first is kept (with a note): promoting a spare
+    in its place would serve a question nobody reviewed for that slot, and a wrong key is withheld by verification
+    anyway. A key that occurs in several knowledge points is bound to the point its number names."""
+    counts = Counter(q.key for kp in draft.knowledge_points for q in kp.questions)
     notes: list[str] = []
     points = []
-    for kp in draft.knowledge_points:
+    for index, kp in enumerate(draft.knowledge_points):
         target = clamp_target(kp.target_questions)
         questions = list(kp.questions)
-        # served-first questions first: they are what the learner certainly meets
-        for q in sorted((q for q in kp.questions if q.key in blocked), key=lambda q: kp.questions.index(q)):
-            if len(questions) - 1 < target + 1:
+        seen: set[str] = set()
+        for position, q in enumerate(kp.questions):
+            if q.key not in blocked or q.key in seen:
+                continue
+            if counts[q.key] > 1 and not q.key.startswith(f"k{index + 1}q"):
+                continue
+            seen.add(q.key)
+            if position < target and _usable(q):
+                notes.append(f"kept {q.key} (served first) although the final review blocks it: {blocked[q.key][:160]}")
+                continue
+            if _usable(q) and sum(1 for x in questions if _usable(x)) - 1 < target + 1:
                 notes.append(f"kept {q.key} although the final review blocks it (its knowledge point has no spare left)")
                 continue
             questions.remove(q)
@@ -1181,18 +1238,21 @@ def drop_blocked_questions(draft: LessonV2Draft, blocked: dict[str, str]) -> tup
     return draft.model_copy(update={"knowledge_points": points}), notes
 
 
-async def draft_problems(draft: LessonV2Draft, spec: TeachingSpec, figures: list[FigureInfo], *, proof: bool) -> list[str]:
-    """Strict validation as a list of problems ([] = usable as is): the first problem the strict pass meets, plus the
-    content rules it may not have reached (free_response questions, the capstone) — one revision fixes them all."""
-    problems: list[str] = []
+async def draft_problems(
+    draft: LessonV2Draft, spec: TeachingSpec, figures: list[FigureInfo], *, proof: bool
+) -> tuple[list[str], list[str]]:
+    """(hard, soft) problems of a draft ([] and [] = usable as is). hard: the first problem the strict validation meets,
+    plus the content rules it may not have reached (free_response questions, the capstone). soft: quality_problems
+    (length, the questions served first) — sent to the revision too, but a revision is never thrown away for them."""
+    hard: list[str] = []
     try:
         await validate_v2(draft, spec, figures, proof=proof, strict=True)
     except (InvalidLesson, InvalidQuestion) as e:
-        problems.append(str(e))
-    for problem in content_problems(draft) + quality_problems(draft):
-        if problem not in problems:
-            problems.append(problem)
-    return problems
+        hard.append(str(e))
+    for problem in content_problems(draft):
+        if problem not in hard:
+            hard.append(problem)
+    return hard, [p for p in quality_problems(draft, proof=proof) if p not in hard]
 
 
 # ---------------------------------------------------------------------------
@@ -1285,27 +1345,42 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
     prereq_lines = _skill_lines(prereqs)
     try:
         draft = await _write_with_retry(course, spec, skill, prefix, figures)
-        problems = await draft_problems(draft, spec, figures, proof=proof)
+        hard, soft = await draft_problems(draft, spec, figures, proof=proof)
         review = await review_lesson(spec, draft, key=key, prereqs=prereq_lines)
         result.initial_review = final_review = review
         final = draft
-        for round_ in range(MAX_REVISIONS):  # the second round only for what is still blocking (or invalid)
-            if not (problems or (needs_revision(final_review) if round_ == 0 else blocking_count(final_review))):
+        for round_ in range(MAX_REVISIONS):
+            if round_ == 0:
+                wanted = bool(hard or soft or needs_revision(final_review))
+            else:  # the second round only for what is still blocking (a capstone-only blocker goes to the rewrite)
+                cap_only = blocking_count(final_review) == len(blocked_locations(final_review)[1])
+                wanted = bool(hard or soft or (blocking_count(final_review) and not cap_only))
+            if not wanted:
                 break
+            problems = hard + soft
             reasons = review_summary(final_review) + (f"; validation: {'; '.join(problems)}" if problems else "")
             tracker.log(f"Lesson {key} (v2): revising{' again' if round_ else ''} — {reasons}")
-            revised = await write_lesson(
-                course, spec, skill=skill, prefix=prefix, figures=figures, revision=(final, final_review, problems)
-            )
-            revised_problems = await draft_problems(revised, spec, figures, proof=proof)
-            if revised_problems and not problems:
-                result.notes.append(f"revision {round_ + 1} did not validate ({'; '.join(revised_problems)}); kept the previous draft")
+            try:
+                revised = await write_lesson(
+                    course, spec, skill=skill, prefix=prefix, figures=figures,
+                    revision=(final, final_review, problems), round_=round_,
+                )
+                r_hard, r_soft = await draft_problems(revised, spec, figures, proof=proof)
+                if r_hard and not hard:
+                    result.notes.append(f"revision {round_ + 1} has validation problems ({'; '.join(r_hard)}); kept the previous draft")
+                    continue
+                revised_review = await review_lesson(spec, revised, key=key, revised=True, prereqs=prereq_lines)
+            except Exception as e:  # noqa: BLE001 — an optional improvement never costs the draft we have
+                log.warning("revision %d of %s failed: %s", round_ + 1, key, e)
+                result.notes.append(f"revision {round_ + 1} failed ({e}); kept the previous draft")
                 break
-            revised_review = await review_lesson(spec, revised, key=key, revised=True, prereqs=prereq_lines)
-            if round_ and not problems and blocking_count(revised_review) > blocking_count(final_review):
-                result.notes.append("the second revision left more blocking issues than the first; kept the first")
-                break
-            final, final_review, problems = revised, revised_review, revised_problems
+            if not hard and blocking_count(revised_review) > blocking_count(final_review):
+                result.notes.append(
+                    f"revision {round_ + 1} left more blocking issues ({blocking_count(revised_review)}) than the draft "
+                    f"before it ({blocking_count(final_review)}); kept that draft"
+                )
+                continue
+            final, final_review, hard, soft = revised, revised_review, r_hard, r_soft
             result.revised, result.revisions = True, result.revisions + 1
         result.final_review = final_review
         blocked, capstone_blockers = blocked_locations(final_review)
@@ -1319,6 +1394,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
                 result.notes.append(f"capstone rewritten ({'; '.join(cap_problems)})")
             except Exception as e:  # noqa: BLE001 — the lenient validation below keeps what it can
                 result.notes.append(f"capstone repair failed ({e})")
+        result.notes += [f"stored although: {p}" for p in quality_problems(final, proof=proof)]
         lesson, pools, capstone, notes = await validate_v2(final, spec, figures, proof=proof, strict=False)
         result.notes += notes
     except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
@@ -1533,6 +1609,7 @@ def is_v2(lesson_json: str | None) -> bool:
 __all__ = [
     "BridgeIssue",
     "IDEA_BUDGET",
+    "is_typed",
     "blocked_locations",
     "blocking_count",
     "capstone_defects",

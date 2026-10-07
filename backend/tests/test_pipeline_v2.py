@@ -476,7 +476,7 @@ def test_density_pass_sees_the_declared_new_ideas(tmp_path):
     assert declared and all(not b.new_idea for b in draft.blocks if b.kind in ("check", "faded_example", "summary"))
     lines = idea_lines(draft)
     assert lines[0] == f"{len(draft.blocks)} blocks; {len(declared)} declare a new idea (budget: about 4 per lesson)."
-    assert len(lines) == 2 + len(declared) and lines[-1].startswith(f"Length: {len(draft.blocks)} blocks (at most 9)")
+    assert len(lines) == 2 + len(declared) and lines[-1].startswith(f"Length: {len(draft.blocks)} blocks (at most 9;")
     spec = fake_llm.respond(schema=TeachingPlan, role="graph", instructions="", text="Plan the teaching of skill S1: Multiply").skills[0]
     text = review_request(spec, draft, key="S1", revised=False)
     assert "COUNTS FOR THE DENSITY PASS" in text and lines[1] in text and f"Starting point (the outcome problem" in text
@@ -577,23 +577,38 @@ def _issue(location: str, severity: str = "blocking") -> BridgeIssue:
                        severity=severity)
 
 
-def test_questions_the_final_review_still_blocks_are_left_out_while_spares_last():
+def test_only_blocked_spares_are_left_out_and_only_the_question_a_location_names():
     draft = _fake_draft()
     kp = draft.knowledge_points[0]
     keys = [q.key for q in kp.questions]
     target = kp.target_questions
-    review = LessonReview(issues=[_issue(keys[0]), _issue(keys[-1]), _issue("Block 2", "blocking"), _issue(keys[1], "minor")],
-                          density_issues=[_issue("cap — step 2")], untaught_method_exercises=[f"{keys[-2]}: needs division"],
-                          out_of_scope_violations=[], optional_content_needed=[], math_errors=[], split_recommended=False,
-                          split_reason="")
-    assert blocking_count(review) == 5
+    assert target == 2 and len(keys) == 4  # the fake lesson: two served, two spares
+    review = LessonReview(
+        issues=[_issue(keys[0]), _issue(keys[-1]), _issue("Block 2"), _issue(keys[1], "minor"),
+                _issue(f"{keys[1]} and {keys[2]}")],  # a location naming several questions blocks none of them
+        density_issues=[_issue("cap — step 2")],
+        untaught_method_exercises=[f"{keys[-2]}: needs division, like {keys[0]}"],  # only the key before ':' counts
+        out_of_scope_violations=[], optional_content_needed=[],
+        math_errors=["Block 3: the value $5$ is also what k2q1 asks for"],  # a block's error blocks no question
+        split_recommended=False, split_reason="")
+    assert blocking_count(review) == 7
     blocked, capstone = blocked_locations(review)
     assert set(blocked) == {keys[0], keys[-1], keys[-2]} and len(capstone) == 1 and capstone[0].startswith("cap — step 2")
     trimmed, notes = drop_blocked_questions(draft, blocked)
     left = [q.key for q in trimmed.knowledge_points[0].questions]
-    assert len(left) == max(target + 1, len(keys) - 3) and keys[0] not in left  # the blocked served question goes first
-    assert all(n.startswith(("left out", "kept")) for n in notes)
+    assert keys[0] in left and left[0] == keys[0]  # a question served first is kept (noted), never swapped for a spare
+    assert any(n.startswith(f"kept {keys[0]} (served first)") for n in notes)
+    assert len(left) >= target + 1 and (keys[-1] not in left or keys[-2] not in left)
     assert [q.key for q in trimmed.knowledge_points[1].questions] == [q.key for q in draft.knowledge_points[1].questions]
+    # an invalid question does not count as a spare, and is always left out when blocked
+    broken = kp.questions[-1].model_copy(update={"kind": "multiple_choice", "choices": ["a", "b"], "correct_choice": 9,
+                                                  "answer": ""})
+    tight = draft.model_copy(update={"knowledge_points": [
+        kp.model_copy(update={"target_questions": 1, "questions": [kp.questions[0], kp.questions[1], broken]}),
+        *draft.knowledge_points[1:]]})
+    trimmed, notes = drop_blocked_questions(tight, {kp.questions[1].key: "drill", broken.key: "wrong key"})
+    assert [q.key for q in trimmed.knowledge_points[0].questions] == [kp.questions[0].key, kp.questions[1].key]
+    assert any(n.startswith(f"kept {kp.questions[1].key}") and "no spare left" in n for n in notes)
 
 
 def test_a_second_revision_runs_only_for_what_is_still_blocking(tmp_path, llm_calls, monkeypatch):
@@ -619,6 +634,73 @@ def test_a_second_revision_runs_only_for_what_is_still_blocking(tmp_path, llm_ca
     skill = db.query_one("SELECT * FROM skills WHERE id = ?", (result.skill_id,))
     lesson = db.loads(skill["lesson_json"])
     assert lesson["initial_review"]["issues"] and lesson["review"]["issues"] == []
+
+
+def _with_calls(monkeypatch, draft_edit=None, review_edit=None):
+    """Wrap the fake LLM: draft_edit(n, draft) / review_edit(n, kwargs) for the n-th writer / reviewer call."""
+    original = fake_llm.respond
+    calls = {"draft": 0, "review": 0}
+
+    def wrapped(**kwargs):
+        if kwargs["schema"] is LessonReview:
+            calls["review"] += 1
+            if review_edit:
+                kwargs = review_edit(calls["review"], kwargs)
+            return original(**kwargs)
+        result = original(**kwargs)
+        if kwargs["schema"] is LessonV2Draft:
+            calls["draft"] += 1
+            if draft_edit:
+                result = draft_edit(calls["draft"], result)
+        return result
+
+    monkeypatch.setattr(fake_llm, "respond", wrapped)
+
+
+def _long(draft: LessonV2Draft) -> LessonV2Draft:
+    return draft.model_copy(update={"blocks": draft.blocks + draft.blocks[1:3]})  # 11 blocks: a soft problem
+
+
+def _review_as(blocking: bool):
+    return lambda kwargs: {**kwargs, "text": kwargs["text"].replace("(first draft)", "") + (" (first draft)" if blocking else "")}
+
+
+def test_a_revision_that_fixes_the_review_is_kept_although_it_runs_long(tmp_path, llm_calls, monkeypatch):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    # first draft: blocking review; revision 1: 11 blocks but a clean review; revision 2 trims it
+    _with_calls(monkeypatch, draft_edit=lambda n, d: _long(d) if n == 2 else d,
+                review_edit=lambda n, kw: _review_as(n == 1)(kw))
+    result = asyncio.run(replan(cid, key)).results[0]
+    assert result.ok and result.revisions == 2 and blocking_count(result.final_review) == 0
+    lesson = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (result.skill_id,))["lesson_json"])
+    assert len(lesson["blocks"]) == 9 and not any(n.startswith("stored although") for n in result.notes)
+
+
+def test_a_revision_with_a_worse_review_is_not_taken(tmp_path, llm_calls, monkeypatch):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    # first draft: clean review but too long; both revisions are shorter but their reviews find a blocking problem
+    _with_calls(monkeypatch, draft_edit=lambda n, d: _long(d) if n == 1 else d,
+                review_edit=lambda n, kw: _review_as(n > 1)(kw))
+    result = asyncio.run(replan(cid, key)).results[0]
+    assert result.ok and result.revisions == 0 and blocking_count(result.final_review) == 0
+    assert sum("left more blocking issues (1) than the draft before it (0)" in n for n in result.notes) == 2
+    assert any(n.startswith("stored although: the teaching sequence is too long (11 blocks") for n in result.notes)
+
+
+def test_a_failing_second_revision_keeps_the_first(tmp_path, llm_calls, monkeypatch):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+
+    def boom(n, d):
+        if n == 3:
+            raise RuntimeError("writer unavailable")
+        return _long(d) if n == 2 else d  # revision 1 is long, so a second round is wanted
+
+    _with_calls(monkeypatch, draft_edit=boom, review_edit=lambda n, kw: _review_as(n == 1)(kw))
+    result = asyncio.run(replan(cid, key)).results[0]
+    assert result.ok and result.revisions == 1 and any("revision 2 failed (writer unavailable)" in n for n in result.notes)
 
 
 def test_review_request_lists_the_prerequisite_skills():

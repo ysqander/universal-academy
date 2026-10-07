@@ -462,7 +462,9 @@ class LessonV2Draft(BaseModel):
     title: str
     objective: str
     goal_line: str = Field(description="'Your goal:' one sentence in learner language with a concrete example.")
-    blocks: list[TeachingBlock] = Field(description="The ordered teaching sequence (typically 5-10 blocks, 1-3 checks).")
+    blocks: list[TeachingBlock] = Field(
+        description="The ordered teaching sequence: at most 9 blocks (10 with a case the learner missed), 1-2 graded checks + 1 reflect check."
+    )
     notation: list[NotationItem] = Field(description="Only symbols actually used in this lesson, each introduced in the text before use.")
     knowledge_points: list[KnowledgePointDraft] = Field(
         description="Practice after the teaching sequence: 1-3 knowledge points (short reminder + a fresh worked example + target_questions + 2 questions)."
@@ -487,7 +489,12 @@ class CapstoneRepair(BaseModel):
 
 
 class BridgeIssue(BaseModel):
-    location: str = Field(description="Block number (1-based) and heading, or the exercise key.")
+    location: str = Field(
+        description=(
+            "Block number (1-based) and heading, or the exercise key — a key only when that question itself is faulty "
+            "(for something missing, name the knowledge point)."
+        )
+    )
     inference_required: str = Field(description="What the learner is being asked to infer.")
     why_insufficient: str = Field(description="Why the current explanation does not establish it.")
     repair: str = Field(description="The smallest adequate repair.")

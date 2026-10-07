@@ -92,6 +92,13 @@ generator is still being tuned.
   prove). A spare may repeat a served demand once on new numbers: it is the recovery question after a miss. Every question must need this
   lesson's idea (no bare prerequisite facts). Graded means served: inline checks are formative and spare questions
   may never be served, so neither counts as testing a misconception.
+- **An answer the learner can read is not a question** (2026-10-07, round-2 evaluation). A question whose answer is
+  printed in its prompt, a step, a bank of lines, the teaching text or a worked example (for expressions with letters),
+  forced by a definition, an earlier step's result again, or one of a step's options, is found mechanically
+  (`questions.answer_known_problems`). The revision is told; afterwards a question served first that is still blocked
+  (this check or the final review) is rewritten on its own in its slot, and such spares are left out while spares last.
+  Stored lessons: `scripts/regenerate.py --only questions [--note "S8b k2q3: …"]` (the new version takes the old one's
+  slot; the old row keeps its id and answers as retired history).
 - **Answer forms.** Complex numbers are always asked and keyed as `a+bi` (never `(real, imaginary)` pairs); when the
   problem already uses the letters a or b, the prompt says "enter it as a complex number in standard form (e.g.
   $3-2i$)" instead. A tuple key
@@ -211,10 +218,10 @@ Details: [SPEC.md §6.7](SPEC.md).
   day (§2, §3; second revision for what is still blocking; blocked spare questions left out). Re-evaluated after
   regenerating the 8 lessons (round 2): all better than round 1, 8–9 blocks, at most one served choice question, misses
   re-tested typed on new numbers, no wrong keys. Still open (next iteration):
-  1. Served questions whose answer is printed, forced (e.g. "= 1" by definition) or reachable by elimination pass the
-     typed-format rule — the "known in advance" check exists for capstone steps only.
+  1. ~~Served questions whose answer is printed or forced~~ — addressed the same day (§3, "An answer the learner can
+     read"); elimination from a shown working's wording and line-number keys are still only caught by review.
   2. Misconceptions are often tested only by a capstone choice, a spare, or a key the misconception also reaches.
-  3. A served question the final review blocks is kept (no question-only rewrite yet).
+  3. ~~A served question the final review blocks is kept~~ — it is rewritten in its slot now (§3).
   4. Proof practice still specialises statements the teaching proved (no `practice_statements` in the spec).
   5. Capstone chains are often nominal (a one-line prerequisite step) or a special case.
   6. Inline checks and faded examples sometimes print the arithmetic they ask for.

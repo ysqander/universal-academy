@@ -93,7 +93,7 @@ Rules:
 Planner (`TeachingPlan`, may split a node) → writer (`LessonV2Draft`: ordered teaching blocks with inline checks and
 faded examples, then practice knowledge points) → missing-bridge reviewer (`LessonReview`) → one revision. Stored as
 `lesson_json.format = "v2"`; the API returns `Lesson.format/blocks/goal_line/assumed/out_of_scope/deeper`. Applied per
-skill with `backend/scripts/replan.py --data-dir ../data --course <id> --skill S2 [--dry-run] [--no-split]`; a split
+skill with `backend/scripts/replan.py --course <id> --skill S2 [--dry-run] [--no-split]`; a split
 replaces the node by narrower skills (keys S2a, S2b, …, kept at the original's place in the learning order), rewires
 edges, recomputes order/reduction and unlocks, and is only allowed while the original skill has no answered attempts
 and no FSRS card. `scripts/regenerate.py` rewrites a v2 skill from its stored teaching spec. Inline checks and block
@@ -250,7 +250,7 @@ Markdown everywhere through one `<Markdown>` component (react-markdown + remark-
 
 ## 9. Maintenance
 
-`backend/scripts/regenerate.py --data-dir ../data --course <id> [--skills S1,S4] [--only lessons,visuals,verify] [--dry-run]` rewrites a course's lessons/visuals/verification with the current prompts while keeping learner progress (answered questions are retired, not deleted; a DB backup is written first). It refuses to write while the app answers on :8000 (stop it first, or `--force`); questions stay servable during re-verification and Ctrl-C leaves a resumable job. `backend/scripts/try_parse.py <pdf> <page>…` shows how a page is transcribed.
+`backend/scripts/regenerate.py --course <id> [--skills S1,S4] [--only lessons,visuals,verify] [--dry-run]` rewrites a course's lessons/visuals/verification with the current prompts while keeping learner progress (answered questions are retired, not deleted; a DB backup is written first). It refuses to write while the app answers on :8000 (stop it first, or `--force`); questions stay servable during re-verification and Ctrl-C leaves a resumable job. `backend/scripts/try_parse.py <pdf> <page>…` shows how a page is transcribed.
 
 ## 10. Testing
 

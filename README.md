@@ -34,7 +34,7 @@ UA_FAKE_LLM=1 ./run.sh                                      # whole app offline 
 Refresh a course after prompt changes, keeping your progress (stop the app first):
 
 ```bash
-cd backend && .venv/bin/python scripts/regenerate.py --data-dir ../data --course <course_id> --dry-run
+cd backend && .venv/bin/python scripts/regenerate.py --course <course_id> --dry-run
 ```
 
 Model roles (vision `gpt-6-luna`, graph/lessons/visuals `gpt-6.1-sol`, verification `gpt-6-luna`) and other knobs are documented in [docs/SPEC.md §8](docs/SPEC.md).

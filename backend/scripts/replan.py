@@ -1,6 +1,6 @@
 """Replan one skill with lesson generation v2 (experimental; docs/lesson-v2.md, SPEC §4.2b).
 
-    python scripts/replan.py --data-dir ../data --course <course_id> --skill S2
+    python scripts/replan.py --course <course_id> --skill S2
                              [--dry-run] [--no-split] [--plan FILE] [--yes] [--no-backup] [--force]
 
 1. Planner (high effort): a teaching spec for the skill — objective, assumed prerequisites, out of scope, starting

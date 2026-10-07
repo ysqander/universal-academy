@@ -1,6 +1,6 @@
 """Regenerate an existing course's lessons, visuals and/or verification in place, keeping the learner's progress.
 
-    python scripts/regenerate.py --data-dir ../data --course <course_id> [--skills S1,S4]
+    python scripts/regenerate.py --course <course_id> [--skills S1,S4]
                                  [--only lessons,visuals,verify] [--dry-run] [--yes] [--no-backup] [--force]
 
 Use it after prompt or pipeline fixes to refresh a course that is already being studied:

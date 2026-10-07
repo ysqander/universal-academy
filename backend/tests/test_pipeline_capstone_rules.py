@@ -98,6 +98,17 @@ def test_capstone_steps_whose_answer_is_known_in_advance_are_found():
         step("What is $i^2$? Enter a number.", "-1", kind="numeric"),
     ])
     assert capstone_issues(clean_capstone(fine)) == []
+    # a sum or difference written in the problem is a computation for the earlier skill's step, not a stated value
+    # (the S2d and S7 re-plans of 2026-10-07 lost exactly this step)
+    sums = capstone("Let $w=(12+5i)-(3+45i)$ and $\\alpha=(4-5i)+(-7+2i)$; also consider $3-(1+i)$.", [
+        step("Compute $w$. Enter it in the form $a+bi$.", "9-40*i"),
+        step("Compute $\\alpha$. Enter it in the form $a+bi$.", "-3-3*i"),
+        step("Compute $3-(1+i)$. Enter it in the form $a+bi$.", "2-i"),
+    ])
+    assert capstone_issues(clean_capstone(sums)) == []
+    stated = capstone("Let $w=9-40i$.", [step("Enter $w$ in the form $a+bi$.", "9-40*i"),
+                                         step("Compute $2w$. Enter it in the form $a+bi$.", "18-80*i")])
+    assert [i for i, _ in capstone_issues(clean_capstone(stated))] == [0]
 
 
 def test_capstone_validation_is_strict_first_then_drops_the_giveaway_step():

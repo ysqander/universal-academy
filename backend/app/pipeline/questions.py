@@ -357,13 +357,15 @@ def clean_capstone(q: QuestionDraft) -> QuestionDraft:
 
 
 # Math in a prompt: $$…$$ or $…$. A value counts as "stated" only when it is written as a literal — a number such as
-# 4-3i, \frac15+\frac25i, \frac{1-2i}{5} or a tuple of such — never an expression to evaluate ((1+2i)(1-2i), 2\cdot3).
+# 4-3i, \frac15+\frac25i, \frac{1-2i}{5} or a tuple of such — never an expression to evaluate ((1+2i)(1-2i), 2\cdot3,
+# (4-5i)+(-7+2i)).
 _MATH_RE = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.DOTALL)
 _I_SQUARED = re.compile(r"i\s*\^\s*\{?\s*2\s*\}?\s*=\s*-\s*1")  # "use $i^2=-1$" states no result
 _SPLIT_RE = re.compile(r"\\text\{[^{}]*\}|\\(?:quad|qquad|neq|ne|approx|to|Rightarrow|implies|iff|text)\b|[=;]")
 _LATEX_NOISE = re.compile(r"\\left|\\right|\\[,;:!]|\\displaystyle")
 _LITERAL_CHARS = re.compile(r"[0-9.+\-/ i{}(),]*")
 _PRODUCT = re.compile(r"\)\s*[\d({]|[\d}i]\s*\(")  # (1+2i)(1-2i), 2(3+i), i(7+i), \frac{1}{5}(1-2i)
+_SUM = re.compile(r"\)\s*[+\-]|[\d}i]\s*[+\-]\s*\(")  # (4-5i)+(-7+2i), 3-(1+i): a sum to compute, not a value
 _FRAC_DENOMINATORS = re.compile(r"\\frac\s*(?:\{[^{}]*\}|\d)\s*(?:\{([^{}]*)\}|(\d))")
 _TYPED = {"numeric", "expression"}
 
@@ -393,7 +395,7 @@ def _literal_value(piece: str) -> tuple[complex, ...] | None:
     """The value of a math piece that is a literal number (or a tuple of literal numbers), else None."""
     piece = re.sub(r"\\[dt]frac", r"\\frac", _LATEX_NOISE.sub("", piece))
     bare = piece.replace("\\frac", "").replace("\\sqrt", "")
-    if not bare.strip() or not _LITERAL_CHARS.fullmatch(bare) or not re.search(r"[\di]", bare) or _PRODUCT.search(bare):
+    if not bare.strip() or not _LITERAL_CHARS.fullmatch(bare) or not re.search(r"[\di]", bare) or _PRODUCT.search(bare) or _SUM.search(bare):
         return None
     # a quotient by anything but a plain positive integer is a computation (1/(1+2i), \frac{1}{2-i}), not a value
     if re.search(r"/\s*[^\d\s]", piece) or any(not (a or b).strip().isdigit() for a, b in _FRAC_DENOMINATORS.findall(piece)):

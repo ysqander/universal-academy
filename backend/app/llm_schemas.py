@@ -482,6 +482,10 @@ class LessonV2Draft(BaseModel):
     source_refs: list[str]
 
 
+class QuestionRepair(BaseModel):
+    question: QuestionDraft = Field(description="The new practice question for the slot (same key), following the PRACTICE QUESTIONS rules.")
+
+
 class CapstoneRepair(BaseModel):
     capstone: QuestionDraft = Field(
         description="The new final multistep problem (kind 'multistep', key 'cap', 2-4 machine-checked steps) for the lesson as it stands."

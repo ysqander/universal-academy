@@ -15,6 +15,9 @@
 - capstones (v2 lessons): only the final multistep problem is rewritten — when it is missing, withheld by
   verification or breaks the capstone rules, or when capstone_notes name a problem — then stored and verified
   (lesson_v2.repair_stored_capstone); an answered old capstone is retired, never deleted.
+- questions (v2 lessons): practice questions whose answer can be read (printed in the prompt, a step or a bank of
+  lines, forced by a definition) or that question_notes name ("k2q1: …") are rewritten in place — same row, so a question
+  served first stays served first — and verified (lesson_v2.repair_stored_questions).
 - verify: machine-checkable questions are re-verified in place (learner flags and retired questions are left alone).
   Nothing is held out of serving meanwhile: each question keeps its old verdict until the new one is written.
 Progress (status, FSRS cards, XP) is never touched. Runs in the caller's event loop; refuses while a build runs. An
@@ -31,7 +34,7 @@ from dataclasses import dataclass, field
 from .. import db, llm
 from . import jobs
 from .context import BuildContext, load_course, skill_rows
-from .lesson_v2 import generate_v2_lesson, repair_stored_capstone, stored_spec
+from .lesson_v2 import generate_v2_lesson, repair_stored_capstone, repair_stored_questions, stored_spec
 from .lessons import ensure_lesson, lesson_prefix
 from .topup import release_stale_holds
 from .tracker import JobTracker
@@ -47,6 +50,7 @@ class RegenerateReport:
     lessons_regenerated: list[str] = field(default_factory=list)
     lessons_kept: list[str] = field(default_factory=list)  # regeneration failed; the old lesson stays
     capstones: list[str] = field(default_factory=list)  # one outcome line per skill (capstones=True)
+    questions: list[str] = field(default_factory=list)  # one line per rewritten question (questions=True)
     abandoned_tasks: int = 0
     released_holds: int = 0  # questions an earlier interrupted run / top-up had left out of serving
     cost_usd: float = 0.0
@@ -61,6 +65,8 @@ async def regenerate(
     verify: bool = True,
     capstones: bool = False,
     capstone_notes: list[str] | None = None,
+    questions: bool = False,
+    question_notes: list[str] | None = None,
 ) -> RegenerateReport:
     course = load_course(course_id)
     if jobs.is_building(course_id):
@@ -79,7 +85,9 @@ async def regenerate(
     ctx = BuildContext(course=course, tracker=tracker, usage=usage)
     parts = [
         name
-        for name, on in (("lessons", lessons), ("visuals", visuals), ("capstones", capstones), ("verification", verify))
+        for name, on in (
+            ("lessons", lessons), ("visuals", visuals), ("capstones", capstones), ("questions", questions), ("verification", verify)
+        )
         if on
     ]
     tracker.log(f"Regenerating {', '.join(parts)} for {len(selected)} skill{'s' * (len(selected) != 1)}")
@@ -88,17 +96,21 @@ async def regenerate(
         report.released_holds = release_stale_holds(ids)
         if report.released_holds:
             tracker.log(f"Released {report.released_holds} questions an earlier interrupted run had held back")
-        prefix = lesson_prefix(course) if lessons or capstones else ""
+        prefix = lesson_prefix(course) if lessons or capstones or questions else ""
 
         async def one(skill: dict) -> None:
             regenerated = False
             spec = stored_spec(db.loads(skill["lesson_json"], None) or {})  # v2 lesson: rewritten from its stored plan
+            if questions and not lessons:
+                for line in await repair_stored_questions(ctx, skill["id"], prefix, question_notes):
+                    report.questions.append(line)
+                    tracker.log(f"Question {line}")
             if capstones and not lessons:
                 outcome = await repair_stored_capstone(ctx, skill["id"], prefix, capstone_notes)
                 report.capstones.append(outcome)
                 tracker.log(f"Capstone {outcome}")
-                if not (visuals or verify):
-                    return
+            if (questions or capstones) and not (lessons or visuals or verify):
+                return
             if lessons and spec is not None:
                 result = await generate_v2_lesson(ctx, skill["id"], spec, prefix)  # also verifies the new questions
                 (report.lessons_regenerated if result.ok else report.lessons_kept).append(skill["key"])

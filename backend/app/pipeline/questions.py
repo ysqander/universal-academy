@@ -6,6 +6,8 @@ import logging
 import re
 import sqlite3
 
+import sympy as sp
+
 from .. import db
 from ..learning.grading import AnswerParseError, check_answer, parse_answer, parse_true_false_set
 from ..llm_schemas import MultistepStep, QuestionDraft
@@ -504,6 +506,126 @@ def step_reference_problems(q: QuestionDraft) -> list[str]:
         for k in sorted({int(m) for m in _STEP_REF.findall(f"{step.hint} {step.explanation}")}):
             if not 1 <= k <= n:
                 problems.append(f"step {i}'s hint or explanation refers to step {k}, which does not exist")
+    return problems
+
+
+SMALL_INTEGER = 10  # a small integer printed in a prompt is usually a coincidence, not the answer given away
+_MAX_PIECE = 200
+
+
+def _is_computation(raw: sp.Basic | None) -> bool:
+    """A product of brackets or a power of one ('(t+i)(1-i)', '(a+bi)^2'): an expression to compute, not a result."""
+    if raw is None:
+        return False
+    for node in sp.preorder_traversal(raw):
+        if isinstance(node, sp.Mul) and sum(isinstance(a, sp.Add) for a in node.args) >= 2:
+            return True
+        if isinstance(node, sp.Pow) and isinstance(node.base, sp.Add):
+            return True
+    return False
+
+
+def _symbolic(piece: str, *, results_only: bool = False) -> sp.Expr | None:
+    """A printed expression with letters ('ae-bf+ce-df', '(ae-bf)+(af+be)i'), all letters real; None otherwise.
+    results_only: None for an expression still to compute ('(t+i)(1-i)')."""
+    if len(piece) > _MAX_PIECE:
+        return None
+    try:
+        node = parse_answer(piece)
+    except Exception:  # noqa: BLE001 — unreadable text is not an expression
+        return None
+    if node.kind != "scalar" or node.expr is None or not node.expr.free_symbols:
+        return None
+    if results_only and _is_computation(node.raw):
+        return None
+    return node.expr.xreplace({x: sp.Symbol(x.name, real=True) for x in node.expr.free_symbols})
+
+
+def _same_expression(key: sp.Expr, printed: sp.Expr) -> bool:
+    """key equals the printed expression, or its real or imaginary part (letters real)."""
+    try:
+        if sp.expand(key - printed) == 0:
+            return True
+        real, imag = sp.expand(printed).as_real_imag()
+        return sp.expand(key - real) == 0 or sp.expand(key - imag) == 0
+    except Exception:  # noqa: BLE001 — sympy may refuse odd input
+        return False
+
+
+def _set_value(text: str) -> frozenset | None:
+    """A set of numbers ('{-1, 0, 2}') as rounded complex values; None otherwise."""
+    try:
+        node = parse_answer(text)
+    except Exception:  # noqa: BLE001
+        return None
+    if node.kind != "set" or not node.items or any(i.kind != "scalar" or i.expr is None or i.expr.free_symbols for i in node.items):
+        return None
+    try:
+        return frozenset(complex(round(complex(i.expr.evalf()).real, 9), round(complex(i.expr.evalf()).imag, 9)) for i in node.items)
+    except (TypeError, ValueError):
+        return None
+
+
+def _small_integer(v: tuple[complex, ...]) -> bool:
+    return _integer(v) and abs(v[0].real) <= SMALL_INTEGER
+
+
+def _printed_in(answer: str, texts: list[str], *, small_integers: bool, letters_only: bool = False) -> bool:
+    """Is the answer readable in these texts: the same literal value (a small integer only when small_integers),
+    the same set of numbers, or — for an answer with letters — a printed result (not an expression still to compute)
+    or its real or imaginary part? letters_only: only a non-trivial answer with letters counts (teaching text, where a
+    number may appear for another reason)."""
+    pieces = [p for t in texts for p in _math_pieces(t)]
+    value = _value(answer)
+    if letters_only and value is not None:
+        return False
+    if value is not None:
+        if _small_integer(value) and not small_integers:
+            return False
+        return any((v := _literal_value(p)) is not None and _same(value, v) for p in pieces)
+    as_set = _set_value(answer)
+    if as_set is not None:
+        return not letters_only and any(_set_value(p) == as_set for p in pieces if "{" in p or "\\{" in p)
+    key = _symbolic(answer)
+    if key is None or key.is_Symbol:  # a lone letter ("a") is too often printed for another reason
+        return False
+    if letters_only and sp.count_ops(key) < 2:  # "-b" is everywhere in a lesson on a+bi
+        return False
+    return any((e := _symbolic(p, results_only=True)) is not None and _same_expression(key, e) for p in pieces)
+
+
+def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) -> list[str]:
+    """A typed answer the learner can read instead of produce (evaluation of the 2026-10-07 lessons: served questions
+    that passed the typed-answer rule with their answer printed). Reported:
+    - a numeric / expression question whose answer is printed in its prompt (small integers excepted: coincidences),
+      or in `context` (the teaching text) when it is neither a small integer nor a lone letter;
+    - a multistep step whose answer is written in the problem, a step prompt or a step's choices up to it (the
+      capstone rules of capstone_issues, extended to answers with letters — "af+be+cf+de" is the imaginary part of a
+      printed line — and to sets), an earlier step's result again, or forced by a definition."""
+    context = context or []
+    problems: list[str] = []
+    if q.kind in _TYPED:
+        if _printed_in(q.answer, [q.prompt], small_integers=False):
+            problems.append(f"{q.key}: its answer {q.answer_display or q.answer} is written in its own prompt")
+        elif context and _printed_in(q.answer, context, small_integers=False, letters_only=True):
+            problems.append(f"{q.key}: its answer {q.answer_display or q.answer} is shown in the teaching text — ask for something the lesson did not print")
+        return problems
+    if q.kind != "multistep":
+        return problems
+    try:
+        cleaned = clean_capstone(q).model_copy(update={"key": q.key})
+    except InvalidQuestion:
+        return problems
+    problems += [f"{q.key}: {message}" for _, message in capstone_issues(cleaned)]
+    for i, step in enumerate(cleaned.steps):
+        if step.kind not in _TYPED or _value(step.answer) is not None:
+            continue  # numbers: capstone_issues already looked
+        shown = [q.prompt] + [x.prompt for x in cleaned.steps[: i + 1]] + [c for x in cleaned.steps[: i + 1] for c in x.choices]
+        if _printed_in(step.answer, shown, small_integers=True):
+            problems.append(
+                f"{q.key}: step {i + 1} ({step.answer_display or step.answer}): its answer is printed in the problem, a "
+                "step prompt or a bank of lines — ask for a line the learner derives"
+            )
     return problems
 
 

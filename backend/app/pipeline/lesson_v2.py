@@ -39,6 +39,7 @@ from ..llm_schemas import (
     MultistepStep,
     PlannedPrereq,
     QuestionDraft,
+    QuestionRepair,
     TeachingPlan,
     TeachingSpec,
 )
@@ -63,6 +64,7 @@ from .lessons import (
     figures_for_skill,
     free_response_problem,
     is_proof_skill,
+    kp_targets,
     resolve_figures,
     retire_questions,
     validate_capstone,
@@ -70,12 +72,20 @@ from .lessons import (
 )
 from .prompts_v2 import (
     CAPSTONE_REPAIR_NOTE,
+    QUESTION_REPAIR_NOTE,
     PLANNER_INSTRUCTIONS,
     REVIEWER_INSTRUCTIONS,
     REVISION_NOTE,
     WRITER_INSTRUCTIONS,
 )
-from .questions import InvalidQuestion, clean_capstone, clean_question, insert_questions, is_choice_based
+from .questions import (
+    InvalidQuestion,
+    answer_known_problems,
+    clean_capstone,
+    clean_question,
+    insert_questions,
+    is_choice_based,
+)
 from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
 from .verify import verify_skill
 from .visuals import FINALIZE_TIMEOUT, finalize_plan
@@ -1118,6 +1128,12 @@ def served_questions(draft: LessonV2Draft) -> list[QuestionDraft]:
     return [q for kp in draft.knowledge_points for q in kp.questions[: clamp_target(kp.target_questions)]]
 
 
+def lesson_context(lesson: LessonV2Draft | dict[str, Any]) -> list[str]:
+    """The teaching text a practice question must not simply repeat: block bodies and inline-check prompts."""
+    blocks = lesson.model_dump()["blocks"] if isinstance(lesson, LessonV2Draft) else lesson.get("blocks") or []
+    return [b.get("body") or "" for b in blocks] + [b["check"].get("prompt") or "" for b in blocks if b.get("check")]
+
+
 def is_typed(q: QuestionDraft) -> bool:
     """The learner produces the answer: numeric / expression, or a multistep question with a typed step."""
     return q.kind in ("numeric", "expression") or (
@@ -1144,6 +1160,9 @@ def quality_problems(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
             "example or restate the generalize block, and keep every case the spec marks as a Learner's miss"
         )
     served = served_questions(draft)
+    context = lesson_context(draft)
+    for q in served:
+        problems += [f"a question served first gives its answer away — {p}" for p in answer_known_problems(q, context)]
     choice = [q.key for q in served if _counts_as_choice(q)]
     if len(choice) > 1:
         problems.append(
@@ -1384,8 +1403,16 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
             result.revised, result.revisions = True, result.revisions + 1
         result.final_review = final_review
         blocked, capstone_blockers = blocked_locations(final_review)
+        context = lesson_context(final)
+        for kp in final.knowledge_points:  # a question whose answer can be read counts as blocked too
+            for q in kp.questions:
+                known = answer_known_problems(q, context)
+                if known and q.key not in blocked:
+                    blocked[q.key] = "; ".join(known)
         final, dropped = drop_blocked_questions(final, blocked)
         result.notes += dropped
+        final, rewritten = await repair_served_questions(course, skill, spec, final, prefix, blocked)
+        result.notes += rewritten
         cap_problems = capstone_problems(final.capstone) + capstone_blockers
         if cap_problems:  # rewrite just the capstone rather than drop steps (or end the lesson without one)
             try:
@@ -1478,6 +1505,207 @@ def question_draft(row: dict[str, Any]) -> QuestionDraft:
         source_exercise=row["source_exercise"],
         steps=[MultistepStep.model_validate(_STEP_DEFAULTS | s) for s in db.loads(row.get("steps_json"), []) or []],
     )
+
+
+async def rewrite_question(
+    course: CourseInfo,
+    skill: dict[str, Any],
+    spec: TeachingSpec,
+    lesson_text: str,
+    prefix: str,
+    question: QuestionDraft,
+    problems: list[str],
+    *,
+    served: bool,
+    kp_title: str = "",
+    context: list[str] | None = None,
+) -> QuestionDraft:
+    """Writer call (role "lesson") for one practice question in its slot (same key), strictly validated — a valid
+    question whose answer cannot be read (answer_known_problems against the teaching text) — with one retry. Raises
+    InvalidQuestion when both drafts fail."""
+    slot = "served first: every learner answers it" if served else "a spare: served after a miss and in reviews"
+    base = "\n".join(
+        [
+            write_request(course, skill, spec, spec_figures(course, skill, spec)),
+            "",
+            QUESTION_REPAIR_NOTE,
+            f"## The slot: question {question.key} of the knowledge point “{kp_title}” — {slot}",
+            "## The lesson (final except this question)",
+            lesson_text,
+            "",
+            "## The current question (JSON)",
+            question.model_dump_json(),
+            "",
+            "## Problems with it",
+            *[f"- {p}" for p in problems],
+        ]
+    )
+    request, issues = base, problems
+    for attempt in range(2):
+        out = await llm.structured(
+            role="lesson",
+            instructions=WRITER_INSTRUCTIONS,
+            shared_prefix=prefix,
+            text=request,
+            schema=QuestionRepair,
+            max_output_tokens=16000,
+            label=f"question {skill['key']} {question.key}{' (retry)' if attempt else ''}",
+            stream=True,
+        )
+        issues = []
+        candidate = out.question.model_copy(update={"key": question.key})
+        if candidate.kind == "free_response":
+            issues.append("free_response questions are not allowed")
+        else:
+            try:
+                candidate = clean_question(candidate).model_copy(update={"key": question.key})
+            except InvalidQuestion as e:
+                issues.append(str(e))
+            else:
+                issues += answer_known_problems(candidate, context)
+        if not issues:
+            return candidate
+        request = base + "\n\n## Your new question was rejected\n" + "\n".join(f"- {i}" for i in issues)
+    raise InvalidQuestion("question repair failed: " + "; ".join(issues))
+
+
+async def repair_served_questions(
+    course: CourseInfo,
+    skill: dict[str, Any],
+    spec: TeachingSpec,
+    draft: LessonV2Draft,
+    prefix: str,
+    blocked: dict[str, str],
+) -> tuple[LessonV2Draft, list[str]]:
+    """Rewrite each question served first that is blocked (the final review, or an answer that can be read): one
+    question-only writer call each, kept in its slot. A failed rewrite keeps the question (noted)."""
+    context = lesson_context(draft)
+    notes: list[str] = []
+    points = []
+    for kp in draft.knowledge_points:
+        questions = list(kp.questions)
+        for position in range(min(clamp_target(kp.target_questions), len(questions))):
+            q = questions[position]
+            if q.key not in blocked:
+                continue
+            try:
+                questions[position] = await rewrite_question(
+                    course, skill, spec, render_lesson(draft), prefix, q, [blocked[q.key]],
+                    served=True, kp_title=kp.title, context=context,
+                )
+                notes.append(f"rewrote {q.key} (served first) — {blocked[q.key][:200]}")
+            except Exception as e:  # noqa: BLE001 — the question stays (its problem is in the notes)
+                log.warning("question repair %s %s failed: %s", skill["key"], q.key, e)
+                notes.append(f"rewrite of {q.key} failed ({e}); kept it")
+        points.append(kp.model_copy(update={"questions": questions}))
+    return draft.model_copy(update={"knowledge_points": points}), notes
+
+
+_QUESTION_COLUMNS = (
+    "skill_id, key, kp_index, tier, kind, prompt, choices_json, correct_choice, answer, answer_display, tolerance, "
+    "hints_json, solution, checklist_json, targets, source_exercise, flagged, flag_reason, verify_json, created_at, "
+    "steps_json, role"
+)
+
+
+def replace_question(skill_id: str, row: dict[str, Any], new: QuestionDraft) -> int:
+    """Store a rewritten question IN PLACE (same row, so it keeps its position in its knowledge point — the engine
+    serves a point's questions in row order) and send it to verification. When the learner answered the old version,
+    a retired copy of it (key 'old-…', flagged) takes over those attempts, so history stays with what was asked. Active
+    tasks on the skill are abandoned, as when a lesson is replaced. Returns the number of abandoned tasks."""
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        abandoned = abandon_active_tasks(conn, skill_id)
+        if conn.execute("SELECT 1 FROM attempts WHERE question_id = ? LIMIT 1", (row["id"],)).fetchone():
+            copy_id = db.new_id()
+            n = conn.execute("SELECT COUNT(*) FROM questions WHERE skill_id = ? AND key LIKE ?", (skill_id, f"old-{row['key']}%")).fetchone()[0]
+            conn.execute(
+                f"INSERT INTO questions(id, {_QUESTION_COLUMNS}) SELECT ?, {_QUESTION_COLUMNS} FROM questions WHERE id = ?",
+                (copy_id, row["id"]),
+            )
+            conn.execute(
+                "UPDATE questions SET key = ?, flagged = 1, flag_reason = ? WHERE id = ?",
+                (f"old-{row['key']}" + (f"-{n + 1}" if n else ""), RETIRED_REASON, copy_id),
+            )
+            conn.execute("UPDATE attempts SET question_id = ? WHERE question_id = ?", (copy_id, row["id"]))
+        conn.execute(
+            "UPDATE questions SET tier = ?, kind = ?, prompt = ?, choices_json = ?, correct_choice = ?, answer = ?, "
+            "answer_display = ?, tolerance = ?, hints_json = ?, solution = ?, checklist_json = ?, targets = ?, "
+            "source_exercise = ?, steps_json = ?, flagged = 0, flag_reason = '', verify_json = '{}' WHERE id = ?",
+            (
+                new.tier,
+                new.kind,
+                new.prompt.strip(),
+                db.dumps(new.choices),
+                new.correct_choice,
+                new.answer,
+                new.answer_display.strip(),
+                new.tolerance,
+                db.dumps(new.hints),
+                new.solution.strip(),
+                db.dumps(new.checklist),
+                new.targets.strip(),
+                (new.source_exercise or "").strip() or None,
+                db.dumps([step.model_dump() for step in new.steps]),
+                row["id"],
+            ),
+        )
+    return abandoned
+
+
+async def repair_stored_questions(
+    ctx: BuildContext, skill_id: str, prefix: str, notes: list[str] | None = None
+) -> list[str]:
+    """Rewrite the stored practice questions of a v2 lesson whose answer can be read (answer_known_problems) or that a
+    note names ("k2q1: the line's wording gives the answer away"), each in place, then verify them. Returns one line
+    per question for the report."""
+    skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
+    key = skill["key"]
+    lesson = db.loads(skill["lesson_json"], None) or {}
+    spec = stored_spec(lesson)
+    if spec is None:
+        return [f"{key}: not a v2 lesson — questions left as they are"]
+    noted: dict[str, list[str]] = {}
+    for note in notes or []:
+        m = re.match(r"\s*(k\d+q\d+)\s*[:—-]\s*(.+)", note, re.DOTALL)
+        if m:
+            noted.setdefault(m.group(1), []).append(m.group(2).strip())
+    targets = kp_targets(lesson)
+    titles = [kp.get("title", "") for kp in lesson.get("knowledge_points") or []]
+    context = lesson_context(lesson)
+    rows = db.query(
+        "SELECT * FROM questions WHERE skill_id = ? AND role != 'capstone' AND key NOT LIKE 'old-%' ORDER BY kp_index, rowid",
+        (skill_id,),
+    )
+    lines, done, seen = [], [], Counter()
+    for row in rows:
+        kp = row["kp_index"]
+        seen[kp] += 1
+        served = kp < len(targets) and seen[kp] <= targets[kp]
+        draft = question_draft(row)
+        problems = answer_known_problems(draft, context) + noted.pop(row["key"], [])
+        if not problems:
+            continue
+        pools, current = stored_questions(skill_id)
+        try:
+            new = await rewrite_question(
+                ctx.course, skill, spec, render_lesson(lesson, pools, current), prefix, draft, problems,
+                served=served, kp_title=titles[kp] if kp < len(titles) else "", context=context,
+            )
+        except Exception as e:  # noqa: BLE001 — the question stays as it was
+            log.warning("question repair %s %s failed: %s", key, row["key"], e)
+            lines.append(f"{key} {row['key']}: rewrite failed ({e}) — kept as it was")
+            continue
+        ctx.abandoned_tasks += replace_question(skill_id, row, new)
+        done.append(row["id"])
+        lines.append(f"{key} {row['key']} ({'served first' if served else 'spare'}): rewritten — {'; '.join(problems)[:160]}")
+    lines += [f"{key} {k}: no such practice question — note ignored" for k in noted]
+    if done:
+        await verify_skill(skill_id)
+        for row in db.query(f"SELECT key, flagged, flag_reason FROM questions WHERE id IN ({','.join('?' * len(done))})", tuple(done)):
+            if row["flagged"]:
+                lines.append(f"{key} {row['key']}: verification withheld the new version — {row['flag_reason'][:160]}")
+    return lines
 
 
 def capstone_defects(skill_id: str) -> list[str]:
@@ -1613,6 +1841,11 @@ __all__ = [
     "blocked_locations",
     "blocking_count",
     "capstone_defects",
+    "lesson_context",
+    "repair_served_questions",
+    "repair_stored_questions",
+    "replace_question",
+    "rewrite_question",
     "drop_blocked_questions",
     "prose_words",
     "quality_problems",

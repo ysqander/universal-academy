@@ -1,7 +1,7 @@
 """Regenerate an existing course's lessons, visuals and/or verification in place, keeping the learner's progress.
 
     python scripts/regenerate.py --course <course_id> [--skills S1,S4]
-                                 [--only lessons,visuals,verify | --only capstone [--note "…"]]
+                                 [--only lessons,visuals,verify | --only capstone,questions [--note "…"]]
                                  [--dry-run] [--yes] [--no-backup] [--force]
 
 Use it after prompt or pipeline fixes to refresh a course that is already being studied:
@@ -12,6 +12,9 @@ Use it after prompt or pipeline fixes to refresh a course that is already being 
 - capstone (v2 lessons, not part of the default): rewrite only the lesson's final multistep problem when it is
   missing, withheld by verification or breaks the capstone rules — or for the problem a --note describes (e.g.
   "the problem asks to compute alpha but no step does") — then store and verify it.
+- questions (v2 lessons, not part of the default): rewrite, in place, the practice questions whose answer can be read
+  (printed in the prompt, a step or a bank of lines, forced by a definition) and those a --note names
+  ("k2q1: the line's wording gives the answer away"); then verify them.
 - visuals / verify: redo only the visual plans / the independent verification of machine-checkable questions
   (learner flags are never cleared). Questions stay servable while they are re-checked, and a visual is replaced
   only by a successful new plan.
@@ -29,6 +32,7 @@ import argparse
 import asyncio
 import logging
 import os
+import re
 import sqlite3
 import sys
 import urllib.error
@@ -39,8 +43,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-PARTS = ("lessons", "visuals", "verify", "capstone")
+PARTS = ("lessons", "visuals", "verify", "capstone", "questions")
 DEFAULT_PARTS = ("lessons", "visuals", "verify")
+QUESTION_NOTE = re.compile(r"\s*k\d+q\d+\s*[:—-]")
 SERVER_HEALTH_URL = "http://127.0.0.1:8000/api/health"
 
 
@@ -49,8 +54,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-dir", type=Path, help="UA_DATA_DIR holding academy.sqlite3 (default: the app's data dir)")
     p.add_argument("--course", help="course id (omit to list the courses in the data dir)")
     p.add_argument("--skills", default="", help="comma-separated skill keys (default: every skill)")
-    p.add_argument("--only", default=",".join(DEFAULT_PARTS), help="comma-separated parts: lessons,visuals,verify or capstone")
-    p.add_argument("--note", action="append", default=[], help="with --only capstone: a problem of the capstone to fix (repeatable)")
+    p.add_argument("--only", default=",".join(DEFAULT_PARTS), help="comma-separated parts: lessons,visuals,verify or capstone,questions")
+    p.add_argument(
+        "--note", action="append", default=[],
+        help="a problem to fix (repeatable): 'k2q1: …' names a practice question (--only questions), anything else the capstone",
+    )
     p.add_argument("--dry-run", action="store_true", help="show what would be regenerated and the current quality")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     p.add_argument("--no-backup", action="store_true", help="skip the database backup")
@@ -193,8 +201,12 @@ async def main() -> int:
         visuals="visuals" in parts,
         verify="verify" in parts,
         capstones="capstone" in parts,
-        capstone_notes=args.note,
+        capstone_notes=[n for n in args.note if not QUESTION_NOTE.match(n)],
+        questions="questions" in parts,
+        question_notes=[n for n in args.note if QUESTION_NOTE.match(n)],
     )
+    for line in report.questions:
+        print("Question", line)
     for line in report.capstones:
         print("Capstone", line)
     print(f"\nRegenerated lessons: {', '.join(report.lessons_regenerated) or '—'}")

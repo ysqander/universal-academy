@@ -16,9 +16,10 @@ from test_pipeline_v2 import built_course, skill_by_title, split_plan
 from app import db, fake_llm
 from app.llm_schemas import LessonDraft, LessonV2Draft, MultistepStep, QuestionDraft
 from app.pipeline import topup
-from app.pipeline.lesson_v2 import capstone_defects, content_problems, validate_v2, write_request
+from app.pipeline.lesson_v2 import capstone_defects, content_problems, quality_problems, validate_v2, write_request
 from app.pipeline.lessons import InvalidLesson, capstone_problems, validate_capstone, validate_lesson
 from app.pipeline.questions import (
+    answer_known_problems,
     capstone_issues,
     clean_capstone,
     format_warnings,
@@ -380,3 +381,101 @@ def test_writer_request_marks_the_planned_success_check_as_advisory(tmp_path):
     skill = skill_by_title(cid, "Distinguish lists")
     text = write_request(load_course(cid), skill, split_plan().skills[0], [])
     assert "Success check — the planner's idea for the capstone (where it conflicts with the CAPSTONE rules, the rules win" in text
+
+
+def typed(key: str, prompt: str, answer: str, kind: str = "expression") -> QuestionDraft:
+    return QuestionDraft(key=key, tier=2, kind=kind, prompt=prompt, choices=[], correct_choice=None, answer=answer,
+                         answer_display=f"${answer}$", tolerance=None, hints=["a", "b", "c"], solution="s", checklist=[],
+                         targets="t", source_exercise=None, steps=[])
+
+
+def test_answers_the_learner_can_read_are_found():
+    """The 2026-10-07 round-2 lessons: served questions passed the typed-answer rule with their answer printed."""
+    # printed in its own prompt (a small integer may be a coincidence and is not counted)
+    assert answer_known_problems(typed("k1q1", "Compute $(2+i)^2$. (It is $3+4i$.)", "3+4*i"))
+    assert not answer_known_problems(typed("k1q1", "Compute $(2+i)^2$.", "3+4*i"))
+    assert not answer_known_problems(typed("k1q2", "In $\\mathbf{R}^3$ with $x=(1,2,3)$, what is $x_2$?", "2", "numeric"))
+    # a set printed in the step that asks for it (S13 k2q2)
+    sets = capstone("Let $S=\\{-1,0,2\\}$ and $q(x)=x^2$.", [
+        step("Enter the domain $S=\\{-1,0,2\\}$ of $q+(-q)$.", "{-1, 0, 2}"),
+        step("Enter $(q+(-q))(2)$.", "0", kind="numeric"),
+    ])
+    assert any("step 1" in p for p in answer_known_problems(sets))
+    # a line with letters that is the imaginary part of a printed line (S4a k3q1)
+    bank = capstone("Prove $(\\alpha+\\beta)\\lambda=\\alpha\\lambda+\\beta\\lambda$ with $\\lambda=e+fi$.", [
+        step("Line 1 of the bank: $(ae-bf+ce-df)+(af+be+cf+de)i$. Enter the imaginary coordinate of the right side.",
+             "a*f+b*e+c*f+d*e"),
+        step("Enter the real coordinate of $\\alpha\\lambda$ for $\\alpha=a+bi$.", "a*e-b*f"),
+    ])
+    assert [p for p in answer_known_problems(bank) if "step 1" in p] and not [p for p in answer_known_problems(bank) if "step 2" in p]
+    # an expression still to compute is the question, not its answer (S4b capstone: $(t+i)(1-i)$)
+    compute = capstone("For real $t$ let $w=(t+i)(1-i)$.", [
+        step("Compute $w=(t+i)(1-i)$ in standard form.", "t+1+(1-t)*i"),
+        step("For which $t$ is the real coordinate of $w$ zero?", "-1", kind="numeric"),
+    ])
+    assert answer_known_problems(compute) == []
+    # forced by a definition (S4b k2q1: a number times the inverse built for it)
+    forced = capstone("Let $z=-5i$; its inverse is $i/5$.", [
+        step("Compute $|z|^2$.", "25", kind="numeric"),
+        step("Compute $(-5i)(i/5)$.", "1", kind="numeric"),
+    ])
+    assert any("forced by a definition" in p for p in answer_known_problems(forced))
+    # the teaching text counts only for a non-trivial expression with letters
+    teaching = ["Expanding gives $acf+ade+bce-bdf$ for the real part.", "We found $2-2i$ is not the target."]
+    assert answer_known_problems(typed("k2q2", "Enter the real part.", "a*c*f+a*d*e+b*c*e-b*d*f"), teaching)
+    assert not answer_known_problems(typed("k1q1", "Find the cube of $-1-i$.", "2-2*i"), teaching)
+    assert not answer_known_problems(typed("k3q2", "Enter the competing inverse's imaginary part.", "-b"), teaching)
+
+
+def test_a_question_served_first_that_gives_its_answer_away_is_rewritten_in_its_slot(tmp_path, monkeypatch, llm_calls):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    original = fake_llm.respond
+
+    def leaky(**kwargs):
+        result = original(**kwargs)
+        if kwargs["schema"] is LessonV2Draft:  # every draft and revision prints k2q1's answer in its prompt
+            kp = result.knowledge_points[1]
+            q = kp.questions[0]
+            kp.questions[0] = q.model_copy(update={"prompt": q.prompt + f" (It equals {q.answer_display}.)"})
+        return result
+
+    monkeypatch.setattr(fake_llm, "respond", leaky)
+    draft = original(schema=LessonV2Draft, role="lesson", instructions="", text="Write the lesson for skill S1: x")
+    leaked = leaky(schema=LessonV2Draft, role="lesson", instructions="", text="Write the lesson for skill S1: x")
+    assert not quality_problems(draft) and any("gives its answer away" in p for p in quality_problems(leaked))
+    llm_calls.clear()
+    result = asyncio.run(replan(cid, key)).results[0]
+    assert result.ok and llm_calls["QuestionRepair"] == 1
+    assert any(n.startswith("rewrote k2q1 (served first)") for n in result.notes)
+    rows = db.query("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 1 AND key NOT LIKE 'old-%' ORDER BY rowid", (result.skill_id,))
+    assert rows[0]["key"] == "k2q1" and "(It equals" not in rows[0]["prompt"]  # rewritten, still first of its point
+
+
+def test_regenerate_rewrites_a_named_question_in_place_and_keeps_its_history(tmp_path, llm_calls):
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    sid = asyncio.run(replan(cid, key)).results[0].skill_id
+    rows = db.query("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 1 AND key NOT LIKE 'old-%' ORDER BY rowid", (sid,))
+    target = rows[0]
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, state_json, created_at) VALUES (?, ?, ?, 'lesson', 'completed', '{}', ?)",
+        (task_id, cid, sid, db.now_iso()),
+    )
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, response, created_at) VALUES (?,?,?,?,0,'incorrect','x',?)",
+        (db.new_id(), task_id, target["id"], sid, db.now_iso()),
+    )
+    llm_calls.clear()
+    report = asyncio.run(regenerate(cid, [key], lessons=False, visuals=False, verify=False, questions=True,
+                                    question_notes=[f"{target['key']}: its wording gives the answer away", "k9q9: nothing"]))
+    assert llm_calls["QuestionRepair"] == 1 and llm_calls["LessonV2Draft"] == 0
+    assert any(line.startswith(f"{key} {target['key']} (served first): rewritten") for line in report.questions)
+    assert any("k9q9: no such practice question" in line for line in report.questions)
+    after = db.query("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 1 AND key NOT LIKE 'old-%' ORDER BY rowid", (sid,))
+    assert after[0]["id"] == target["id"] and after[0]["prompt"] != target["prompt"] and not after[0]["flagged"]
+    old = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND key = ?", (sid, f"old-{target['key']}"))
+    assert old is not None and old["flagged"] and old["prompt"] == target["prompt"]
+    moved = db.query_one("SELECT question_id FROM attempts WHERE task_id = ?", (task_id,))
+    assert moved["question_id"] == old["id"]  # the answer stays with the version that was asked

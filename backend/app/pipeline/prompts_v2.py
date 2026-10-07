@@ -680,6 +680,20 @@ Report only real problems — no clarity scores, no praise, no restating what wo
 {MATH_FORMAT}
 """
 
+QUESTION_REPAIR_NOTE = """\
+QUESTION REPAIR: the lesson below is final except one practice question. Return ONLY a new `question` for that slot
+(same key, same knowledge point) that makes the demand its knowledge point needs, fixes every problem listed under it
+and follows the PRACTICE QUESTIONS rules:
+- typed (numeric / expression, or a multistep walkthrough with typed steps) whenever the demand has a value;
+- its answer — and every step's answer — is something the learner works out: never written in the question, a step
+  prompt, a bank of lines or the teaching text; never forced by a definition (a number times its reciprocal is 1, a
+  number plus its negative is 0, the statement being proved); never an earlier step's result again; never reachable
+  by elimination or from the wording of a shown working (show the working without naming the error);
+- when it targets a misconception, the answer a learner holding it would give differs from the key;
+- fresh numbers (not the running example's, a worked example's or another question's), self-contained, only methods
+  the lesson taught; three progressive hints (multistep: one per step); a complete solution that agrees with the key.
+"""
+
 CAPSTONE_REPAIR_NOTE = """\
 CAPSTONE REPAIR: the lesson below is final except its capstone (the final multistep problem). Return ONLY a new
 `capstone` that follows the CAPSTONE rules, fits this lesson as it stands and fixes every problem listed under it:

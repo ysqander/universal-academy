@@ -30,6 +30,7 @@ from .llm_schemas import (
     BridgeIssue,
     CapstoneRepair,
     DependentLink,
+    QuestionRepair,
     Foundation,
     IndependentAnswer,
     InlineCheck,
@@ -982,6 +983,13 @@ def _independent(text: str, _prefix: str) -> IndependentAnswer:
     return IndependentAnswer(choice=int(choice) if choice else None, answer=answer, confidence=0.95, problems="")
 
 
+def _repaired_question(text: str, prefix: str) -> QuestionDraft:
+    """A fresh typed question for the slot the repair request names (like a top-up question)."""
+    m = re.search(r"## The slot: question (k\d+q\d+)", text)
+    key = m.group(1) if m else "k1q1"
+    return _top_up(f"{key}\n{text[-400:]}", prefix).questions[0]
+
+
 class _TopUp(BaseModel):
     questions: list[QuestionDraft]
 
@@ -1061,6 +1069,7 @@ _HANDLERS = {
     "LessonV2Draft": _lesson_v2,
     "LessonReview": _review,
     "CapstoneRepair": lambda _text, _prefix: CapstoneRepair(capstone=_capstone()),
+    "QuestionRepair": lambda text, prefix: QuestionRepair(question=_repaired_question(text, prefix)),
     "VisualizationPlan": _viz,
     "IndependentAnswer": _independent,
     "TopUpDraft": _top_up,

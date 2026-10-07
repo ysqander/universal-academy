@@ -1,14 +1,21 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { deleteCourse } from "../../api";
+import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { ProgressBar } from "../../components/ProgressBar";
 import { Spinner } from "../../components/Spinner";
 import { useStartTask } from "../../hooks/useStartTask";
 import { pageRangeLabel, plural } from "../../lib/format";
 import { plainText, prettyTitle } from "../../lib/markdown";
+import { useToast } from "../../context/toast";
 import type { CourseSummary } from "../../types";
 
-export function CourseCard({ course }: { course: CourseSummary }) {
+export function CourseCard({ course, onDeleted }: { course: CourseSummary; onDeleted?: () => void }) {
   const { stats } = course;
+  const toast = useToast();
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const { continueNext, pending } = useStartTask(course.id);
   const href = `/courses/${encodeURIComponent(course.id)}`;
   const building = course.status === "building";
@@ -98,7 +105,55 @@ export function CourseCard({ course }: { course: CourseSummary }) {
         <Link to={href} className="btn">
           {building || failed ? "View progress" : "Open map"}
         </Link>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm btn--danger course-card__delete"
+          onClick={() => setConfirming(true)}
+          aria-label={`Delete the course “${plainText(prettyTitle(course.title))}”`}
+          title="Delete this course"
+        >
+          <Icon name="trash" size={14} />
+        </button>
       </div>
+
+      <Dialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title="Delete this course?"
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="btn btn--ghost" onClick={() => setConfirming(false)}>
+              Keep it
+            </button>
+            <button
+              type="button"
+              className="btn btn--danger-solid"
+              disabled={deleting}
+              onClick={async () => {
+                setDeleting(true);
+                try {
+                  await deleteCourse(course.id);
+                  toast.show("Course deleted.", "success");
+                  setConfirming(false);
+                  onDeleted?.();
+                } catch (err) {
+                  toast.error(err);
+                } finally {
+                  setDeleting(false);
+                }
+              }}
+            >
+              {deleting && <Spinner size={14} label="Deleting" />} Delete course
+            </button>
+          </>
+        }
+      >
+        <p>
+          “{plainText(prettyTitle(course.title))}”, its lessons and your progress and review history will be removed. The book
+          itself stays in your library. This can't be undone.
+        </p>
+      </Dialog>
     </article>
   );
 }

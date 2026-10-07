@@ -154,6 +154,10 @@
   padding-top: var(--space-2);
 }
 
+.course-card__delete {
+  margin-left: auto;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

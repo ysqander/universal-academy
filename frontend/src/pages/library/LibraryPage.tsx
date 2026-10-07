@@ -80,7 +80,14 @@ export function LibraryPage() {
           {courses.data ? (
             <div className="course-grid">
               {courses.data.map((course) => (
-                <CourseCard key={course.id} course={course} />
+                <CourseCard
+                  key={course.id}
+                  course={course}
+                  onDeleted={() => {
+                    void courses.reload();
+                    void books.reload(); // the book's course count changed
+                  }}
+                />
               ))}
             </div>
           ) : courses.error ? (
@@ -103,7 +110,7 @@ export function LibraryPage() {
             {books.error && !books.data ? (
               <ErrorState error={books.error} onRetry={() => void books.reload()} title="Couldn't load your books" />
             ) : (
-              <BookList books={books.data} />
+              <BookList books={books.data} onDeleted={() => void books.reload()} />
             )}
           </div>
         )}

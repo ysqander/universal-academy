@@ -136,6 +136,7 @@ export const putSettings = (settings: Settings) => put<Settings>("/api/settings"
 
 // ---------- Books ----------
 export const listBooks = (signal?: AbortSignal) => get<BookSummary[]>("/api/books", signal);
+export const deleteBook = (bookId: string) => del(`/api/books/${seg(bookId)}`);
 export const getBook = (bookId: string, signal?: AbortSignal) => get<Book>(`/api/books/${seg(bookId)}`, signal);
 export const importBookFromPath = (path: string) => post<Book>("/api/books/import-path", { path });
 export const bookPageUrl = (bookId: string, page: number, dpi = 60) =>

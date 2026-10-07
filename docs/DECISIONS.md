@@ -197,6 +197,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   a lesson (`scripts/regenerate.py`, keeps progress) applies the current rules. Three S27 multiple-choice questions
   with several correct options are withheld and need rewriting.
 - Generation-time check for "more than one correct option" (§3).
+- The Library had no way to delete a course or a book (course deletion sat only at the very bottom of the course
+  page; books had none). Added 2026-10-07: a delete button on every course card and book row, each with a
+  confirmation; a book can be deleted once no course is built from it.
 - S2c ("verify a supplied cube root") predates the outcome rule. The learner has attempted it, so `replan.py` can't
   split or remove it; it is re-planned as a kept skill whose objective is the computation (a "show that" about one
   given number is a computation, not a proof). Folding it into S2b/S2d would need a "merge" operation (not built).

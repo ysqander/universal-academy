@@ -39,7 +39,9 @@ ONE_ANSWER_RULE = (
 UNORDERED_RULE = (
     'Several values whose order does not matter (both square roots, all solutions) are a set in braces, e.g. answer '
     '"{1+i, -1-i}", and the prompt says "Enter both roots separated by a comma, in any order"; a tuple "( … )" is '
-    "only for ordered lists and vectors, where the order is part of the answer."
+    "only for ordered lists and vectors, where the order is part of the answer. A set with no element is answer \"{}\" "
+    '(the prompt says "enter {} or ∅ when no value works"); the whole field is answer "C" or "R" (the prompt says '
+    '"enter C if every complex number works").'
 )
 TF_SET_KIND = (
     'true_false_set: "Mark each statement true or false" — choices holds the 2–5 statements (each self-contained, '

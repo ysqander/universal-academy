@@ -655,3 +655,34 @@ def test_explicit_e_l_l_product_is_not_ell():
         choice=None, require_simplified=False,
     )
     assert not result.correct
+
+
+@pytest.mark.parametrize("key", ["EmptySet", "S.EmptySet", "{}"])
+@pytest.mark.parametrize("typed", ["∅", "\\varnothing", "\\emptyset", "{}", "{ }", "Ø", "empty", "empty set", "EmptySet"])
+def test_the_empty_set_in_every_notation(key, typed):
+    """A solution set with no element (S8b, 2026-10-07: keys 'EmptySet' rejected the '∅' the prompt asked for)."""
+    result = grading.check_answer(
+        "expression", answer=key, correct_choice=None, tolerance=None, response=typed, choice=None, require_simplified=True
+    )
+    assert result.correct and not result.invalid
+
+
+def test_a_non_empty_answer_to_an_empty_set_is_wrong_not_invalid():
+    for key, typed in (("EmptySet", "{3}"), ("EmptySet", "3"), ("{-1+2*i}", "∅")):
+        result = grading.check_answer(
+            "expression", answer=key, correct_choice=None, tolerance=None, response=typed, choice=None,
+            require_simplified=True,
+        )
+        assert not result.correct and not result.invalid, (key, typed)
+
+
+@pytest.mark.parametrize("key", ["C", "Complexes", "S.Complexes"])
+@pytest.mark.parametrize("typed", ["C", "\\mathbf{C}", "\\mathbb{C}", "ℂ"])
+def test_the_whole_field_answer(key, typed):
+    result = grading.check_answer(
+        "expression", answer=key, correct_choice=None, tolerance=None, response=typed, choice=None, require_simplified=True
+    )
+    assert result.correct
+    assert not grading.check_answer(
+        "expression", answer=key, correct_choice=None, tolerance=None, response="R", choice=None, require_simplified=True
+    ).correct

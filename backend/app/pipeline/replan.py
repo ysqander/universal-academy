@@ -424,7 +424,10 @@ def report_lines(report: ReplanReport) -> list[str]:
             lines.append(f"Final review (after {n} revision{'s' * (n != 1)}): {review_summary(result.final_review)}")
             lines += [f"  {line}" for line in review_lines(result.final_review)]
         else:
-            lines.append("Not revised (the first review reported nothing that needs a revision).")
+            tried = [n for n in result.notes if n.startswith("revision ")]
+            lines.append(
+                "Not revised: " + ("; ".join(tried) if tried else "the first review reported nothing that needs a revision") + "."
+            )
         if result.notes:
             lines += ["Notes:"] + [f"  - {n}" for n in result.notes]
         statuses = Counter(

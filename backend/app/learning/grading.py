@@ -155,7 +155,11 @@ _LATEX_SYMBOLS.update({g: g for g in _GREEK if g != "lamda"})
 
 _LATEX_SPACES = ("\\,", "\\;", "\\:", "\\!", "\\ ", "\\quad", "\\qquad", "\\displaystyle", "\\textstyle", "~")
 _LATEX_DELIM_SIZERS = re.compile(r"\\(left|right|bigl|bigr|Bigl|Bigr|biggl|biggr|Biggl|Biggr|big|Big|bigg|Bigg)(?![A-Za-z])")
-_WRAPPERS = ("mathbf", "mathrm", "mathit", "boldsymbol", "bm", "vec", "text", "textbf", "textit", "operatorname", "mathsf")
+_WRAPPERS = ("mathbf", "mathbb", "mathrm", "mathit", "boldsymbol", "bm", "vec", "text", "textbf", "textit", "operatorname", "mathsf")
+# The empty set (a solution set with no element) in every notation a learner or an answer key uses → "{}"; SymPy's
+# names of the number fields → the book's letters (an answer "all of C" is keyed "C").
+_EMPTY_SET = re.compile(r"\\varnothing|\\emptyset|∅|Ø|(?<![A-Za-z.])(?:S\.)?EmptySet\b|\bempty(?:\s+set)?\b", re.IGNORECASE)
+_FIELD_NAMES = ((re.compile(r"(?<![A-Za-z.])(?:S\.)?Complexes\b"), "C"), (re.compile(r"(?<![A-Za-z.])(?:S\.)?Reals\b"), "R"))
 _MATRIX_ENV = re.compile(r"\\begin\{([pbBvV]?matrix|smallmatrix|array)\}(?:\{[^}]*\})?(.*?)\\end\{\1\}", re.S)
 
 _FUNCTIONS: dict[str, object] = {
@@ -447,6 +451,9 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     s = re.sub(r"(?<![A-Za-z\\])ell(?![A-Za-z])", " l ", s)
     for src, dst in _UNICODE_OPS.items():
         s = s.replace(src, dst)
+    s = _EMPTY_SET.sub("{}", s)
+    for pattern, letter in _FIELD_NAMES:
+        s = pattern.sub(letter, s)
     for src, dst in _GREEK_CHARS.items():
         if src in s:
             if dst in ALL_GREEK:

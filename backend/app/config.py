@@ -40,6 +40,10 @@ def _isolate_test_runs() -> None:
     os.environ["UA_FAKE_LLM"] = "1"
     for key in _SECRET_ENV:
         os.environ[key] = ""
+    # the same provider setup whatever .env chooses for the app (tests that need another set it themselves)
+    os.environ["UA_LLM_PROVIDER"] = "openai"
+    for role in ("VISION", "GRAPH", "LESSON", "VIZ", "VERIFY"):
+        os.environ[f"UA_PROVIDER_{role}"] = ""
     for key in _AMBIENT_ANTHROPIC_ENV:
         os.environ.pop(key, None)
     data_dir = os.getenv("UA_DATA_DIR", "").strip()

@@ -34,6 +34,14 @@ grammar of the four largest schemas (VisualizationPlan, TeachingPlan, LessonDraf
 grammar is too large" — stripping descriptions, enums or number types does not help), so those are answered with the
 schema in the system prompt and validated as usual, a rejected reply retried with the error (`llm_anthropic`,
 prompted mode). The key must belong to a workspace, or ANTHROPIC_WORKSPACE_ID must name one.
+**Claude vs GPT on S4a (2026-10-08).** The proof skill S4a was generated twice with the same current rules: all-Claude
+(Opus 5.5 plans, writes and reviews; Haiku verifies) and Sol. Blind judging in both orders: the two Claude judges
+preferred the Opus lesson, the two GPT (Sol) judges preferred the Sol lesson, each "somewhat better" — self-preference,
+so a tie on quality. No wrong key in either (89 and 84 items recomputed), no blocking design issue in either. Cost:
+$7.67 for Opus vs $1.15 for Sol (Opus thinks far more: 25K-token plan, 40K-token draft, 32–40K-token reviews); $2.20
+of the Opus run was reviews cut off at the 32K ceiling and re-run, so Anthropic calls now get twice the ceiling
+(billing counts only tokens used). Verification: Haiku 5.5 equals Luna once its wording keeps reasoning out of
+`problems` (§6).
 
 ## 2. Lessons
 

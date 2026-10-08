@@ -294,7 +294,8 @@ def test_a_call_returns_the_parsed_answer_and_bills_cache_writes(monkeypatch):
 def test_truncation_refusal_overload_and_bad_json_are_retried(monkeypatch):
     client, answer = _call(monkeypatch, [_message("", stop="max_tokens"), _status_error(llm_anthropic.anthropic.InternalServerError, 529),
                                          _message(ANSWER)])
-    assert answer.answer == "3+i" and client.requests[1]["max_tokens"] == 28000  # 16000 × 1.75 after the truncation
+    assert client.requests[0]["max_tokens"] == 32000  # twice the 16000 asked: thinking counts toward max_tokens
+    assert answer.answer == "3+i" and client.requests[1]["max_tokens"] == 56000  # × 1.75 after the truncation
     client, answer = _call(monkeypatch, [_message("", stop="refusal"), _message("{not json"), _message(ANSWER)])
     assert answer.answer == "3+i" and len(client.requests) == 3
 

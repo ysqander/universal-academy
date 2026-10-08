@@ -314,7 +314,9 @@ async def structured(
     recorded. A schema whose grammar Anthropic refuses switches to prompted mode (not counted as an attempt)."""
     from .llm import LLMError, _get_semaphore
 
-    budget = min(max_output_tokens, MAX_BUDGET)
+    # twice the OpenAI budget: Claude's thinking counts toward max_tokens, and a reply cut off at the ceiling is re-run
+    # from scratch (Opus xhigh reviews of S4a hit 32K three times, $2.20 wasted); only tokens used are billed
+    budget = min(max(2 * max_output_tokens, 32_000), MAX_BUDGET)
     last_error: Exception | None = None
     mode = "prompted" if schema.__name__ in _PROMPTED else "grammar"
     feedback = ""  # prompted mode: why the previous reply was rejected

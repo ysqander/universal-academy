@@ -619,7 +619,20 @@ def _printed_in(answer: str, texts: list[str], *, small_integers: bool, letters_
     return any((e := _symbolic(p, results_only=True)) is not None and _same_expression(key, e) for p in pieces)
 
 
-def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) -> list[str]:
+# The repairs these messages ask for. A proof lesson keeps one letter set (the proof track): "use other letters" gave
+# the first S4a a new letter set in every question, and "type one side, justify with a choice" gave it "which
+# continuation" choices between long method sentences.
+_PRINTED_REPAIR = "use other letters or values than the lesson's, or ask for something the lesson did not print"
+_PRINTED_STEP_REPAIR = "use other letters or values than the lesson's (e.g. α=p+qi), or ask for a line the lesson did not print"
+_FORCED_REPAIR = "have the learner type one side and let a choice step justify the equality"
+_PROOF_PRINTED_REPAIR = (
+    "keep the lesson's letters; use another practice statement or fixed input, or ask for a route leg the lesson did "
+    "not print (route A's result, route B's first leg, the slots of route B's last product)"
+)
+_PROOF_FORCED_REPAIR = "ask for the slots of the second route's last product, or its first leg, instead"
+
+
+def answer_known_problems(q: QuestionDraft, context: list[str] | None = None, *, proof: bool = False) -> list[str]:
     """A typed answer the learner can read instead of produce (evaluation of the 2026-10-07 lessons: served questions
     that passed the typed-answer rule with their answer printed). Reported:
     - a numeric / expression question whose answer is printed in its prompt (small integers excepted: coincidences),
@@ -635,7 +648,7 @@ def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) ->
         elif context and _printed_in(q.answer, context, small_integers=False, letters_only=True):
             problems.append(
                 f"{q.key}: its answer {q.answer_display or q.answer} equals a line printed in the teaching text or a worked "
-                "example — use other letters or values than the lesson's, or ask for something the lesson did not print"
+                f"example — {_PROOF_PRINTED_REPAIR if proof else _PRINTED_REPAIR}"
             )
         return problems
     if q.kind != "multistep":
@@ -661,13 +674,13 @@ def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) ->
             problems.append(f"{where}: its answer is printed in the problem, a step prompt or a bank of lines — ask for a line the learner derives")
         elif key is not None and any(_same_expression(key, e) for e in earlier):
             problems.append(
-                f"{where}: its answer is an earlier step's result again (the statement being proved forces it) — have "
-                "the learner type one side and let a choice step justify the equality"
+                f"{where}: its answer is an earlier step's result again (the statement being proved forces it) — "
+                f"{_PROOF_FORCED_REPAIR if proof else _FORCED_REPAIR}"
             )
         elif context and _printed_in(step.answer, context, small_integers=False, letters_only=True):
             problems.append(
-                f"{where}: its answer equals a line printed in the teaching text or a worked example — use other letters "
-                "or values than the lesson's (e.g. α=p+qi), or ask for a line the lesson did not print"
+                f"{where}: its answer equals a line printed in the teaching text or a worked example — "
+                f"{_PROOF_PRINTED_REPAIR if proof else _PRINTED_STEP_REPAIR}"
             )
         if key is not None:
             earlier.append(key)

@@ -18,6 +18,13 @@ from .prompts import (
     TF_SET_KIND,
     UNORDERED_RULE,
 )
+from .prompts_proof import (
+    PROOF_CAPSTONE_REPAIR,
+    PROOF_PLANNER_RULES,
+    PROOF_QUESTION_REPAIR,
+    PROOF_REVIEW_PASS,
+    PROOF_TRACK,
+)
 
 PRINCIPLE = """\
 PRINCIPLE: Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects
@@ -727,3 +734,69 @@ REVISION: below are your previous draft of this lesson and a review of it. Write
 - replace or fix every exercise that needs an untaught method;
 - fix the validation problems listed (they make the draft unusable);
 - keep everything that works — do not rewrite good blocks for the sake of it, and do not add new objectives."""
+
+
+# ---------------------------------------------------------------------------
+# The proof track (prompts_proof.py): proof skills get their own planner, writer and reviewer instructions — the general
+# texts with the general proof rules swapped for the track. Each swap must find its text (checked at import).
+# ---------------------------------------------------------------------------
+
+
+def _swap(text: str, old: str, new: str) -> str:
+    if text.count(old) != 1:
+        raise AssertionError(f"proof track: expected one occurrence of {old[:60]!r}")
+    return text.replace(old, new)
+
+
+PROOF_PLANNER_INSTRUCTIONS = _swap(
+    PLANNER_INSTRUCTIONS,
+    "For a proof skill the teaching proves 1–2 representative statements in full; the rest of the family is\n"
+    "  proved in the knowledge points' worked examples and practice.",
+    "For a proof skill follow THE PROOF PLAN below.",
+) + "\n" + PROOF_PLANNER_RULES
+
+PROOF_KIND_STRUCTURE = (
+    "- proof: follow THE PROOF TRACK below — one statement; numbers → why that is not a proof → a guided special case\n"
+    "  the learner builds → what was proved → the general case as a worked table."
+)
+
+_PROOF_SERVED_CLAUSE = SERVED_SEQUENCE_RULE[SERVED_SEQUENCE_RULE.index("In a proof skill each knowledge point") :]
+_PROOF_WALKTHROUGH_EXAMPLE = MULTISTEP_FORMAT[MULTISTEP_FORMAT.index(" A proof as a walkthrough") :]
+
+PROOF_WRITER_INSTRUCTIONS = _swap(
+    _swap(
+        _swap(
+            _swap(
+                WRITER_INSTRUCTIONS,
+                "- proof: the statement and why it is plausible (a small case) → the strategy → the proof with every step justified\n"
+                "  → a check of one step's justification.",
+                PROOF_KIND_STRUCTURE,
+            ),
+            PROOF_RULE,
+            PROOF_TRACK,
+        ),
+        _PROOF_SERVED_CLAUSE,
+        "A proof skill follows THE PROOF TRACK below.)",
+    ),
+    _PROOF_WALKTHROUGH_EXAMPLE,
+    " A proof walkthrough follows THE PROOF TRACK below.",
+)
+
+PROOF_REVIEWER_INSTRUCTIONS = _swap(
+    REVIEWER_INSTRUCTIONS,
+    "split_recommended: true only when",
+    PROOF_REVIEW_PASS + "\nsplit_recommended: true only when",
+)
+
+PROOF_QUESTION_REPAIR_NOTE = _swap(
+    QUESTION_REPAIR_NOTE,
+    "- fresh numbers (not the running example's, a worked example's or another question's), self-contained, only methods\n"
+    "  the lesson taught; three progressive hints (multistep: one per step); a complete solution that agrees with the key.",
+    "- " + PROOF_QUESTION_REPAIR,
+)
+
+PROOF_CAPSTONE_REPAIR_NOTE = _swap(
+    CAPSTONE_REPAIR_NOTE,
+    CAPSTONE_REPAIR_NOTE[CAPSTONE_REPAIR_NOTE.index("- in a proof skill the proof step") :],
+    PROOF_CAPSTONE_REPAIR + "\n",
+)

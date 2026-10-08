@@ -71,10 +71,23 @@ from .lessons import (
     validate_capstone,
     validate_lesson,
 )
+from .proof_track import (
+    capstone_proof_problems,
+    normalize_plan,
+    plan_lines,
+    plan_problems,
+    proof_problems,
+    question_problems,
+)
 from .prompts_v2 import (
     CAPSTONE_REPAIR_NOTE,
-    QUESTION_REPAIR_NOTE,
     PLANNER_INSTRUCTIONS,
+    PROOF_CAPSTONE_REPAIR_NOTE,
+    PROOF_PLANNER_INSTRUCTIONS,
+    PROOF_QUESTION_REPAIR_NOTE,
+    PROOF_REVIEWER_INSTRUCTIONS,
+    PROOF_WRITER_INSTRUCTIONS,
+    QUESTION_REPAIR_NOTE,
     REVIEWER_INSTRUCTIONS,
     REVISION_NOTE,
     WRITER_INSTRUCTIONS,
@@ -270,6 +283,8 @@ def plan_request(course: CourseInfo, skill: dict[str, Any], *, allow_split: bool
     else:
         reason = "; ".join(blockers or []) or "the run was started with --no-split"
         lines.append(f"Splitting: NOT allowed ({reason}) — return decision 'keep' with exactly one spec.")
+    if is_proof_skill(skill):
+        lines += ["", "This is a PROOF skill: fill `proof` with THE PROOF PLAN (see PROOF SKILLS in the instructions)."]
     lines += ["", course_map(course.id)]
     lines += ["## Source pages (the skill's pages and their neighbours)"] + _source_pages_text(course, pages)
     figures = [f for f in course_figures(course) if f.page in set(focus_pages(pages, course))]
@@ -379,7 +394,7 @@ async def plan_skill(
         try:
             plan = await llm.structured(
                 role="graph",
-                instructions=PLANNER_INSTRUCTIONS,
+                instructions=PROOF_PLANNER_INSTRUCTIONS if is_proof_skill(skill) else PLANNER_INSTRUCTIONS,
                 text=request,
                 schema=TeachingPlan,
                 max_output_tokens=32000,
@@ -392,6 +407,15 @@ async def plan_skill(
             error = e
             log.warning("plan %s attempt %d failed: %s", skill["key"], attempt + 1, e)
     raise InvalidPlan(f"planning {skill['key']} failed: {error}")
+
+
+def is_proof_spec(spec: TeachingSpec) -> bool:
+    return is_proof_skill({"kind": spec.kind, "objective": spec.objective})
+
+
+def writer_instructions(spec: TeachingSpec) -> str:
+    """The proof track's writer instructions for a proof skill with a proof plan, else the general ones."""
+    return PROOF_WRITER_INSTRUCTIONS if spec.proof is not None and is_proof_spec(spec) else WRITER_INSTRUCTIONS
 
 
 def effort_notches(kind: str, objective: str) -> int:
@@ -482,6 +506,17 @@ def validate_plan(plan: TeachingPlan, graph: PlanGraph, *, allow_split: bool = T
         )
         if not cleaned[-1].objective:
             raise InvalidPlan(f"skill {local} has no objective")
+        if is_proof_spec(cleaned[-1]):  # the proof track: a usable proof plan, or one re-plan with the reasons
+            proof = cleaned[-1].proof
+            if proof is None:
+                raise InvalidPlan(f"skill {local} is a proof skill without a proof plan: fill `proof`")
+            problems = plan_problems(proof, len(cleaned[-1].practice_steps))
+            if problems:
+                raise InvalidPlan(f"skill {local}'s proof plan: " + "; ".join(problems))
+            cleaned[-1] = cleaned[-1].model_copy(update={"proof": normalize_plan(proof)})
+        elif cleaned[-1].proof is not None:
+            notes.append(f"{local}: dropped the proof plan of a skill that is not a proof")
+            cleaned[-1] = cleaned[-1].model_copy(update={"proof": None})
 
     for key, weight in sorted(graph.prereqs.items(), key=lambda kv: (key_number(kv[0]), kv[0])):
         if not any(p.key == key for s in cleaned for p in s.prerequisites):
@@ -620,7 +655,9 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
         ]
     else:
         lines += ["", "Book figures for this lesson: none — do not refer to any figure."]
-    if is_proof_skill({"kind": spec.kind, "objective": spec.objective}):
+    if is_proof_spec(spec) and spec.proof is not None:
+        lines += ["", "This is a PROOF skill: follow THE PROOF TRACK in the instructions.", *plan_lines(spec.proof)]
+    elif is_proof_spec(spec):
         lines += ["", "This is a PROOF skill: follow PROOF SKILLS in the instructions (multistep walkthroughs of the "
                   "proofs — never free_response)."]
     exercise_pages = [
@@ -672,7 +709,7 @@ async def write_lesson(
         text = revision_request(text, *revision, round_=round_)
     return await llm.structured(
         role="lesson",
-        instructions=WRITER_INSTRUCTIONS,
+        instructions=writer_instructions(spec),
         shared_prefix=prefix,
         text=text,
         schema=LessonV2Draft,
@@ -838,6 +875,7 @@ def review_request(
         f"Success check (the planner's idea for the capstone; the capstone rules take precedence): {spec.success_check}",
         f"Starting point (the outcome problem the lesson should pose and solve): {spec.starting_point}",
         *([MISCONCEPTIONS_HEADER] + [f"- {m}" for m in spec.misconceptions] if spec.misconceptions else []),
+        *(["", *plan_lines(spec.proof)] if spec.proof is not None and is_proof_spec(spec) else []),
         "",
         "COUNTS FOR THE DENSITY PASS (from the writer's own labels — judge the content too)",
         *idea_lines(draft),
@@ -865,9 +903,10 @@ async def review_lesson(
     spec: TeachingSpec, draft: LessonV2Draft, *, key: str = "", revised: bool = False, prereqs: list[str] | None = None
 ) -> LessonReview:
     """Missing-bridge and density review (role "graph", high effort) of a draft as a first explanation."""
+    proof_track = spec.proof is not None and is_proof_spec(spec)
     return await llm.structured(
         role="graph",
-        instructions=REVIEWER_INSTRUCTIONS,
+        instructions=PROOF_REVIEWER_INSTRUCTIONS if proof_track else REVIEWER_INSTRUCTIONS,
         text=review_request(spec, draft, key=key or spec.local_id, revised=revised, prereqs=prereqs),
         schema=LessonReview,
         max_output_tokens=32000,
@@ -1179,7 +1218,7 @@ def quality_problems(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
     served = served_questions(draft)
     context = lesson_context(draft)
     for q in served:
-        problems += [f"a question served first gives its answer away — {p}" for p in answer_known_problems(q, context)]
+        problems += [f"a question served first gives its answer away — {p}" for p in answer_known_problems(q, context, proof=proof)]
     choice = [q.key for q in served if _counts_as_choice(q)]
     if len(choice) > 1:
         problems.append(
@@ -1288,7 +1327,12 @@ async def draft_problems(
     for problem in content_problems(draft):
         if problem not in hard:
             hard.append(problem)
-    return hard, [p for p in quality_problems(draft, proof=proof) if p not in hard]
+    soft = quality_problems(draft, proof=proof)
+    if proof and spec.proof is not None:
+        p_hard, p_soft = proof_problems(draft, spec.proof)
+        hard += [p for p in p_hard if p not in hard]
+        soft += p_soft
+    return hard, [p for p in dict.fromkeys(soft) if p not in hard]
 
 
 # ---------------------------------------------------------------------------
@@ -1424,7 +1468,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         counts = _point_keys(final)
         for index, kp in enumerate(final.knowledge_points):  # a question whose answer can be read counts as blocked too
             for q in kp.questions:
-                known = answer_known_problems(q, context) if _belongs(q.key, index, counts) else []
+                known = answer_known_problems(q, context, proof=proof) if _belongs(q.key, index, counts) else []
                 if known:
                     blocked[q.key] = "; ".join(filter(None, [blocked.get(q.key), *known]))
         final, dropped = drop_blocked_questions(final, blocked)
@@ -1440,6 +1484,8 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
             except Exception as e:  # noqa: BLE001 — the lenient validation below keeps what it can
                 result.notes.append(f"capstone repair failed ({e})")
         result.notes += [f"stored although: {p}" for p in quality_problems(final, proof=proof)]
+        if proof and spec.proof is not None:
+            result.notes += [f"stored although (proof track): {p}" for p in sum(proof_problems(final, spec.proof), [])]
         lesson, pools, capstone, notes = await validate_v2(final, spec, figures, proof=proof, strict=False)
         result.notes += notes
     except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
@@ -1575,7 +1621,7 @@ async def rewrite_question(
         [
             write_request(course, skill, spec, spec_figures(course, skill, spec)),
             "",
-            QUESTION_REPAIR_NOTE,
+            PROOF_QUESTION_REPAIR_NOTE if spec.proof is not None and is_proof_spec(spec) else QUESTION_REPAIR_NOTE,
             f"## The slot: question {question.key} of the knowledge point “{kp_title}” — {slot}",
             f"The other questions served first: {formats}." if served else "",
             "Nothing printed in the teaching text or a worked example may be an answer of the new question.",
@@ -1593,7 +1639,7 @@ async def rewrite_question(
     for attempt in range(2):
         out = await llm.structured(
             role="lesson",
-            instructions=WRITER_INSTRUCTIONS,
+            instructions=writer_instructions(spec),
             shared_prefix=prefix,
             text=request,
             schema=QuestionRepair,
@@ -1612,9 +1658,12 @@ async def rewrite_question(
             except InvalidQuestion as e:
                 issues.append(str(e))
             else:
-                issues += answer_known_problems(candidate, context)
+                issues += answer_known_problems(candidate, context, proof=is_proof_spec(spec))
                 if served:
                     issues += _served_rule_problems(candidate, question, others)
+                if spec.proof is not None and is_proof_spec(spec):
+                    p_hard, _ = question_problems(candidate, spec.proof, served=served)
+                    issues += p_hard
         if not issues:
             return candidate
         request = base + "\n\n## Your new question was rejected\n" + "\n".join(f"- {i}" for i in issues)
@@ -1777,7 +1826,8 @@ async def repair_stored_questions(
         served = kp < len(targets) and servable[kp] < targets[kp]
         learner_flag = row["flagged"] and not (row["flag_reason"] or "").startswith(VERIFICATION_PREFIX)
         named = noted.pop(row["key"], [])
-        problems = ([] if learner_flag and not named else answer_known_problems(question_draft(row), context)) + named
+        known = answer_known_problems(question_draft(row), context, proof=is_proof_spec(spec))
+        problems = ([] if learner_flag and not named else known) + named
         if not row["flagged"] or problems:  # a rewritten question becomes servable
             servable[kp] += 1
         if not problems:
@@ -1857,7 +1907,7 @@ async def rewrite_capstone(
         [
             write_request(course, skill, spec, spec_figures(course, skill, spec)),
             "",
-            CAPSTONE_REPAIR_NOTE,
+            PROOF_CAPSTONE_REPAIR_NOTE if spec.proof is not None and is_proof_spec(spec) else CAPSTONE_REPAIR_NOTE,
             "## The lesson (final except its capstone)",
             lesson_text,
             "",
@@ -1869,7 +1919,7 @@ async def rewrite_capstone(
     for attempt in range(2):
         out = await llm.structured(
             role="lesson",
-            instructions=WRITER_INSTRUCTIONS,
+            instructions=writer_instructions(spec),
             shared_prefix=prefix,
             text=request,
             schema=CapstoneRepair,
@@ -1879,6 +1929,8 @@ async def rewrite_capstone(
             stream=True,
         )
         issues = capstone_problems(out.capstone)
+        if spec.proof is not None and is_proof_spec(spec):
+            issues += capstone_proof_problems(out.capstone, spec.proof)
         if not issues:
             capstone, _ = validate_capstone(out.capstone, strict=True)
             assert capstone is not None

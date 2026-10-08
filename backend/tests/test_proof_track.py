@@ -279,3 +279,13 @@ def test_proof_problems_are_weighed_not_fatal_in_a_revision():
     cap = draft.capstone.model_copy(update={"prompt": draft.capstone.prompt + "\n\n| product | $x$ |\n|---|---|\n| $\\alpha\\mu$ | $a$ |"})
     assert proof_debt(draft.model_copy(update={"capstone": cap}), spec) == 1
     assert proof_debt(draft, spec.model_copy(update={"proof": None})) == 0
+
+
+def test_a_letter_the_plan_reserves_for_the_capstones_number_is_not_an_input():
+    """Opus's S4a plan (2026-10-08) listed 'μ: capstone only, a fixed number computed by an earlier skill'."""
+    plan = proof_plan().model_copy(update={"letters": [*proof_plan().letters, "μ: capstone only, a fixed number ($\\mu=(2-i)(1+i)=3+i$)"]})
+    _, soft = proof_problems(lesson(), plan)
+    assert not any("names a computed number" in p for p in soft)
+    _, soft = proof_problems(lesson().model_copy(update={"capstone": lesson().capstone.model_copy(update={
+        "prompt": lesson().capstone.prompt.replace("\\mu", "\\lambda")})}), plan)
+    assert any("\\lambda names a computed number" in p for p in soft)

@@ -62,10 +62,17 @@ def _unknown_cells(body: str) -> int:
     return best
 
 
+_COORDINATES = re.compile(r"=\s*\$?\s*[a-z]\s*\+\s*[a-z]\s*\\?,?\s*i\b")
+
+
 def _plan_greek(plan: ProofPlan) -> set[str]:
+    """The Greek letters the plan gives coordinates (α = a+bi): arbitrary inputs. A letter the plan reserves for a
+    fixed number ('μ: capstone only, μ = (2−i)(1+i)') is not one."""
     names = set()
     for entry in plan.letters:
-        for latex, char in _GREEK_NAME.findall(entry):
+        if not _COORDINATES.search(entry):
+            continue
+        for latex, char in _GREEK_NAME.findall(entry.split("=", 1)[0]):
             names.add(latex or _GREEK_TO_NAME[char])
     return names
 

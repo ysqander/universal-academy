@@ -60,8 +60,20 @@ generator is still being tuned.
   the learner missed needs its own) and about 350 words of prose outside the math. A further case is a block only
   when it needs a different decision; the same move on another case goes to a worked example or the practice. No
   block duplicates a knowledge point's worked example, and the summary does not restate the generalize block. More
-  than 10 blocks or 420 words sends the draft to the revision. Proof lessons prove 1–2 representative statements
-  in the teaching; the rest of the family is proved in the practice.
+  than 10 blocks or 420 words sends the draft to the revision. Proof lessons follow the proof track (below).
+- **The proof track** (decided 2026-10-08 on branch `proof-lessons`, from the learner's review of S4a — "quite
+  convoluted": a trivial faded step, 12-term expansions, new letters in every question, "got lost interchanging the
+  symbols" between the two calculations; design in docs/lesson-v2.md). The teaching proves ONE statement three times:
+  on small numbers, with one input fixed where the learner computes one route, and in general as a worked table read
+  once. One named strategy, one letter set for the whole lesson, slot tables before every product, a "why is one
+  example not a proof" reflect and a scope check; practice transfers the strategy to statements the teaching did not
+  prove. Proof skills run one reasoning notch higher on the same model (Sol; the learner chose this over Astra).
+  **Replaced** "the teaching proves 1–2 representative statements in full".
+- **The proved result is never what the learner types** (the learner, 2026-10-08: "obviously the student doesn't need
+  to type the expected final result which is what is expected to be proven. The steps before are what matters"). In a
+  proof walkthrough the second route's final value equals the first route's by the statement itself, so it is shown
+  in the explanation, never scored; the learner types route A's result, route B's first leg and the inputs of route
+  B's last product.
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
 - **Checks inside the teaching sequence.** 1–2 graded inline checks plus one ungraded "why" reflect check, all within
@@ -177,6 +189,16 @@ Details: [SPEC.md §6.7](SPEC.md).
 
 - `ell`, `\ell` and `ℓ` are the variable `l`.
 - Learners must simplify (`require_simplified=True`); the verifier may answer in any equivalent form.
+- **No bypassing the computation, in every lesson** (2026-10-08, the learner: "Make the student do proper work and
+  make it not possible to bypass the intended exercise. this is not just for proofs"). For a key with letters, an
+  answer that still holds a complex computation — the question's product typed back, '(a+bi)(c+di)', 'c(a+bi)',
+  '(a+bi)^2' — is "Not yet computed" (asked again, not counted), like an unsimplified number. Unexpanded real
+  coordinates ('a(−d)−bc+(ac+b(−d))i') are accepted. A real key with letters takes no i.
+  The same day's bypass audit typed every expression printed in the course's 411 typed questions back as the
+  answer; 18 passed. Closed in the grader: list arithmetic typed back ('compute i(2,−1)' → 'i(2,-1)', '(a,b)+(c,d)')
+  is "work out each component", and a one-symbol key ('v', '2v') refuses '-(-v)', 'v+0', 'x+x'. Closed at
+  generation: a question whose prompt lets the learner type the answer back (`typed_back`, e.g. "forces λ = −1+2i"
+  for the key {−1+2i}) is rewritten like a printed answer. Not counted: a small integer, a zero answer, "or enter ∅".
 - A single value for a pair key (or vice versa) is invalid input (asked again), not wrong.
 - Roots left in a denominator (e.g. 1/√2) count as simplified (Axler doesn't require rationalising).
 
@@ -204,6 +226,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   a lesson (`scripts/regenerate.py`, keeps progress) applies the current rules. Three S27 multiple-choice questions
   with several correct options are withheld and need rewriting.
 - Generation-time check for "more than one correct option" (§3).
+- Questions in the real course whose prompt prints the answer (bypass audit 2026-10-08): S8b k3q3 (v2 — rewrite
+  with `regenerate.py --only questions --note`), S1 k1q4, S11 k2q1, S24 k1q1 (v1 lessons — fixed when re-planned);
+  inline checks S3b block 8 and S8b block 9 ask for a value their block prints.
 - The Library had no way to delete a course or a book (course deletion sat only at the very bottom of the course
   page; books had none). Added 2026-10-07: a delete button on every course card and book row, each with a
   confirmation; a book can be deleted once no course is built from it.
@@ -222,7 +247,8 @@ Details: [SPEC.md §6.7](SPEC.md).
      read"); elimination from a shown working's wording and line-number keys are still only caught by review.
   2. Misconceptions are often tested only by a capstone choice, a spare, or a key the misconception also reaches.
   3. ~~A served question the final review blocks is kept~~ — it is rewritten in its slot now (§3).
-  4. Proof practice still specialises statements the teaching proved (no `practice_statements` in the spec).
+  4. ~~Proof practice still specialises statements the teaching proved~~ — the proof plan's `practice_statements`
+     (2026-10-08, proof track).
   5. Capstone chains are often nominal (a one-line prerequisite step) or a special case.
   6. Inline checks and faded examples sometimes print the arithmetic they ask for.
   7. Proof walkthroughs: a justification choice can often be answered from the stem (a distractor uses the very law

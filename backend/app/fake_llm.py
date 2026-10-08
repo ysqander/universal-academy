@@ -749,6 +749,10 @@ def _plan(text: str, _prefix: str) -> TeachingPlan:
         )
     objective = _field(text, "Objective", title)
     spec = _spec("a", title, objective, kind if kind in ("concept", "definition", "procedure", "computation", "distinction", "interpretation", "proof") else "computation", prereqs, pages)
+    if spec.kind == "proof":  # the proof track's plan (fake_proof: the S4a design)
+        from .fake_proof import proof_plan
+
+        spec = spec.model_copy(update={"proof": proof_plan(), "practice_steps": ["Transfer: prove a distributive law with two routes", "What a proof establishes"]})
     return TeachingPlan(
         split_test="No: one family of questions assesses the whole objective.",
         decision="keep",
@@ -774,6 +778,10 @@ def _lesson_v2(text: str, _prefix: str) -> LessonV2Draft:
     m = _V2_SKILL_RE.search(text)
     key, title = (m.group(1), m.group(2).strip()) if m else ("S1", "Skill")
     objective = _field(text, "Objective", title)
+    if "PROOF PLAN (binding" in text:  # the proof track
+        from .fake_proof import proof_lesson
+
+        return proof_lesson(title, objective, key)
     seed = _seed(key, title)
     proof = "This is a PROOF skill" in text
     figures = [fid for fid, _ in _FIGURE_RE.findall(text)]

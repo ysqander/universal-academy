@@ -98,6 +98,16 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _semaphore
 
 
+EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
+
+
+def raise_effort(effort: str, notches: int) -> str:
+    """The reasoning effort `notches` levels higher (capped at the top level; an unknown effort is kept)."""
+    if notches <= 0 or effort not in EFFORT_LEVELS:
+        return effort
+    return EFFORT_LEVELS[min(len(EFFORT_LEVELS) - 1, EFFORT_LEVELS.index(effort) + notches)]
+
+
 def role_model(role: Role) -> tuple[str, str]:
     return {
         "vision": (settings.model_vision, settings.effort_vision),
@@ -123,6 +133,7 @@ async def structured(
     max_output_tokens: int = 32000,
     label: str = "",
     stream: bool = False,
+    effort_notches: int = 0,
 ) -> T:
     """Run one structured-output call and return the parsed Pydantic object.
 
@@ -130,6 +141,7 @@ async def structured(
     - `shared_prefix`: large context reused across many calls (e.g. chapter markdown). It is placed in the
       developer message behind an explicit cache breakpoint so parallel calls read it from the prompt cache.
     - `text`: the call-specific user message; `images`: PNG bytes attached to the user message (detail=original).
+    - `effort_notches`: reason this many levels above the role's effort (proof skills, settings.proof_effort_notches).
     - `stream`: stream the response events instead of waiting for one silent HTTP response. Use it for calls that
       can take minutes (graph, lessons): some networks drop connections that stay idle that long, and the
       non-streaming request then hangs until the client timeout.
@@ -143,6 +155,9 @@ async def structured(
         return fake_llm.respond(schema=schema, role=role, instructions=instructions, text=text, shared_prefix=shared_prefix)
 
     model, effort = role_model(role)
+    effort = raise_effort(effort, effort_notches)
+    if effort_notches:
+        label = f"{label} @{effort}"
     developer_content: list[dict] = [{"type": "input_text", "text": instructions}]
     if shared_prefix:
         developer_content.append(

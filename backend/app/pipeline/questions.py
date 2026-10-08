@@ -619,7 +619,52 @@ def _printed_in(answer: str, texts: list[str], *, small_integers: bool, letters_
     return any((e := _symbolic(p, results_only=True)) is not None and _same_expression(key, e) for p in pieces)
 
 
-def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) -> list[str]:
+# The repairs these messages ask for. A proof lesson keeps one letter set (the proof track): "use other letters" gave
+# the first S4a a new letter set in every question, and "type one side, justify with a choice" gave it "which
+# continuation" choices between long method sentences.
+_PRINTED_REPAIR = "use other letters or values than the lesson's, or ask for something the lesson did not print"
+_PRINTED_STEP_REPAIR = "use other letters or values than the lesson's (e.g. α=p+qi), or ask for a line the lesson did not print"
+_FORCED_REPAIR = "have the learner type one side and let a choice step justify the equality"
+_PROOF_PRINTED_REPAIR = (
+    "keep the lesson's letters; use another practice statement or fixed input, or ask for a route leg the lesson did "
+    "not print (route A's result, route B's first leg, the slots of route B's last product)"
+)
+_PROOF_FORCED_REPAIR = "ask for the slots of the second route's last product, or its first leg, instead"
+
+
+_EMPTY_PIECE = re.compile(r"^(?:\\varnothing|\\emptyset|∅|\{\s*\}|\\\{\s*\\\})$")
+_MAX_PROBES = 24
+
+
+def typed_back(kind: str, answer: str, texts: list[str]) -> str | None:
+    """The first math expression printed in `texts` that the learner's grader accepts as the answer when typed back
+    (the bypass audit of 2026-10-08: 'compute i(2,-1)' accepted 'i(2,-1)', a prompt stating 'λ = −1+2i' for the key
+    {−1+2i}). Not counted: a small integer (printed for another reason too often), a zero value or the empty set
+    (the trivial answer a format instruction names: 'or enter ∅')."""
+    if kind not in _TYPED or not (answer or "").strip():
+        return None
+    probed = 0
+    for text in texts:
+        for piece in _math_pieces(text):
+            if probed >= _MAX_PROBES:
+                return None
+            if len(piece) > _MAX_PIECE or _EMPTY_PIECE.match(piece.strip()):
+                continue
+            value = _value(piece)
+            if value is not None and (all(abs(v) < 1e-12 for v in value) or (len(value) == 1 and _small_integer(value))):
+                continue
+            probed += 1
+            try:
+                accepted = check_answer(kind, answer=answer, correct_choice=None, choice=None, tolerance=None,
+                                        response=piece, require_simplified=True).correct
+            except Exception:  # noqa: BLE001 — an unreadable piece is not an answer
+                accepted = False
+            if accepted:
+                return piece
+    return None
+
+
+def answer_known_problems(q: QuestionDraft, context: list[str] | None = None, *, proof: bool = False) -> list[str]:
     """A typed answer the learner can read instead of produce (evaluation of the 2026-10-07 lessons: served questions
     that passed the typed-answer rule with their answer printed). Reported:
     - a numeric / expression question whose answer is printed in its prompt (small integers excepted: coincidences),
@@ -632,10 +677,15 @@ def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) ->
     if q.kind in _TYPED:
         if _printed_in(q.answer, [q.prompt], small_integers=False):
             problems.append(f"{q.key}: its answer {q.answer_display or q.answer} is written in its own prompt")
+        elif (back := typed_back(q.kind, q.answer, [q.prompt])) is not None:
+            problems.append(
+                f"{q.key}: typing ${back}$ from its prompt back is accepted as the answer — ask for a result the learner "
+                "must work out, not one the prompt already shows"
+            )
         elif context and _printed_in(q.answer, context, small_integers=False, letters_only=True):
             problems.append(
                 f"{q.key}: its answer {q.answer_display or q.answer} equals a line printed in the teaching text or a worked "
-                "example — use other letters or values than the lesson's, or ask for something the lesson did not print"
+                f"example — {_PROOF_PRINTED_REPAIR if proof else _PRINTED_REPAIR}"
             )
         return problems
     if q.kind != "multistep":
@@ -659,15 +709,17 @@ def answer_known_problems(q: QuestionDraft, context: list[str] | None = None) ->
         key = _symbolic(step.answer)
         if _printed_in(step.answer, shown, small_integers=True):
             problems.append(f"{where}: its answer is printed in the problem, a step prompt or a bank of lines — ask for a line the learner derives")
+        elif (back := typed_back(step.kind, step.answer, shown)) is not None:
+            problems.append(f"{where}: typing ${back}$ from the problem back is accepted as the answer — ask for a result the learner must work out")
         elif key is not None and any(_same_expression(key, e) for e in earlier):
             problems.append(
-                f"{where}: its answer is an earlier step's result again (the statement being proved forces it) — have "
-                "the learner type one side and let a choice step justify the equality"
+                f"{where}: its answer is an earlier step's result again (the statement being proved forces it) — "
+                f"{_PROOF_FORCED_REPAIR if proof else _FORCED_REPAIR}"
             )
         elif context and _printed_in(step.answer, context, small_integers=False, letters_only=True):
             problems.append(
-                f"{where}: its answer equals a line printed in the teaching text or a worked example — use other letters "
-                "or values than the lesson's (e.g. α=p+qi), or ask for a line the lesson did not print"
+                f"{where}: its answer equals a line printed in the teaching text or a worked example — "
+                f"{_PROOF_PRINTED_REPAIR if proof else _PRINTED_STEP_REPAIR}"
             )
         if key is not None:
             earlier.append(key)

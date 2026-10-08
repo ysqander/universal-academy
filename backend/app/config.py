@@ -61,6 +61,9 @@ class Settings:
     effort_lesson: str = field(default_factory=lambda: _env("UA_EFFORT_LESSON", "medium"))
     effort_viz: str = field(default_factory=lambda: _env("UA_EFFORT_VIZ", "low"))
     effort_verify: str = field(default_factory=lambda: _env("UA_EFFORT_VERIFY", "high"))
+    # Proof skills get more reasoning on the same model (the learner, 2026-10-08: "use sol at one higher reasoning
+    # notch"): planner high → xhigh, writer medium → high, reviewer high → xhigh.
+    proof_effort_notches: int = field(default_factory=lambda: int(_env("UA_PROOF_EFFORT_NOTCHES", "1")))
 
     # Page parsing engine: "auto" (nemotron when NVIDIA key present, plus OpenAI vision), "openai", "nemotron".
     parse_engine: str = field(default_factory=lambda: _env("UA_PARSE_ENGINE", "auto"))

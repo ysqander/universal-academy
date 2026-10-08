@@ -52,7 +52,6 @@ ACCEPT = [
     ("x**2", "x^2"),
     ("x**2", "x²"),
     ("2*x", "2x"),
-    ("2*x", "x + x"),
     ("x*y", "yx"),
     ("a*(b+c)", "a(b+c)"),
     ("3*x", "3 \\cdot x"),
@@ -437,7 +436,11 @@ def test_other_list_arithmetic_asks_for_the_resulting_list(response: str, expect
 def test_list_arithmetic_is_graded_by_value() -> None:
     wrong = grade("(-1, 25, -14)", "(-5, 5, 2)+4(1, 5, 4)")
     assert not wrong.correct and not wrong.invalid and "Component 3" in wrong.feedback
-    assert grade("(2*a, 2*b)", "a(2, 0) + b(0, 2)").correct
+    # a right value typed as the arithmetic still to do is asked again (2026-10-08: no bypassing the computation)
+    typed_back = grade("(2*a, 2*b)", "a(2, 0) + b(0, 2)")
+    assert typed_back.invalid and not typed_back.correct and typed_back.feedback == grading.LIST_NOT_COMPUTED
+    assert grade("(2*x, 2*y)", "(2x, 2y)").correct
+    assert grade("2*x", "x + x").feedback == grading.SYMBOL_NOT_SIMPLIFIED
     assert grade("(-1, 25, -14)", "(-5, 5, 2)+4(1, 5, -4)", require_simplified=False).correct
     assert "Unexpected character" in grade("2", "root(8, 3)").feedback  # a function's arguments are not a list
 

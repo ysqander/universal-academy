@@ -498,6 +498,7 @@ class Node:
     expr: sp.Expr | None = None
     items: list[Node] = field(default_factory=list)
     raw: sp.Expr | None = None  # scalar: the unevaluated parse tree (the form the learner typed)
+    arithmetic: bool = False  # tuple: read from list arithmetic ('i(2,-1)', '(1,2)+(0,1)'), not typed as a list
 
     def size(self) -> int:
         return 1 if self.kind == "scalar" else sum(i.size() for i in self.items)
@@ -624,7 +625,7 @@ def _parse_list_arithmetic(s: str) -> Node | None:
     for k in range(next(iter(sizes))):
         expr, raw = _parse_scalar(substitute(lambda j, parts: parts[k]))
         items.append(Node("scalar", expr=expr, raw=raw))
-    return Node("tuple", items=items)
+    return Node("tuple", items=items, arithmetic=True)
 
 
 _ALLOWED = re.compile(r"^[A-Za-z0-9_+\-*/(). ]*$")
@@ -1095,6 +1096,81 @@ def _distinct_terms(infos: list[tuple[bool, tuple[str, ...], int | None]], real_
     return len(set(keys)) == len(keys)
 
 
+UNCOMPUTED_FEEDBACK = "Not yet computed — write it as (real part) + (imaginary part)·i; the parts may stay unexpanded."
+UNCOMPUTED_REAL_FEEDBACK = "Not yet computed — this is a real number: work out the product and write it without i."
+
+
+def _uncomputed(raw: sp.Basic) -> bool:
+    """A typed expression with letters that still holds a complex computation: a product of two factors containing i
+    ('(a+bi)(c+di)', 'i(a+bi)'), a sum containing i times a factor with a letter ('c(a+bi)'), a power or quotient of
+    something containing i ('(a+bi)^2', 'i^2'), or a sum with two terms containing i — the summands typed back
+    unadded ('c+di+g+hi' for β+λ; the S4a evaluation, 2026-10-08). '(ac-bd)+(ad+bc)i' and '-(ad+bc)+(ac-bd)i' are
+    computed."""
+    for node in sp.preorder_traversal(raw):
+        if isinstance(node, sp.Pow) and node.base.has(sp.I):
+            return True
+        if isinstance(node, sp.Add) and sum(1 for term in node.args if term.has(sp.I)) >= 2:
+            return True
+        if isinstance(node, sp.Mul):
+            with_i = [f for f in node.args if f.has(sp.I)]
+            if len(with_i) >= 2:
+                return True
+            sums = [f for f in with_i if isinstance(f, sp.Add)]
+            if sums and any(f.free_symbols for f in node.args if f is not sums[0]):
+                return True
+    return False
+
+
+LIST_NOT_COMPUTED = "Same values — now work out each component and enter the resulting list itself."
+SYMBOL_NOT_SIMPLIFIED = "Same value — now simplify it."
+_SINGLE_SYMBOL = re.compile(r"^-?\s*(?:\d+\s*\*?\s*)?[A-Za-z]\w*$")
+
+
+def _list_arithmetic_feedback(expected: Node, got: Node) -> str | None:
+    """A list asked for, and the learner typed the arithmetic that produces it — the question's own 'i(2,-1)' or
+    '(1,2)+3(0,1)' — instead of working out the components (the bypass audit of 2026-10-08: 'compute i(2,-1)' accepted
+    'i(2,-1)', because distributing the scalar left reduced-looking components)."""
+    if got.arithmetic and expected.kind == "tuple" and not expected.arithmetic:
+        return LIST_NOT_COMPUTED
+    return None
+
+
+def _symbol_feedback(expected: Node, got: Node, response: str) -> str | None:
+    """A key that is one symbol, possibly with a number in front ('v', '-v', '2v' — a vector in an abstract space):
+    the answer must be that short too. '-(-v)', 'v+0', '1v+v' are the expression still to simplify (the audit found
+    'simplify -(-v)' accepting '-(-v)'; the parser folds the double sign, so the typed text is compared)."""
+    if expected.kind != "scalar" or got.kind != "scalar" or expected.raw is None or expected.expr is None:
+        return None
+    if not expected.expr.free_symbols or len(expected.expr.free_symbols) != 1:
+        return None
+    key_text = str(expected.raw).replace(" ", "")
+    if not _SINGLE_SYMBOL.match(key_text):
+        return None
+    typed = re.sub(r"\s+", "", response)
+    return SYMBOL_NOT_SIMPLIFIED if re.search(r"[()+]|--|-\s*-", typed) else None
+
+
+def _uncomputed_feedback(expected: Node, got: Node) -> str | None:
+    """The standard-form rule for keys with letters (the proof track, 2026-10-08): "enter α(βi) in standard form" only
+    measures something when '(a+bi)(-d+ci)' — the product retyped — is not accepted as the computed result. Applies
+    when the key has letters and is itself computed; a real key with letters (a coordinate, a slot) takes no i."""
+    if expected.kind != got.kind or len(expected.scalars()) != len(got.scalars()) or expected.kind == "set":
+        return None
+    for e, g in zip(expected.scalars(), got.scalars()):
+        if e.expr is None or not e.expr.free_symbols or e.raw is None or g.raw is None or _uncomputed(e.raw):
+            continue
+        real = {s: sp.Symbol(s.name, real=True) for s in e.expr.free_symbols}
+        try:
+            imaginary = sp.simplify(sp.im(e.expr.xreplace(real))) != 0
+        except Exception:  # noqa: BLE001 — an odd key is left to the comparison
+            continue
+        if imaginary and _uncomputed(g.raw):
+            return UNCOMPUTED_FEEDBACK
+        if not imaginary and g.raw.has(sp.I):
+            return UNCOMPUTED_REAL_FEEDBACK
+    return None
+
+
 def _unsimplified_feedback(expected: Node, got: Node) -> str | None:
     """D3: same value as a reduced constant key, but not typed in reduced form -> a form-appropriate message."""
     pairs: list[tuple[Node, Node]] = []
@@ -1385,7 +1461,12 @@ def _check_math(kind: str, answer: str, tolerance: float | None, response: str |
     if _same_text(answer, response or "", keep):
         return GradeResult(True, "Correct.")
     if require_simplified:
-        form = _unsimplified_feedback(expected, got)
+        form = (
+            _list_arithmetic_feedback(expected, got)
+            or _uncomputed_feedback(expected, got)
+            or _symbol_feedback(expected, got, response or "")
+            or _unsimplified_feedback(expected, got)
+        )
         if form:
             return GradeResult(False, form, invalid=True)
     if tolerance is not None and _differs_numerically(expected, got):

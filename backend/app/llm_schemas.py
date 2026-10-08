@@ -368,6 +368,52 @@ class PlannedPrereq(BaseModel):
     weight: float = Field(description="Encompassing weight 0-1 (as in the knowledge graph).")
 
 
+ProofPattern = Literal[
+    "two_routes", "find_then_check", "suppose_two", "law_chain", "two_halves", "conditions_or_counterexample"
+]
+
+
+class ProofHalf(BaseModel):
+    label: str = Field(description="Which half: '⇒', '⇐', '⊆', '⊇', 'contains', 'lies inside every other'.")
+    assume: str = Field(description="What this half may assume.")
+    show: str = Field(description="What this half must show.")
+    pattern: ProofPattern = Field(description="The pattern that proves this half (never two_halves).")
+
+
+class ScopeStatement(BaseModel):
+    statement: str = Field(description="'We have proved …' — a claim about what the guided case established.")
+    true: bool
+
+
+class PracticeStatement(BaseModel):
+    statement: str = Field(description="A statement of the family (Markdown + LaTeX), in the lesson's letters.")
+    knowledge_point: int = Field(description="1-based index into practice_steps.")
+    role: Literal["special_case", "general", "repair", "decide", "scope"]
+
+
+class ProofPlan(BaseModel):
+    """The plan of a proof lesson (proof skills only; docs/lesson-v2.md "The proof track")."""
+
+    pattern: ProofPattern
+    strategy_name: str = Field(description="Exactly the pattern's canonical name, e.g. 'Two routes, same destination'.")
+    statement: str = Field(description="The ONE statement the teaching proves, with its book item (Markdown + LaTeX).")
+    picture: str = Field(description="One sentence reading the statement in the pattern's terms (the routes / halves / stages).")
+    may_use: list[str] = Field(description="Definitions (number and formula), what equality means here, real-number laws, earlier results by key.")
+    may_not_use: list[str] = Field(description="The statement itself and each unproved law a learner would reach for, each with a one-line reason.")
+    letters: list[str] = Field(description="The objects in coordinates, fixed for the whole lesson, e.g. ['α = a+bi', 'β = c+di', 'λ = g+hi'].")
+    coordinate_letters: list[str] = Field(
+        description="Every single letter that may appear in a typed answer, e.g. ['a', 'b', 'c', 'd', 'g', 'h']. Never e, i, j, p, a name starting with z or w, or (two_routes) a slot name x, y, u, v."
+    )
+    numbers: str = Field(description="The statement on small inputs, every intermediate and final value written out.")
+    guided_case: str = Field(description="The statement with ONE input fixed at a simple value (at most 4 letters) and the key line the learner builds.")
+    guided_key: str = Field(description="SymPy key of that key line, e.g. '-a*d-b*c+(a*c-b*d)*i' (or '' for a choice).")
+    general_case: str = Field(description="The full statement, shown as a worked table in the generalize block.")
+    scope_statements: list[ScopeStatement] = Field(description="Exactly 3 'We have proved …' claims with both true and false ones.")
+    practice_statements: list[PracticeStatement] = Field(description="3–6 statements the practice proves; none is the statement, its guided case or a worked example.")
+    capstone_statement: str = Field(description="A natural statement of the family nothing else proves, its fixed input computed by an earlier skill, and how it is then used.")
+    halves: list[ProofHalf] = Field(description="two_halves: exactly the 2 halves; [] for every other pattern.")
+
+
 class TeachingSpec(BaseModel):
     local_id: str = Field(description="'a', 'b', 'c', ... in learning order (just 'a' when the skill is kept).")
     title: str = Field(description="Short ability name, e.g. 'Multiply two complex numbers'.")
@@ -398,6 +444,8 @@ class TeachingSpec(BaseModel):
     difficulty: int
     est_minutes: int
     misconceptions: list[str]
+    # a default so that plans stored before the proof track still load (the strict schema still requires the field)
+    proof: ProofPlan | None = Field(default=None, description="Proof skills (kind 'proof'): the proof plan. null for every other kind.")
 
 
 class DependentLink(BaseModel):

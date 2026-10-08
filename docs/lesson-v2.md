@@ -79,6 +79,62 @@ cites are the content. A learner's wrong answer on the skill becomes a "Learner'
 must test with exactly that answer as a wrong option or near miss. A "show that" about one given object is a
 computation (kind `computation`), not a proof.
 
+## The proof track (branch `proof-lessons`, 2026-10-08 — experimental)
+
+The learner on the first S4a ("Prove complex arithmetic laws by comparing coordinates"): "quite convoluted" — a faded
+step that was trivial regrouping, 12-term expansions in six letters, new letters in every question, statements made
+"new" by shifting inputs, and on paper "got lost interchanging the symbols" between the two calculations. Wanted:
+understand a SMALL proof and construct its calculations; numbers first, then what counts as a proof, then a special
+case you build, then the general proof as a worked solution, then transfer.
+
+Proof skills (`is_proof_skill`) get their own instructions (`pipeline/prompts_proof.py`, assembled in `prompts_v2.py`
+as `PROOF_PLANNER_INSTRUCTIONS`, `PROOF_WRITER_INSTRUCTIONS`, `PROOF_REVIEWER_INSTRUCTIONS`) and run one reasoning
+notch higher on the same model (`UA_PROOF_EFFORT_NOTCHES`, default 1: planner and reviewer xhigh, writer high).
+
+- **Proof plan** (`TeachingSpec.proof`, required for a proof skill; a defective plan is re-planned once): one of six
+  canonical patterns — two_routes "Two routes, same destination", find_then_check "Find it, then check it",
+  suppose_two "Suppose two, show they are one", law_chain "One law per line", two_halves "Two halves, one at a time",
+  conditions_or_counterexample "Check the conditions, or break one" — the ONE statement the teaching proves, the
+  picture, may use / may not use, one letter set (never e, i, j, p, z…, w…, or the slot names), the numbers, the
+  guided case (one input fixed, at most 4 letters) and its key line, the general case, three scope claims, 3–6
+  practice statements and the capstone statement.
+- **Teaching** (9 blocks): setup (the picture; may / may not use — the only circularity warning) → slots on the
+  numbers → the learner finishes route B on numbers (graded) → reflect: why one example is not a proof → letters for
+  every input → faded example = route B's last leg in letters (printed nowhere before) → route A and the comparison
+  table → scope true_false_set → the general case as one worked table ending with the method (no summary block).
+  Slot tables (product | x | y | u | v | real xu−yv | imaginary xv+yu, "reset the slots" between products) fade:
+  filled → "?" in the faded example → hints only in practice → none in the capstone.
+- **Practice**: knowledge point 1 "Transfer" (a walkthrough of another statement of the family, one input fixed);
+  knowledge point 2 "What a proof establishes" (a true_false_set about shown arguments: numeric check, fixed input
+  generalized, circular step, real law inside a coordinate). Only route legs the statement does not force are scored:
+  route A's result, route B's first leg, the slots of route B's last product — never route B's final value.
+- **Capstone**: an earlier skill computes the fixed input → route A → route B's slots or first leg → USE the proved
+  statement for a value the learner could not get otherwise.
+- **Checks** (`pipeline/proof_track.py`, hard and soft like the other validation): letters outside the plan's set,
+  more than 6 letters (4 in the teaching, knowledge point 1's first question and the capstone), more than 4 terms per
+  coordinate (6 in spares), numbers first, the faded check a typed route leg not printed before, arc order, served
+  scope, walkthrough and capstone shape, inflated statements, "fully expand", method-description options, one "which
+  law" choice, the warning once. Repair messages keep the lesson's letters.
+- **Grading** (all lessons): for a key with letters, a response that still holds a complex computation —
+  '(a+bi)(c+di)', 'c(a+bi)', '(a+bi)^2' — is "Not yet computed" (asked again, not counted); unexpanded coordinates
+  such as 'a(−d)−bc+(ac+b(−d))i' are accepted. A real key with letters takes no i.
+- Offline fixture: `app/fake_proof.py` (the S4a design) passes every check; `tests/test_proof_track.py`.
+- First live sample (S4a, Sol +1 notch, $1.31, 2026-10-08): both blind learner judges preferred it "much better" than
+  the old S4a (clarity 8 vs 4, convoluted 3 vs 8, longest typed coordinate 4 terms vs 6–12, no letter changes); no
+  math errors in 99 recomputed items. The design audit's two blocking defects — a faded slot row that printed u and v,
+  and a "Transfer" knowledge point that served a numeric repair instead of the transfer walkthrough — and its minor
+  ones (λ reused for a computed number, 5 served items, an explanation answering the next step, an FTFFF scope set)
+  are now checks and prompt rules.
+- Second and third samples (same day): sample 2 lost both revisions to a style check that discarded them outright, so
+  proof-track problems are now weighed with the review's blocking issues (`proof_debt`) instead. Sample 3 ($1.27):
+  blind judges again "much better" than the old S4a (clarity 8 vs 3, convoluted 3 vs 8–9, own work 6 vs 3), a tie with
+  sample 1, no math errors; its three blocking practice defects (general distributivity proved nowhere, a spare that
+  specialised the teaching's statement, self-refuting circularity claims) were rewritten with
+  `regenerate.py --only questions --note` ($0.43 in three rounds) and re-audited until no defect remained. New rules:
+  every named law proved for all inputs somewhere, circular claims that show the move, which-law stems without the
+  law's instance, Definition 1.1 in slot letters, a slot-error spare keyed on slots (not a value the statement
+  forces).
+
 ## Reference example (approved by the learner) — procedure skill
 
 ### Multiply two complex numbers

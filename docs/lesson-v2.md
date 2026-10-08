@@ -119,6 +119,12 @@ notch higher on the same model (`UA_PROOF_EFFORT_NOTCHES`, default 1: planner an
   '(a+bi)(c+di)', 'c(a+bi)', '(a+bi)^2' — is "Not yet computed" (asked again, not counted); unexpanded coordinates
   such as 'a(−d)−bc+(ac+b(−d))i' are accepted. A real key with letters takes no i.
 - Offline fixture: `app/fake_proof.py` (the S4a design) passes every check; `tests/test_proof_track.py`.
+- First live sample (S4a, Sol +1 notch, $1.31, 2026-10-08): both blind learner judges preferred it "much better" than
+  the old S4a (clarity 8 vs 4, convoluted 3 vs 8, longest typed coordinate 4 terms vs 6–12, no letter changes); no
+  math errors in 99 recomputed items. The design audit's two blocking defects — a faded slot row that printed u and v,
+  and a "Transfer" knowledge point that served a numeric repair instead of the transfer walkthrough — and its minor
+  ones (λ reused for a computed number, 5 served items, an explanation answering the next step, an FTFFF scope set)
+  are now checks and prompt rules.
 
 ## Reference example (approved by the learner) — procedure skill
 

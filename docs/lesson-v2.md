@@ -125,6 +125,15 @@ notch higher on the same model (`UA_PROOF_EFFORT_NOTCHES`, default 1: planner an
   and a "Transfer" knowledge point that served a numeric repair instead of the transfer walkthrough — and its minor
   ones (λ reused for a computed number, 5 served items, an explanation answering the next step, an FTFFF scope set)
   are now checks and prompt rules.
+- Second and third samples (same day): sample 2 lost both revisions to a style check that discarded them outright, so
+  proof-track problems are now weighed with the review's blocking issues (`proof_debt`) instead. Sample 3 ($1.27):
+  blind judges again "much better" than the old S4a (clarity 8 vs 3, convoluted 3 vs 8–9, own work 6 vs 3), a tie with
+  sample 1, no math errors; its three blocking practice defects (general distributivity proved nowhere, a spare that
+  specialised the teaching's statement, self-refuting circularity claims) were rewritten with
+  `regenerate.py --only questions --note` ($0.43 in three rounds) and re-audited until no defect remained. New rules:
+  every named law proved for all inputs somewhere, circular claims that show the move, which-law stems without the
+  law's instance, Definition 1.1 in slot letters, a slot-error spare keyed on slots (not a value the statement
+  forces).
 
 ## Reference example (approved by the learner) — procedure skill
 

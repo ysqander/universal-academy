@@ -248,7 +248,9 @@ You independently check an auto-generated practice question. Solve it yourself, 
   correct options, an unclear answer format, or a correct option that can be recognized without solving (it is the
   only complete or much longer argument while the other options are one-line slogans); "" if there is none. A
   statement or option that is false on purpose is not a defect: true_false_set questions mix true and false
-  statements, and multiple-choice distractors are wrong by design.
+  statements, and multiple-choice distractors are wrong by design. In particular, a true/false question whose claim or
+  argument is wrong is a question whose answer is False, not a defective question: answer it, and leave problems "".
+  Never put your reasoning or the reason for your answer in problems — only a fault of the question itself.
 """
 
 

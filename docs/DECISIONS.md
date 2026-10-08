@@ -190,6 +190,12 @@ Details: [SPEC.md §6.7](SPEC.md).
   xhigh, `gpt-6.1-sol` low and `gpt-6-luna` high all caught 8/8 real problems; Luna high had the fewest false flags
   (1) and was cheapest ($0.035 per chapter vs $0.48 for Sol); Sol was 2.7× slower. There is no GPT-6 "Terra" tier.
   The test was too easy to rank models finely (8 positives, one run each).
+- **Anthropic: `claude-haiku-5-5` at effort `high`** (benchmark rerun 2026-10-08 on the same 70 items through today's
+  verify path, course notation included, two runs per setup): Luna high 8/8 caught, false flags 0 and 1; Haiku high
+  8/8, false flags 1 and 0; Haiku medium 8/8, 1 and 1. Haiku's false flag (R45) was its own reasoning written into
+  `problems` on a true/false question it answered correctly; one sentence in the Anthropic set's VERIFY_INSTRUCTIONS
+  ("never put your reasoning in problems") removed it: 8/8 and 0 false flags in two more runs. Haiku costs about twice
+  Luna ($0.014–0.018 vs $0.007 per 70 questions, about $0.06 per chapter) and answers faster (2.0 s vs 3.0 s).
 - **Disagreements on `true_false_set` questions and multistep steps** are re-solved once by `gpt-6.1-sol`;
   agreement on the re-check keeps the question (`agree_on_recheck`). So is any **reported problem** (the solver agreed
   with the key but named a defect, e.g. "option 3 is also correct", or was unsure), with the defect shown to the

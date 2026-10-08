@@ -110,9 +110,10 @@ read once, as a worked solution.
 10. practice_statements — 3–6 statements, each with its knowledge point and role (special_case, general, repair,
    decide, scope). Each differs from the statement, its guided case and every worked example, and is a real member of
    the family or a natural special case (one input fixed at i, 1, 1+i, 2−i, a real t or a specific vector). Never
-   inflate a statement: no constants added to inputs, no swapped sides, no laws composed for no purpose. Every
-   statement the objective names is proved somewhere: the chosen one in the teaching, the rest in worked examples or
-   practice.
+   inflate a statement: no constants added to inputs, no swapped sides, no laws composed for no purpose, and never
+   the teaching's statement with an input fixed. Every law the objective names is proved for ALL its inputs
+   somewhere: the chosen one in the teaching, the rest in worked examples or practice (a general law with 6 letters
+   as a worked example or a spare; its fixed-input case may be the served walkthrough).
 11. practice_steps — knowledge points are the DEMANDS of the arc, not groups of laws:
    - knowledge point 1 "Transfer: prove <the next statement> with <strategy>": one input fixed, at most 4 letters; its
      worked example is a different short statement of the family; its first (served) question is that walkthrough —
@@ -191,8 +192,9 @@ RULES
 1. ONE PICTURE, NAMED FIRST. The setup is headed by the canonical strategy name and says what the strategy means for
    this statement before any letter appears ("Route A multiplies α and β, then multiplies by λ; route B multiplies β
    and λ, then multiplies α by that. The law says the routes always end at the same number — we may not assume it: it
-   is what we prove."). Then two short lines: "We may use …" (each definition displayed with its number; equality =
-   every coordinate equal; the real-number laws) and "We may not use …" (the statement itself and every law not yet
+   is what we prove."). Then two short lines: "We may use …" (each definition displayed with its number — in the slot
+   letters, (x+yi)(u+vi) = (xu−yv)+(xv+yu)i, because a, b, c, d are the coordinates of α and β from block 5 on; equality
+   = every coordinate equal; the real-number laws) and "We may not use …" (the statement itself and every law not yet
    proved, each with a one-line reason, e.g. "expanding complex brackets with i² = −1 uses complex distributivity — in
    S2a you multiplied that way; here Definition 1.1 IS the product").
    The setup is the ONLY place this warning appears: no later prompt, step or option repeats "without assuming …".
@@ -296,11 +298,17 @@ letters everywhere.
   question: a true_false_set of 4–5 short claims, both true and false, each about a shown argument — a numeric check
   offered as a proof; letters for every coordinate with both coordinates compared; a fixed input generalized; a
   circular step (the law itself, or expanding complex brackets with i² = −1); a real-number law used inside a
-  coordinate — at least two true and two false. Spares: a second true_false_set with NEW claims (never a claim of the
+  coordinate — at least two true and two false. A circular claim SHOWS the move so that the learner sees it is
+  circular ("in proving i(α+β) = iα+iβ, expanding i((a+c)+(b+d)i) term by term and replacing i² by −1 is a valid first
+  step" — false), never one that announces it ("a proof may begin by invoking that same law"), which refutes itself. Spares: a second true_false_set with NEW claims (never a claim of the
   first one again); a decide question (a proposed identity that fails: both sides typed,
   then true_false).
 - A third knowledge point only when the spec plans it.
-- Never in practice: the teaching's statement or a special case of it; a worked example's statement; an inflated
+- Every law the objective names is proved for ALL its inputs somewhere — the teaching, a worked example, or a spare
+  walkthrough (6 letters are allowed in a spare). A fixed-input case (the multiplier fixed at i) does not count: S4a
+  must prove λ(α+β) = λα+λβ with λ = g+hi somewhere, not only i(α+β) = iα+iβ.
+- Never in practice: the teaching's statement or a special case of it (after (αβ)λ = α(βλ) is proved, (αβ)(1+i) =
+  α(β(1+i)) is a special case, not a transfer); a worked example's statement; an inflated
   statement; new letters; "fully expand"; a "which continuation" choice among method descriptions; a bank of lines to
   order.
 SERVED SEQUENCE: knowledge point 1's walkthrough → knowledge point 2's true_false_set (not choice-based) → capstone —
@@ -317,7 +325,8 @@ WALKTHROUGH STEPS (multistep, 3–4 steps; at least 2 typed; at most 1 multiple_
   routes types a different tuple). When route B ends in a sum, ask for its first leg and show the rest in the
   explanation.
 - Score the comparison at most once: either show ONE pair of coordinates from the two routes and ask which real-number
-  fact makes them equal (multiple_choice, 4 short law names; distractors are laws a learner wrongly reaches for,
+  fact makes them equal (the stem shows only the two coordinates — never the law's own instance such as
+  (−1)(b+d) = (−1)b+(−1)d, which answers it; multiple_choice, 4 short law names; distractors are laws a learner wrongly reaches for,
   never a forbidden law), or a true_false_set step of 3 short claims about what this proof shows. At most one "which
   real law" choice in the whole lesson.
 - Typed complex results: "as a complex number in standard form (e.g. $3-2i$); the coordinates may stay unexpanded";

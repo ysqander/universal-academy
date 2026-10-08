@@ -1102,10 +1102,14 @@ UNCOMPUTED_REAL_FEEDBACK = "Not yet computed — this is a real number: work out
 
 def _uncomputed(raw: sp.Basic) -> bool:
     """A typed expression with letters that still holds a complex computation: a product of two factors containing i
-    ('(a+bi)(c+di)', 'i(a+bi)'), a sum containing i times a factor with a letter ('c(a+bi)'), or a power or quotient
-    of something containing i ('(a+bi)^2', 'i^2'). '(ac-bd)+(ad+bc)i' and '-(ad+bc)+(ac-bd)i' are computed."""
+    ('(a+bi)(c+di)', 'i(a+bi)'), a sum containing i times a factor with a letter ('c(a+bi)'), a power or quotient of
+    something containing i ('(a+bi)^2', 'i^2'), or a sum with two terms containing i — the summands typed back
+    unadded ('c+di+g+hi' for β+λ; the S4a evaluation, 2026-10-08). '(ac-bd)+(ad+bc)i' and '-(ad+bc)+(ac-bd)i' are
+    computed."""
     for node in sp.preorder_traversal(raw):
         if isinstance(node, sp.Pow) and node.base.has(sp.I):
+            return True
+        if isinstance(node, sp.Add) and sum(1 for term in node.args if term.has(sp.I)) >= 2:
             return True
         if isinstance(node, sp.Mul):
             with_i = [f for f in node.args if f.has(sp.I)]

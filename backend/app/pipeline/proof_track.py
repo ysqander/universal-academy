@@ -45,6 +45,26 @@ _LAW_WORDS = ("commutat", "associat", "distribut", "identity", "regroup", "reord
 _NUMBERED_LINE = re.compile(r"^\s*\d+\.\s", re.MULTILINE)
 _SLOT_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _RESET = re.compile(r"reset\s+the\s+slots", re.IGNORECASE)
+_GREEK_NAME = re.compile(r"\\(alpha|beta|gamma|lambda|mu)\b|([αβγλμ])")
+_GREEK_TO_NAME = {"α": "alpha", "β": "beta", "γ": "gamma", "λ": "lambda", "μ": "mu"}
+_COMPARISON_TABLE = re.compile(r"^\s*\|[^\n]*route\s*a[^\n]*\|[^\n]*route\s*b", re.IGNORECASE | re.MULTILINE)
+
+
+def _unknown_cells(body: str) -> int:
+    """The most '?' cells in one row of the block's Markdown tables (a faded slot row)."""
+    best = 0
+    for row in _SLOT_ROW.findall(body or ""):
+        cells = [c.strip().strip("$").strip() for c in row.strip().strip("|").split("|")]
+        best = max(best, sum(1 for c in cells if c == "?"))
+    return best
+
+
+def _plan_greek(plan: ProofPlan) -> set[str]:
+    names = set()
+    for entry in plan.letters:
+        for latex, char in _GREEK_NAME.findall(entry):
+            names.add(latex or _GREEK_TO_NAME[char])
+    return names
 
 
 def _canonical(pattern: str) -> str:
@@ -284,6 +304,12 @@ def _arc_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], lis
                 f"block {n + 1}: the faded check has a key with fewer than 2 letters — it must be route B's last leg in "
                 "letters (the plan's guided_key), not a regrouping or a number"
             )
+        if plan.pattern == "two_routes" and _unknown_cells(blocks[n].body) < 3:
+            hard.append(
+                f"block {n + 1}: the faded slot row prints the inputs the learner should identify — fill only x and y "
+                "(the first factor) and show u, v and both results as '?': reading u and v off route B's own intermediate "
+                "is where the routes get mixed (the learner's report)"
+            )
         if c.kind in ("numeric", "expression"):
             shown = [b.body for b in blocks[: n + 1]] + [b.check.prompt for b in blocks[: n + 1] if b.check is not None]
             if _printed_in(c.answer, shown, small_integers=False, letters_only=True):
@@ -394,6 +420,7 @@ def question_problems(q: QuestionDraft, plan: ProofPlan, *, served: bool) -> tup
     hard: list[str] = []
     soft: list[str] = []
     (hard if served else soft).extend(_walkthrough_problems(q, plan))
+    soft.extend(_explanation_problems(q))
     for i, part in enumerate(_parts(q), start=1):
         where = q.key + (f" step {i}" if q.kind == "multistep" else "")
         (hard if served else soft).extend(_option_problems(part, where))
@@ -408,6 +435,20 @@ def question_problems(q: QuestionDraft, plan: ProofPlan, *, served: bool) -> tup
     if len(_NUMBERED_LINE.findall(q.prompt)) >= 3 and _small_integer_tuple(q.answer):
         hard.append(f"{q.key}: a bank of numbered lines to order — use the next line as a choice among single equations")
     return hard, soft
+
+
+def _explanation_problems(q: QuestionDraft) -> list[str]:
+    """A step explanation that prints the route comparison before a later step asks about it (the judges of the first
+    proof-track S4a: the true/false step was answered by the explanation just shown)."""
+    problems = []
+    for i, st in enumerate(q.steps[:-1], start=1):
+        later = [j for j, x in enumerate(q.steps[i:], start=i + 1) if x.kind in ("true_false_set", "multiple_choice", "true_false")]
+        if later and _COMPARISON_TABLE.search(st.explanation or ""):
+            problems.append(
+                f"{q.key} step {i}: its explanation prints the route comparison before step {later[0]} asks about it — "
+                "move the comparison table to the last step's explanation and the solution"
+            )
+    return problems
 
 
 def capstone_proof_problems(cap: QuestionDraft, plan: ProofPlan) -> list[str]:
@@ -432,6 +473,23 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
     soft += s
     served_scope = False
     law_choices = 0
+    points = draft.knowledge_points
+    if points and plan.pattern not in ABSTRACT_PATTERNS and points[0].questions:
+        first = points[0].questions[0]
+        typed = sum(1 for st in first.steps if st.kind in ("numeric", "expression")) if first.kind == "multistep" else 0
+        if typed < 2:
+            hard.append(
+                f"knowledge point 1 leads with {first.key} ({first.kind}): the question every learner is served there is "
+                "the transfer walkthrough of a practice statement (3–4 steps, at least 2 typed); a repair or slot-error "
+                "question is a spare"
+            )
+    served_count = sum(clamp_target(kp.target_questions) for kp in points)
+    if served_count > len(points) or len(points) > 3:
+        soft.append(
+            f"{served_count} practice questions are served before the capstone; the track serves one per knowledge point "
+            "(knowledge point 1's walkthrough, knowledge point 2's true_false_set) — set target_questions to 1 and move "
+            "further statements to worked examples or spares"
+        )
     for kp_index, kp in enumerate(draft.knowledge_points, start=1):
         target = clamp_target(kp.target_questions)
         single = False
@@ -444,10 +502,19 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
             law_choices += sum(_law_choice(p) for p in _parts(q))
             if position < target:
                 served_scope |= any(p.kind == "true_false_set" and _tf_set_ok(p.choices, p.answer) for p in _parts(q))
+                marks = (parse_true_false_set(q.answer) or "") if q.kind == "true_false_set" else ""
+                if len(marks) >= 4 and min(marks.count("T"), marks.count("F")) < 2:
+                    soft.append(f"{q.key}: {marks} — at least two true and two false claims, so marking everything one way fails")
         if not single:
             soft.append(f"knowledge point {kp_index} has no single-answer question (typed, or a true_false_set of 3+) — quizzes never serve multistep questions")
     cap = draft.capstone
     hard += capstone_proof_problems(cap, plan)
+    soft += _explanation_problems(cap)
+    for name in sorted(_plan_greek(plan)):
+        char = next(k for k, v in _GREEK_TO_NAME.items() if v == name)
+        assigned = rf"\s*=\s*\(?\s*[-−\d(]"  # λ = (2−i)(1+i), λ = 3+i — not αβ = 2−5i
+        if re.search(rf"(?<![A-Za-z}}])\\{name}{assigned}", cap.prompt) or re.search(rf"(?<![\w}}])\\?{char}{assigned}", cap.prompt):
+            soft.append(f"cap: \\{name} names a computed number here but an arbitrary input elsewhere — give the fixed input a new letter (\\mu)")
     served_scope |= any(s.kind == "true_false_set" and _tf_set_ok(s.choices, s.answer) for s in cap.steps)
     law_choices += sum(_law_choice(s) for s in cap.steps) + sum(_law_choice(b.check) for b in draft.blocks if b.check)
     if not served_scope:

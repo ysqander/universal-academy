@@ -218,3 +218,39 @@ def test_a_proof_skill_is_replanned_on_the_proof_track(tmp_path, monkeypatch):
     stored = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (result.skill_id,))["lesson_json"])
     assert stored["plan"]["proof"]["pattern"] == "two_routes"
     assert stored["blocks"][0]["heading"] == "Two routes, same destination"
+
+
+# ---------------------------------------------------------------------------
+# What the judges found in the first live proof-track S4a (2026-10-08)
+# ---------------------------------------------------------------------------
+
+
+def test_the_faded_row_leaves_route_bs_inputs_to_the_learner():
+    draft = lesson()
+    blocks = list(draft.blocks)
+    filled = blocks[5].model_copy(update={"body": blocks[5].body.replace("| $a$ | $b$ | ? | ? | ? | ? |", "| $a$ | $b$ | $-d$ | $c$ | ? | ? |")})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], filled, *blocks[6:]]}))
+    assert any("faded slot row prints the inputs" in p for p in hard)
+
+
+def test_transfer_is_served_first_and_one_question_per_point():
+    draft = lesson()
+    kp1, kp2 = draft.knowledge_points
+    repair_first = kp1.model_copy(update={"questions": [kp1.questions[2], *kp1.questions[:2]]})  # the slot-error spare first
+    longer = kp2.model_copy(update={"target_questions": 3})
+    hard, soft = problems(draft.model_copy(update={"knowledge_points": [repair_first, longer]}))
+    assert any("knowledge point 1 leads with k1q3" in p for p in hard)
+    assert any("practice questions are served before the capstone" in p for p in soft)
+
+
+def test_explanations_do_not_answer_the_next_step_and_the_capstone_keeps_the_letters():
+    draft = lesson()
+    walkthrough = draft.knowledge_points[0].questions[0]
+    steps = list(walkthrough.steps)
+    steps[1] = steps[1].model_copy(update={"explanation": "| Coordinate | Route A | Route B |\n|---|---|---|\n| Real | $x$ | $x$ |"})
+    kp1 = draft.knowledge_points[0].model_copy(update={"questions": [walkthrough.model_copy(update={"steps": steps}), *draft.knowledge_points[0].questions[1:]]})
+    cap = draft.capstone.model_copy(update={"prompt": draft.capstone.prompt.replace("\\mu", "\\lambda")})
+    _, soft = problems(draft.model_copy(update={"knowledge_points": [kp1, draft.knowledge_points[1]], "capstone": cap}))
+    assert any("k1q1 step 2: its explanation prints the route comparison" in p for p in soft)
+    assert any("\\lambda names a computed number" in p for p in soft)
+    assert not any("\\alpha names" in p or "\\beta names" in p for p in soft)  # αβ = 2−5i assigns nothing

@@ -42,6 +42,9 @@ def test_a_complex_product_typed_back_is_not_computed_in_any_lesson():
     assert grade("5+i", "(2+3i)(1-i)").invalid  # numbers: the reduced-form rule
     assert grade("2*a-b+(a+2*b)*i", "(a+bi)(2+i)").feedback == UNCOMPUTED_FEEDBACK  # letters: the new rule
     assert grade("2*a-b+(a+2*b)*i", "(2a-b)+(a+2b)i").correct
+    # the summands typed back unadded (S4a k2q2: β+λ answered 'c+di+g+hi')
+    assert grade("c+g+(d+h)*i", "c+d*i+g+h*i").feedback == UNCOMPUTED_FEEDBACK
+    assert grade("c+g+(d+h)*i", "(c+g)+(d+h)i").correct and grade("(a+c)+g+((b+d)+h)*i", "a+c+g+(b+d+h)i").correct
 
 
 def test_generation_finds_an_answer_the_prompt_lets_the_learner_type_back():

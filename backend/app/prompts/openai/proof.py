@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..rules import (
+    CIRCULARITY_RULE,
     PROOF_FEEDBACK,
     PROOF_PATTERNS,
     REFERENCE_PROOF,
@@ -45,6 +46,7 @@ read once, as a worked solution.
    by name. May not use: the statement itself, and each not-yet-proved result a learner would reach for, each with a
    one-line reason (S4a: "expanding complex brackets with i² = −1 — that is complex distributivity, one of the laws
    being proved; in S2a you multiplied that way, here Definition 1.1 IS the product").
+{CIRCULARITY_RULE}
 5. letters — one set with fixed roles for teaching, practice and capstone: the book's names for the objects and
    consecutive coordinate letters (α = a+bi, β = c+di, λ = g+hi); coordinate_letters lists every single letter a
    typed answer may contain. Never e or E (the grader reads e as Euler's number), i, I or j (the imaginary unit), a
@@ -124,6 +126,7 @@ RULES
    = every coordinate equal; the real-number laws) and "We may not use …" (the statement itself and every law not yet
    proved, each with a one-line reason, e.g. "expanding complex brackets with i² = −1 uses complex distributivity — in
    S2a you multiplied that way; here Definition 1.1 IS the product").
+{CIRCULARITY_RULE}
    The setup is the ONLY place this warning appears: no later prompt, step or option repeats "without assuming …".
    Every later block says which route or which comparison it is doing.
 2. ONE STATEMENT, THREE PASSES. The teaching proves ONE statement: (a) on small numbers; (b) with letters and one

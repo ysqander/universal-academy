@@ -42,6 +42,13 @@ $7.67 for Opus vs $1.15 for Sol (Opus thinks far more: 25K-token plan, 40K-token
 of the Opus run was reviews cut off at the 32K ceiling and re-run, so Anthropic calls now get twice the ceiling
 (billing counts only tokens used). Verification: Haiku 5.5 equals Luna once its wording keeps reasoning out of
 `problems` (§6).
+**Opus effort for proof skills (2026-10-08, the learner has $200/month of Anthropic credits, so Claude is the
+provider).** S4b generated four times on Opus 5.5: twice at the proof notch (planner and reviewer xhigh, writer high)
+and twice one notch lower (high / medium). Lower: about 45% cheaper ($3.18–3.37 vs $5.15–6.53) and twice as fast, but
+weaker — blind learner judges preferred the current setting in 3 of 4 judgments, the only math error was at the lower
+setting, and the best lesson (1 blocking issue) was at the current setting. Decision: keep the notch for proof skills.
+All four S4b lessons called cancelling α circular in the uniqueness proof (it is not: the inverse exists by
+hypothesis); CIRCULARITY_RULE in app/prompts/rules.py now goes to both providers' planner, writer and reviewer.
 
 ## 2. Lessons
 

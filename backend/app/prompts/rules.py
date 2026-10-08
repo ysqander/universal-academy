@@ -434,3 +434,15 @@ MISCONCEPTIONS_HEADER = (
     "a line starting \"Prerequisite slip\" needs no bridge: a one-line recall where it is first needed and one typed "
     "question served first that includes the case):"
 )
+
+
+# What counts as circular in a proof (2026-10-08: all four S4b lessons generated that day called "cancelling α" circular
+# in the uniqueness proof of inverses, and keyed a true claim False). Shared by every provider's proof track.
+CIRCULARITY_RULE = """\
+WHAT IS CIRCULAR: a step is circular only when it uses the statement being proved, or a result that is not yet
+available. "May not use" lists exactly those — never a step whose ingredients are already in hand. In particular, in the
+uniqueness half of an existence-and-uniqueness proof the objects exist BY HYPOTHESIS: with αβ = 1 and αβ′ = 1,
+β = β·1 = β(αβ′) = (βα)β′ = 1·β′ = β′ uses only associativity, commutativity and the identity (proved in S4a), so
+"multiplying by β" — cancelling α — is valid there, not circular. What may not be used is the general cancellation law
+or the formula 1/α before they are proved. A question never keys such a valid step as False, and a "may not use" line
+never forbids it."""

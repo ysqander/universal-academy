@@ -4,6 +4,7 @@ of the OpenAI set — tune them here only."""
 from __future__ import annotations
 
 from ..rules import (
+    CIRCULARITY_RULE,
     CAPSTONE_RULE,
     COMPLEX_FORM_RULE,
     COUNT_QUESTION_RULE,
@@ -662,7 +663,8 @@ PROOF_WRITER_INSTRUCTIONS = _swap(
 PROOF_REVIEWER_INSTRUCTIONS = _swap(
     REVIEWER_INSTRUCTIONS,
     "split_recommended: true only when",
-    PROOF_REVIEW_PASS + "\nsplit_recommended: true only when",
+    PROOF_REVIEW_PASS + "\n" + CIRCULARITY_RULE + "\nA 'may not use' line, a question key or a solution that calls a valid "
+    "step circular is a math error (math_errors).\nsplit_recommended: true only when",
 )
 
 

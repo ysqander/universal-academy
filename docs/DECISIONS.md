@@ -226,8 +226,8 @@ Details: [SPEC.md §6.7](SPEC.md).
   a lesson (`scripts/regenerate.py`, keeps progress) applies the current rules. Three S27 multiple-choice questions
   with several correct options are withheld and need rewriting.
 - Generation-time check for "more than one correct option" (§3).
-- Questions in the real course whose prompt prints the answer (bypass audit 2026-10-08): S8b k3q3 (v2 — rewrite
-  with `regenerate.py --only questions --note`), S1 k1q4, S11 k2q1, S24 k1q1 (v1 lessons — fixed when re-planned);
+- Questions in the real course whose prompt prints the answer (bypass audit 2026-10-08): ~~S8b k3q3~~ (rewritten the
+  same day), S1 k1q4, S11 k2q1, S24 k1q1 (v1 lessons — fixed when re-planned);
   inline checks S3b block 8 and S8b block 9 ask for a value their block prints.
 - The Library had no way to delete a course or a book (course deletion sat only at the very bottom of the course
   page; books had none). Added 2026-10-07: a delete button on every course card and book row, each with a
@@ -236,6 +236,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   split or remove it; it is re-planned as a kept skill whose objective is the computation (a "show that" about one
   given number is a computation, not a proof). Folding it into S2b/S2d would need a "merge" operation (not built).
 - Roll v2 out beyond S2/S3 skill by skill if the learner approves (§1).
+- The proof track's S4a (sample 3 of three live samples, judged blind "much better" than the old lesson) is in the real
+  course since 2026-10-08. Next: one proof skill per pattern (S4b find_then_check, S16 suppose_two, S17 law_chain, S18
+  two_halves, S20 conditions_or_counterexample), each run in a sandbox and judged before import.
 - Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).
 - Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys):
   the patterns it found — recognition-heavy served questions, misses re-tested only on the same numbers, long

@@ -1,55 +1,12 @@
-"""The proof track (2026-10-08): instruction texts for proof skills, used by the v2 planner, writer and reviewer in place
-of the general proof rules. Written from the learner's review of the first S4a ("Prove complex arithmetic laws by
-comparing coordinates" — "quite convoluted") and their discussion of it with another model: understand a SMALL proof
-and construct its calculations; numbers first, then what counts as a proof, then a special case the learner builds,
-then the general proof read as a worked solution, then transfer. See docs/lesson-v2.md "The proof track"."""
+"""OpenAI prompt set — the proof track's planner rules, writer track and review pass (rules shared: ..rules): the instruction texts tuned against GPT (gpt-6.1-sol / gpt-6-luna)."""
 
 from __future__ import annotations
 
-PROOF_PATTERN_NAMES = {
-    "two_routes": "Two routes, same destination",
-    "find_then_check": "Find it, then check it",
-    "suppose_two": "Suppose two, show they are one",
-    "law_chain": "One law per line",
-    "two_halves": "Two halves, one at a time",
-    "conditions_or_counterexample": "Check the conditions, or break one",
-}
-
-PROOF_FEEDBACK = """\
-WHAT THE LEARNER SAID ABOUT THE FIRST PROOF LESSON (S4a, "quite convoluted") — never repeat these
-14. The learner's part was trivial algebra inside someone else's proof: the faded step "rewrite $a(dt)+b(ct)$ with real
-   products regrouped" tested nothing about the proof.
-15. Long expansions instead of meaning: 12-term expansions of $(\\alpha\\beta)\\lambda$ in six letters dominated the
-   lesson, and too little said what a proof establishes.
-16. Symbol overload: on paper the learner "got lost interchanging the symbols" between the two calculations. The
-   questions also renamed the letters every time ($p,q,r,s$; $h,k,l,m,n,t$), inflated statements
-   ($(\\alpha+8)(\\beta+11i)=(11i+\\beta)(8+\\alpha)$) and asked "which continuation" between long method sentences.
-What they asked for: understand a SMALL proof and construct its calculations yourself — numbers first, then what
-counts as a proof, then a special case you build, then the general proof as a worked solution, then transfer."""
-
-PROOF_PATTERNS = """\
-THE SIX PROOF PATTERNS — each has ONE canonical name and scaffold, used unchanged in every lesson that applies it (the
-transfer between lessons is then visible; the strategy counts as one new idea):
-- two_routes, "Two routes, same destination": an identity. Compute each side on its own from the definitions, then
-  compare every coordinate (entry, value at a point). Scaffold: a slot table per application of a definition — for a
-  complex product (x+yi)(u+vi): product | x | y | u | v | real xu−yv | imaginary xv+yu, one row per product, "reset
-  the slots" between products (in F^n: entry k of each list; in F^S: the value at one point s) — and a comparison
-  table: coordinate | route A | route B | the real law that makes them equal.
-- find_then_check, "Find it, then check it": existence (and uniqueness) by solving the defining equations. Finding is
-  scratch work (suppose it exists, turn the condition into real equations, solve); checking shows the found object
-  works. Scaffold: unknown | condition | real equations | solved; two labelled boxes "Finding (scratch)" and "Checking
-  (proof)". Solving shows only this can work (uniqueness); the check shows it works (existence).
-- suppose_two, "Suppose two, show they are one": uniqueness. Name two candidates and evaluate one expression two ways
-  (0+0′ is 0′ because 0 is an identity, and 0 because 0′ is one). Scaffold: a facts card (both candidates with their
-  defining equations) and route | which fact removes which symbol | result.
-- law_chain, "One law per line": a derivation from the axioms in an abstract space. State the goal and the toolbox
-  (axioms by name, earlier results); motivate the one purposeful move before making it ("the only fact we have about
-  the scalar 0 is 0+0=0, so write 0v as (0+0)v"); then line | what changed | the one law.
-- two_halves, "Two halves, one at a time": an iff, a set equality, "the smallest … containing". An assume | show |
-  pattern table with one row per half, filled before either half is proved; each half uses its own pattern.
-- conditions_or_counterexample, "Check the conditions, or break one": closure for arbitrary members, or one pinned
-  counterexample. A membership card per condition: have (named values) | need | link. One counterexample refutes
-  "always"; one example never proves it; a counterexample must meet the hypotheses."""
+from ..rules import (
+    PROOF_FEEDBACK,
+    PROOF_PATTERNS,
+    REFERENCE_PROOF,
+)
 
 PROOF_PLANNER_RULES = f"""\
 PROOF SKILLS (kind 'proof') — THE PROOF PLAN
@@ -145,36 +102,6 @@ read once, as a worked solution.
 16. difficulty 3–4; est_minutes 12–15. out_of_scope: later skills' statements; a second proof of the same
    statement; shortcuts that replace the definition (multiplying by i as (x, y) → (−y, x) may go to 'deeper')."""
 
-REFERENCE_PROOF = """\
-REFERENCE PROOF LESSON — structure only. Its statement is not in this course (conjugates come in a later chapter):
-adapt the arc, never the content. Pattern two_routes; statement conj(αβ) = conj(α)·conj(β) for all α, β ∈ C, where
-conj(x+yi) = x − yi; letters α = a+bi, β = c+di.
-Teaching
-1. setup "Two routes, same destination": route A multiplies α and β, then conjugates; route B conjugates α and β,
-   then multiplies. The statement says the routes always meet; we may not assume it. We may use the definitions of
-   product and conjugate, equality = both coordinates equal, real-number laws. We may not use the statement itself.
-2. demonstrate "First, fill the slots": α = 2+i, β = i. Route B's first leg: conj(α) = 2 − i and conj(i) = 0 − 1i, so
-   the slot row of conj(α)·conj(β) is x = 2, y = −1, u = 0, v = −1.
-3. check (expression, constant key): "Compute the row and enter conj(α)·conj(β) in standard form." Key −1−2i. A
-   learner who mixes up the inputs gets 1−2i or 1+2i.
-4. check (reflect). Lead-in: route A, αi = (2+i)(0+1i) with slots 2, 1, 0, 1, gives −1+2i; its conjugate is −1−2i —
-   the same destination. "Why is this not yet a proof?"
-5. demonstrate "Letters stand for every input": keep β = i and write α = a+bi. Route B's first leg: conj(α) = a − bi,
-   conj(i) = 0 − 1i.
-6. faded_example: row x = a, y = −b, u = ?, v = ?. Check (expression): "Enter conj(α)·conj(i) in standard form; the
-   coordinates may stay unexpanded." Key -b-a*i.
-7. demonstrate: route A, αi with slots (a, b, 0, 1) gives −b + ai; its conjugate is −b − ai. Comparison table: real
-   −b | −b; imaginary −a | −a. Proved for β = i and every α.
-8. check (true_false_set) "We have proved:" conj(αi) = conj(α)·conj(i) for every α (T); conj(αβ) = conj(α)·conj(β) for
-   every α, β (F, not yet); the calculation with α = 2+i proved it for every α (F).
-9. generalize: β = c+di; route A | route B in one table (inner result, slots of the outer product, real coordinate,
-   imaginary coordinate); the real laws named once; "the letters were arbitrary, so … for all α, β"; the method in
-   one line.
-Practice: KP1 Transfer — served walkthrough of conj((1+i)α) = (1−i)·conj(α): s1 route A, key a-b-(a+b)*i; s2 the slots
-of route B's product, key (1, -1, a, -b); s3 the real law for one shown pair (choice). KP2 What a proof establishes —
-worked example conj(α+β) = conj(α) + conj(β); served true_false_set of 5 claims. Capstone: s1 μ = (2+i)(1+i), key
-1+3*i (earlier skill); s2 route A of conj(μα), key a-3*b-(3*a+b)*i; s3 the slots of conj(μ)·conj(α), key
-(1, -3, a, -b); s4 use — "μα = 4−7i for an α you are not told; enter conj(μ)·conj(α)", key 4+7*i."""
 
 PROOF_TRACK = f"""\
 THE PROOF TRACK (this lesson is a proof skill). Where it differs from the general rules above — the faded example,
@@ -362,6 +289,7 @@ with the method and replaces the summary.
 
 {REFERENCE_PROOF}"""
 
+
 PROOF_REVIEW_PASS = """\
 PROOF PASS (proof skills) — report into `issues` and `density_issues` in the usual form (location → what the learner
 must handle → why it hurts → the smallest repair).
@@ -421,12 +349,14 @@ generalize block that ends with the method instead of a summary block; knowledge
 true_false_set; a slot tuple (x, y, u, v) as a typed answer; real-number laws used freely inside coordinates; slot
 names as notation; the circularity warning stated once in the setup."""
 
+
 PROOF_QUESTION_REPAIR = (
     "the lesson's letters (never new ones) and a statement from the plan's practice_statements that no other served "
     "item and no worked example proves; never the second route's final value — ask for a leg the statement does not "
     "force (route A's result, route B's first leg, the slots of route B's last product); self-contained, only methods "
     "the lesson taught; one hint per step (the slots, never the result); a complete solution that agrees with the key."
 )
+
 
 PROOF_CAPSTONE_REPAIR = (
     "- in a proof skill the capstone is the plan's capstone statement in 4 steps: an earlier skill computes the fixed "

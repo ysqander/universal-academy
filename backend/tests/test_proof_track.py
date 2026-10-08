@@ -15,7 +15,7 @@ from app.learning.grading import UNCOMPUTED_FEEDBACK, UNCOMPUTED_REAL_FEEDBACK, 
 from app.llm_schemas import LessonV2Draft, ScopeStatement, TeachingPlan
 from app.pipeline.lesson_v2 import InvalidPlan, PlanGraph, validate_plan, validate_v2
 from app.pipeline.proof_track import plan_problems, proof_problems
-from app.pipeline.prompts_v2 import (
+from app.prompts.openai import (
     PLANNER_INSTRUCTIONS,
     PROOF_PLANNER_INSTRUCTIONS,
     PROOF_QUESTION_REPAIR_NOTE,

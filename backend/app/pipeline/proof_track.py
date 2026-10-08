@@ -1,4 +1,4 @@
-"""Mechanical checks of the proof track (prompts_proof.py, docs/lesson-v2.md "The proof track").
+"""Mechanical checks of the proof track (app/prompts/<provider>/proof.py, docs/lesson-v2.md "The proof track").
 
 The first S4a ("quite convoluted") broke rules a program can see: new letters in every question, 12-term expansions,
 inflated statements, a faded step that was a regrouping, "which continuation" choices between long method sentences.
@@ -19,7 +19,7 @@ import sympy as sp
 from ..learning.grading import parse_answer, parse_true_false_set
 from ..llm_schemas import InlineCheck, LessonV2Draft, MultistepStep, ProofPlan, QuestionDraft
 from .lessons import clamp_target
-from .prompts_proof import PROOF_PATTERN_NAMES
+from ..prompts.rules import PROOF_PATTERN_NAMES
 from .questions import _printed_in, visible_length
 
 RESERVED_LETTERS = {"e", "E", "i", "I", "j", "p"}  # grader constants; p next to i reads as π

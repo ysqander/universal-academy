@@ -87,7 +87,8 @@ step that was trivial regrouping, 12-term expansions in six letters, new letters
 understand a SMALL proof and construct its calculations; numbers first, then what counts as a proof, then a special
 case you build, then the general proof as a worked solution, then transfer.
 
-Proof skills (`is_proof_skill`) get their own instructions (`pipeline/prompts_proof.py`, assembled in `prompts_v2.py`
+Proof skills (`is_proof_skill`) get their own instructions (`app/prompts/<provider>/proof.py`, assembled in `v2.py`; the
+proof patterns, feedback and reference sketch are shared rules in `app/prompts/rules.py`
 as `PROOF_PLANNER_INSTRUCTIONS`, `PROOF_WRITER_INSTRUCTIONS`, `PROOF_REVIEWER_INSTRUCTIONS`) and run one reasoning
 notch higher on the same model (`UA_PROOF_EFFORT_NOTCHES`, default 1: planner and reviewer xhigh, writer high).
 

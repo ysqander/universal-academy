@@ -10,6 +10,8 @@ from pathlib import Path
 os.environ["UA_FAKE_LLM"] = "1"
 os.environ["UA_DATA_DIR"] = tempfile.mkdtemp(prefix="ua-test-")
 os.environ["NVIDIA_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ.pop("ANTHROPIC_BASE_URL", None)  # Claude Code exports it; the app never uses it
 
 import pytest  # noqa: E402
 

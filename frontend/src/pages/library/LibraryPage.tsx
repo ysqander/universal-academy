@@ -32,7 +32,8 @@ export function LibraryPage() {
   // Until the lists arrive, assume the common case (a returning learner) so the layout doesn't jump.
   const hasCourses = courses.data ? courses.data.length > 0 : true;
   const noBooks = books.data !== undefined && books.data.length === 0;
-  const missingKey = health.data && !health.data.openai && !health.data.fake_llm;
+  const missingKeys = health.data && !health.data.llm_ready ? health.data.missing_keys : [];
+  const missingKey = missingKeys.length > 0;
 
   if (unreachable) {
     return (
@@ -66,8 +67,8 @@ export function LibraryPage() {
         <div className="callout callout--warning library__notice">
           <Icon name="warning" size={18} />
           <span>
-            <strong>OPENAI_API_KEY is not set.</strong> Importing books works, but building a course needs the key in the project's
-            <code> .env</code>.
+            <strong>{missingKeys.join(" and ")} {missingKeys.length > 1 ? "are" : "is"} not set.</strong> Importing books works, but
+            building a course needs {missingKeys.length > 1 ? "the keys" : "the key"} in the project's <code> .env</code>.
           </span>
         </div>
       )}

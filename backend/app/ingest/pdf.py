@@ -23,7 +23,7 @@ from typing import Any, Literal
 import pymupdf
 from pydantic import BaseModel, Field
 
-from .. import llm
+from .. import llm, prompts
 from ..config import settings
 from ..schemas import OutlineNode
 from .nemotron import Block
@@ -366,13 +366,6 @@ class DetectedToc(BaseModel):
     entries: list[DetectedTocEntry] = Field(description="Entries in table-of-contents order; [] if none was found.")
 
 
-_DETECT_INSTRUCTIONS = """You read the extracted text of the first pages of a book and reconstruct its table of contents.
-Return every chapter and section listed in the printed table of contents, in order, with its level (1 = chapter or
-part, 2 = section, 3 = subsection) and the page number exactly as printed. Keep chapter/section numbers that are part
-of the title (e.g. '1A Vectors', 'Chapter 2: Limits'). Skip dotted leaders. Do not invent entries: if the text has no
-table of contents, return found=false and no entries."""
-
-
 async def detect_outline(pdf_path: Path, page_labels: list[str]) -> list[OutlineNode]:
     """Outline for a PDF without bookmarks: TOC text → LLM → printed page numbers → PDF indexes. [] if impossible."""
     if settings.fake_llm:
@@ -386,7 +379,7 @@ async def detect_outline(pdf_path: Path, page_labels: list[str]) -> list[Outline
     try:
         toc = await llm.structured(
             role="vision",
-            instructions=_DETECT_INSTRUCTIONS,
+            instructions=prompts.for_role("vision").DETECT_INSTRUCTIONS,
             text=text,
             schema=DetectedToc,
             max_output_tokens=16000,

@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ ! -f "$ROOT/.env" ]; then
   cp "$ROOT/.env.example" "$ROOT/.env"
-  echo "Created .env — add your OPENAI_API_KEY (and optionally NVIDIA_API_KEY), then run again."
+  echo "Created .env — add your OPENAI_API_KEY or ANTHROPIC_API_KEY (UA_LLM_PROVIDER picks one; optionally NVIDIA_API_KEY), then run again."
   exit 1
 fi
 

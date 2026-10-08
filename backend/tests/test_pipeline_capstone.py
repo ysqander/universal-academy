@@ -17,7 +17,7 @@ from app.llm_schemas import IndependentAnswer, LessonReview, LessonV2Draft, Mult
 from app.pipeline import jobs, topup, verify
 from app.pipeline.lesson_v2 import content_problems, render_lesson, stored_questions, validate_v2
 from app.pipeline.lessons import InvalidLesson
-from app.pipeline.prompts import (
+from app.prompts.openai import (
     DISTINCT_DEMANDS_RULE,
     LESSON_INSTRUCTIONS,
     MULTISTEP_FORMAT,
@@ -344,7 +344,7 @@ def test_top_ups_never_add_written_questions(tmp_path, monkeypatch):
 
 
 def test_prompts_carry_the_iteration_3_rules():
-    from app.pipeline.prompts_v2 import (
+    from app.prompts.openai import (
         CAPSTONE_RULE,
         PLANNER_INSTRUCTIONS,
         PROOF_RULE,
@@ -354,7 +354,7 @@ def test_prompts_carry_the_iteration_3_rules():
         V2_FEEDBACK,
         WRITER_INSTRUCTIONS,
     )
-    from app.pipeline.prompts import VERIFY_INSTRUCTIONS
+    from app.prompts.openai import VERIFY_INSTRUCTIONS
 
     for prompt in (LESSON_INSTRUCTIONS, TOPUP_INSTRUCTIONS, WRITER_INSTRUCTIONS):
         assert NO_WRITTEN_ANSWERS_RULE in prompt and DISTINCT_DEMANDS_RULE in prompt and MULTISTEP_FORMAT in prompt

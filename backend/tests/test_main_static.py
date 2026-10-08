@@ -10,8 +10,24 @@ def test_spa_route_blocks_path_traversal():
     for path in ("/..%2F..%2FREADME.md", "/..%2F..%2F.env", "/%2Fetc%2Fhosts", "/..%2Fbackend%2Fpyproject.toml"):
         r = client.get(path)
         assert "OPENAI_API_KEY" not in r.text
+        assert "ANTHROPIC_API_KEY" not in r.text
         assert "[project]" not in r.text
         assert "localhost" not in r.text or r.headers.get("content-type", "").startswith("text/html")
+
+
+def test_health_names_the_provider_and_the_missing_keys_never_the_keys(monkeypatch):
+    from app.config import settings
+
+    object.__setattr__(settings, "fake_llm", False)
+    object.__setattr__(settings, "llm_provider", "anthropic")
+    try:
+        body = TestClient(app).get("/api/health").json()
+    finally:
+        object.__setattr__(settings, "fake_llm", True)
+        object.__setattr__(settings, "llm_provider", "openai")
+    assert body["provider"] == "anthropic" and body["llm_ready"] is False and body["missing_keys"] == ["ANTHROPIC_API_KEY"]
+    assert body["models"]["lesson"].startswith("anthropic:claude-opus-5-5")
+    assert "sk-" not in str(body)
 
 
 def test_unknown_api_path_is_404():

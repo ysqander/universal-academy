@@ -33,13 +33,7 @@ from .. import db, llm
 from ..learning.grading import check_answer
 from ..llm_schemas import IndependentAnswer
 from .lessons import LEGACY_TARGET, kp_targets
-from .prompts import (
-    VERIFY_INSTRUCTIONS,
-    VERIFY_STATEMENTS_RECHECK,
-    VERIFY_STEP_INSTRUCTIONS,
-    VERIFY_STEP_RECHECK,
-    VERIFY_STEP_STATEMENTS_RECHECK,
-)
+from .. import prompts
 from .questions import display_mismatch, is_machine_checkable
 
 log = logging.getLogger("ua.pipeline.verify")
@@ -181,13 +175,15 @@ def _reported(first: Verdict) -> str:
 
 
 async def recheck(
-    row: dict[str, Any], first: Verdict, *, text: str | None = None, instructions: str = VERIFY_STATEMENTS_RECHECK
+    row: dict[str, Any], first: Verdict, *, text: str | None = None, instructions: str | None = None
 ) -> Verdict:
     """Second, careful solve by the stronger 'graph' model of a disagreement (a true_false_set, or a step of a
     multistep question) or of a reported problem (shown to the second solver, who judges whether it is real).
     Agreement with the key and no confirmed defect keep the question servable; a failed call keeps the first
     verdict."""
     request = text if text is not None else verify_request(row)
+    # the re-check runs on the 'graph' role: its texts come from that role's provider's prompt set
+    instructions = instructions or prompts.for_role("graph").VERIFY_STATEMENTS_RECHECK
     reported = _reported(first)
     if reported:
         request += (
@@ -246,13 +242,16 @@ async def _solve(row: dict[str, Any], text: str, *, instructions: str, label: st
 
 
 async def _verify_single(row: dict[str, Any]) -> Verdict | None:
-    independent = await _solve(row, verify_request(row), instructions=VERIFY_INSTRUCTIONS, label=f"verify {row['key']}")
+    independent = await _solve(
+        row, verify_request(row), instructions=prompts.for_role("verify").VERIFY_INSTRUCTIONS, label=f"verify {row['key']}"
+    )
     if independent is None:
         return None
     verdict = judge(row, independent)
     status = verdict.record["status"]
     if (status == "disagree" and row["kind"] in RECHECK_KINDS) or status == "problem":
-        instructions = VERIFY_STATEMENTS_RECHECK if row["kind"] == "true_false_set" else VERIFY_INSTRUCTIONS
+        graph = prompts.for_role("graph")
+        instructions = graph.VERIFY_STATEMENTS_RECHECK if row["kind"] == "true_false_set" else graph.VERIFY_INSTRUCTIONS
         verdict = await recheck(row, verdict, instructions=instructions)
     return verdict
 
@@ -307,7 +306,8 @@ def step_request(row: dict[str, Any], steps: list[dict[str, Any]], index: int) -
 
 
 def _step_recheck_instructions(kind: str) -> str:
-    return VERIFY_STEP_STATEMENTS_RECHECK if kind == "true_false_set" else VERIFY_STEP_RECHECK
+    graph = prompts.for_role("graph")
+    return graph.VERIFY_STEP_STATEMENTS_RECHECK if kind == "true_false_set" else graph.VERIFY_STEP_RECHECK
 
 
 async def verify_multistep(row: dict[str, Any]) -> Verdict | None:
@@ -320,7 +320,7 @@ async def verify_multistep(row: dict[str, Any]) -> Verdict | None:
     texts = [step_request(row, steps, i) for i in range(len(steps))]
     answers = await asyncio.gather(
         *(
-            _solve(row, text, instructions=VERIFY_STEP_INSTRUCTIONS, label=f"verify {row['key']} step {i + 1}")
+            _solve(row, text, instructions=prompts.for_role("verify").VERIFY_STEP_INSTRUCTIONS, label=f"verify {row['key']} step {i + 1}")
             for i, text in enumerate(texts)
         )
     )

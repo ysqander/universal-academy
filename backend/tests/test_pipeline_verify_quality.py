@@ -13,7 +13,7 @@ from test_pipeline_build import build, llm_calls, tiny_course  # noqa: F401  (fi
 from app import db, fake_llm
 from app.llm_schemas import IndependentAnswer, QuestionDraft
 from app.pipeline import verify
-from app.pipeline.prompts import VERIFY_INSTRUCTIONS
+from app.prompts.openai import VERIFY_INSTRUCTIONS
 from app.pipeline.questions import InvalidQuestion, clean_question, display_mismatch
 
 

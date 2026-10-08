@@ -14,7 +14,7 @@ from ..llm_schemas import VisualizationPlan
 from .context import BuildContext, CourseInfo, FigureInfo, figure_line
 from .lessons import offered_figures
 from .plot import PlotError, sample_plot, valid_range
-from .prompts import VIZ_INSTRUCTIONS
+from .. import prompts
 from .textutil import bare_latex
 
 __all__ = ["bare_latex", "ensure_visual", "finalize_plan", "none_visual", "skill_figures", "viz_request"]
@@ -75,7 +75,7 @@ async def ensure_visual(ctx: BuildContext, skill_id: str, *, force: bool = False
         try:
             plan = await llm.structured(
                 role="viz",
-                instructions=VIZ_INSTRUCTIONS,
+                instructions=prompts.for_role("viz").VIZ_INSTRUCTIONS,
                 text=text,
                 schema=VisualizationPlan,
                 max_output_tokens=16000,

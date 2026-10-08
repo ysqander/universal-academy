@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .api import books, courses, study
-from .config import PROJECT_ROOT, settings
+from .config import KEY_NAMES, PROJECT_ROOT, ROLES, settings
 from .learning import grading
 from .pipeline import jobs
 from .schemas import Health
@@ -41,19 +41,19 @@ app.include_router(study.router)
 
 @app.get("/api/health", response_model=Health)
 def health() -> Health:
+    configs = {role: settings.role_config(role) for role in ROLES}
+    missing = [p for p in settings.providers_in_use if not settings.api_key(p)]
     return Health(
         openai=bool(settings.openai_api_key),
+        anthropic=bool(settings.anthropic_api_key),
+        provider=settings.llm_provider,
+        llm_ready=settings.llm_ready,
+        missing_keys=[] if settings.fake_llm else [KEY_NAMES[p] for p in missing],
         nvidia=settings.has_nvidia,
         fake_llm=settings.fake_llm,
         parse_engine=settings.parse_engine,
         max_course_pages=settings.max_course_pages,
-        models={
-            "vision": f"{settings.model_vision} ({settings.effort_vision})",
-            "graph": f"{settings.model_graph} ({settings.effort_graph})",
-            "lesson": f"{settings.model_lesson} ({settings.effort_lesson})",
-            "viz": f"{settings.model_viz} ({settings.effort_viz})",
-            "verify": f"{settings.model_verify} ({settings.effort_verify})",
-        },
+        models={role: f"{provider}:{model} ({effort})" for role, (provider, model, effort) in configs.items()},
     )
 
 

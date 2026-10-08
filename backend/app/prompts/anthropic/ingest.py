@@ -1,4 +1,5 @@
-"""Prompt text for page transcription (the main quality lever of ingestion)."""
+"""Anthropic prompt set — page transcription and table-of-contents detection: the instruction texts for Claude (Opus 5.5 / Haiku 5.5); started 2026-10-08 as a verbatim copy
+of the OpenAI set — tune them here only."""
 
 from __future__ import annotations
 
@@ -28,3 +29,10 @@ OTHER FIELDS
 - uncertain: anything you could not read reliably (quote it); [] if none.
 
 Before answering, re-read your Markdown against the image line by line: nothing dropped, every formula identical to the print, every box and margin note marked as above."""
+
+
+DETECT_INSTRUCTIONS = """You read the extracted text of the first pages of a book and reconstruct its table of contents.
+Return every chapter and section listed in the printed table of contents, in order, with its level (1 = chapter or
+part, 2 = section, 3 = subsection) and the page number exactly as printed. Keep chapter/section numbers that are part
+of the title (e.g. '1A Vectors', 'Chapter 2: Limits'). Skip dotted leaders. Do not invent entries: if the text has no
+table of contents, return found=false and no entries."""

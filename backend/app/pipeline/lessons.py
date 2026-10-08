@@ -20,7 +20,7 @@ from .context import (
     focus_pages,
     page_marker,
 )
-from .prompts import LESSON_INSTRUCTIONS
+from .. import prompts
 from .questions import (
     MAX_CHOICE_SHARE_HARD,
     InvalidQuestion,
@@ -83,7 +83,7 @@ async def ensure_lesson(ctx: BuildContext, skill_id: str, prefix: str, *, force:
         try:
             draft = await llm.structured(
                 role="lesson",
-                instructions=LESSON_INSTRUCTIONS,
+                instructions=prompts.for_role("lesson").LESSON_INSTRUCTIONS,
                 shared_prefix=prefix,
                 text=request,
                 schema=LessonDraft,
@@ -297,6 +297,7 @@ def persist_lesson(
     written, from another process) are abandoned in the same transaction, so no task can point at a deleted question.
     The capstone is stored like a v2 lesson's: role 'capstone', kp_index = the number of knowledge points.
     Returns the number of tasks abandoned."""
+    lesson = {**lesson, "generator": lesson.get("generator") or llm.generator(("graph", "lesson", "verify"))}
     with db.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")  # the task check and the question swap are one step, also for other processes
         abandoned = abandon_active_tasks(conn, skill_id)

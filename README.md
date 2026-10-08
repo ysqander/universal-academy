@@ -37,4 +37,4 @@ Refresh a course after prompt changes, keeping your progress (stop the app first
 cd backend && .venv/bin/python scripts/regenerate.py --course <course_id> --dry-run
 ```
 
-Model roles (vision `gpt-6-luna`, graph/lessons/visuals `gpt-6.1-sol`, verification `gpt-6-luna`) and other knobs are documented in [docs/SPEC.md §8](docs/SPEC.md).
+Model roles run on OpenAI (vision `gpt-6-luna`, graph/lessons/visuals `gpt-6.1-sol`, verification `gpt-6-luna`) or on Anthropic (`UA_LLM_PROVIDER=anthropic`: Haiku 5.5 for vision and verification, Opus 5.5 for the rest), per role if you like; these and other knobs are documented in [docs/SPEC.md §8](docs/SPEC.md).

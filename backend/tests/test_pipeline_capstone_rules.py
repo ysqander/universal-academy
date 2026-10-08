@@ -330,7 +330,7 @@ def test_coordinate_pair_answers_in_practice_are_reported():
 
 
 def test_prompts_carry_the_iteration_3_review_decisions():
-    from app.pipeline.prompts import (
+    from app.prompts.openai import (
         CAPSTONE_RULE,
         COMPLEX_FORM_RULE,
         DISTINCT_DEMANDS_RULE,
@@ -338,7 +338,7 @@ def test_prompts_carry_the_iteration_3_review_decisions():
         MATH_FORMAT,
         TOPUP_INSTRUCTIONS,
     )
-    from app.pipeline.prompts_v2 import (
+    from app.prompts.openai import (
         PLANNER_INSTRUCTIONS,
         QUESTION_RULES,
         REVIEWER_INSTRUCTIONS,

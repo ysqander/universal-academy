@@ -28,6 +28,12 @@ rule still written inside a provider template moves to rules.py the next time it
 (proof track, answers the learner can read or type back, served sequence, grader) are code and apply to both. Before
 Anthropic becomes the default: the verification benchmark (§6) is rerun with Haiku 5.5, and a Claude S4a is judged
 blind against the Sol one (with GPT as a second reviewer, since the judges are Claude models).
+First live check (2026-10-08, $0.17): every output schema works on Haiku 5.5 and Opus 5.5, with page images and
+prompt caching (a second call read 6.4K cached tokens at a tenth of the price). Anthropic refuses to compile the
+grammar of the four largest schemas (VisualizationPlan, TeachingPlan, LessonDraft, LessonV2Draft: "The compiled
+grammar is too large" — stripping descriptions, enums or number types does not help), so those are answered with the
+schema in the system prompt and validated as usual, a rejected reply retried with the error (`llm_anthropic`,
+prompted mode). The key must belong to a workspace, or ANTHROPIC_WORKSPACE_ID must name one.
 
 ## 2. Lessons
 

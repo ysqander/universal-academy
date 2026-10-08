@@ -459,3 +459,22 @@ def test_in_a_mixed_setup_every_call_gets_its_own_roles_texts(tmp_path, monkeypa
         if "REVISION:" in text:
             assert ("ANTHROPIC::REVISION:" in text) == (role == "lesson")
     assert any("ANTHROPIC::REVISION:" in text for role, _, text in seen if role == "lesson")
+
+
+def test_a_schema_too_large_for_a_grammar_is_answered_from_the_prompt(monkeypatch):
+    """Anthropic refuses some schemas ("The compiled grammar is too large", found live for the lesson schemas): the call
+    switches to prompted JSON — schema in the system prompt, no output_config.format — without losing an attempt, stays
+    there for that schema, and a reply that does not validate is retried with the error."""
+    monkeypatch.setattr(llm_anthropic, "_PROMPTED", set())
+    refused = _status_error(llm_anthropic.anthropic.BadRequestError, 400)
+    refused.message = "The compiled grammar is too large, which would cause performance issues."
+    fenced = "```json\n" + json.dumps({"choice": None, "answer": "3+i", "confidence": 0.9, "problems": ""}) + "\n```"
+    client, answer = _call(monkeypatch, [refused, _message({"choice": "x"}), _message(fenced)])
+    assert answer.answer == "3+i" and answer.choice is None
+    grammar, first, second = client.requests
+    assert "format" in grammar["output_config"] and "format" not in first["output_config"]
+    assert any("JSON Schema" in block["text"] for block in first["system"]) and first["system"][-1].get("cache_control")
+    assert "YOUR PREVIOUS REPLY WAS REJECTED" in second["messages"][0]["content"][-1]["text"]
+    assert "IndependentAnswer" in llm_anthropic._PROMPTED
+    client, _ = _call(monkeypatch, [_message(ANSWER)])  # the next call goes straight to prompted mode
+    assert "format" not in client.requests[0]["output_config"]

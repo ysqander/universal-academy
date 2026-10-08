@@ -5,7 +5,10 @@ the instructions and the shared prefix cached as system blocks, streaming, retri
 The schema is the one the OpenAI path sends (every field required, additionalProperties false), adapted to
 Anthropic's limits: at most 16 union-typed fields per request, so a nullable string, number or list is sent as a plain
 field with a "none" sentinel ("", -1, []) and turned back into null before validation (anthropic_schema /
-restore_nulls). The client only ever uses the app's own key and base URL — never ANTHROPIC_BASE_URL or a profile from
+restore_nulls). Anthropic also refuses a schema whose compiled grammar is "too large" — no published limit; the first
+live run (2026-10-08) found it for VisualizationPlan, TeachingPlan, LessonDraft and LessonV2Draft, whatever was
+stripped. Such a schema is answered in PROMPTED mode for the rest of the process: the schema goes into the system
+prompt, the reply is parsed and validated as usual, and a reply that does not validate is retried with the error. The client only ever uses the app's own key and base URL — never ANTHROPIC_BASE_URL or a profile from
 the environment (Claude Code exports ANTHROPIC_BASE_URL to the shells it starts).
 """
 
@@ -45,6 +48,14 @@ PRICES: dict[str, tuple[float, float, float, float, float]] = {
 LONG_PROMPT: dict[str, tuple[int, float]] = {"claude-haiku-5-5": (100_000, 5.0)}
 # error types worth another attempt, also when they arrive inside a stream that began with HTTP 200
 RETRYABLE_TYPES = {"overloaded_error", "api_error", "timeout_error", "rate_limit_error"}
+# a schema Anthropic cannot compile into a grammar → prompted mode (schema names, for the life of the process)
+GRAMMAR_REFUSED = ("grammar is too large", "too complex for compilation", "schema is too complex")
+_PROMPTED: set[str] = set()
+PROMPTED_JSON = (
+    "OUTPUT FORMAT: reply with ONE JSON object and nothing else — no text before or after it, no code fences. It must "
+    "satisfy this JSON Schema exactly: every property it lists and no other, the types and enum values as given, null "
+    "only where the schema allows it. The descriptions in the schema are instructions too.\nJSON Schema:\n{schema}"
+)
 _SENTINEL = {"string": "", "integer": -1, "number": -1, "array": []}
 
 _client: AsyncAnthropic | None = None
@@ -197,6 +208,32 @@ def _anthropic_schema_json(schema: type[BaseModel]) -> str:
     return json.dumps(adapted)
 
 
+@functools.lru_cache(maxsize=None)
+def prompted_schema_json(schema: type[BaseModel]) -> str:
+    """The strict schema as text for the system prompt (prompted mode): pydantic's titles and unused $defs dropped,
+    nulls kept (no union limit applies to text)."""
+    root = copy.deepcopy(strict_schema(schema))
+
+    def clean(node: dict) -> dict:
+        node.pop("title", None)
+        return node
+
+    out = _walk(root, root, clean)
+    if "$defs" in out:
+        used = _used_defs(out)
+        out["$defs"] = {name: d for name, d in out["$defs"].items() if name in used}
+        if not out["$defs"]:
+            out.pop("$defs")
+    return json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+
+
+def _json_text(output: str) -> str:
+    """The JSON object in a prompted-mode reply (code fences or a stray sentence around it are tolerated)."""
+    text = output.strip()
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if start != -1 and end > start else text
+
+
 def anthropic_schema(schema: type[BaseModel]) -> dict:
     """The JSON schema sent in output_config.format for this model (cached per model class)."""
     return json.loads(_anthropic_schema_json(schema))
@@ -239,9 +276,11 @@ def _image_block(png: bytes) -> dict:
 
 def build_request(
     *, model: str, effort: str, instructions: str, text: str, schema: type[BaseModel], images: list[bytes] | None,
-    shared_prefix: str | None, budget: int,
+    shared_prefix: str | None, budget: int, mode: str = "grammar",
 ) -> dict:
     system: list[dict] = [{"type": "text", "text": instructions}]
+    if mode == "prompted":
+        system.append({"type": "text", "text": PROMPTED_JSON.format(schema=prompted_schema_json(schema))})
     if shared_prefix:
         system.append({"type": "text", "text": shared_prefix})
     # one breakpoint after the last system block: instructions (+ chapter) are reused across a lesson's calls and
@@ -252,13 +291,16 @@ def build_request(
     system[-1]["cache_control"] = cache
     content: list[dict] = [_image_block(png) for png in images or []]  # images before the text (Anthropic's advice)
     content.append({"type": "text", "text": text})
+    output_config: dict[str, Any] = {"effort": effort}
+    if mode == "grammar":
+        output_config["format"] = {"type": "json_schema", "schema": anthropic_schema(schema)}
     return {
         "model": model,
         "max_tokens": budget,
         "system": system,
         "messages": [{"role": "user", "content": content}],
         "thinking": {"type": "adaptive"},
-        "output_config": {"format": {"type": "json_schema", "schema": anthropic_schema(schema)}, "effort": effort},
+        "output_config": output_config,
     }
 
 
@@ -269,17 +311,21 @@ async def structured(
     """llm.structured for Anthropic. Always streamed (the SDK requires it for large max_tokens, and long silent
     requests get dropped). Retries (3 attempts) like the OpenAI path: overload/server errors, broken streams,
     truncation (larger budget), refusals and output that does not fit the schema; usage of every billed attempt is
-    recorded."""
+    recorded. A schema whose grammar Anthropic refuses switches to prompted mode (not counted as an attempt)."""
     from .llm import LLMError, _get_semaphore
 
     budget = min(max_output_tokens, MAX_BUDGET)
     last_error: Exception | None = None
-    for attempt in range(3):
+    mode = "prompted" if schema.__name__ in _PROMPTED else "grammar"
+    feedback = ""  # prompted mode: why the previous reply was rejected
+    attempt = -1
+    while attempt < 2:
+        attempt += 1
         started = time.monotonic()
         try:
             request = build_request(
-                model=model, effort=effort, instructions=instructions, text=text, schema=schema, images=images,
-                shared_prefix=shared_prefix, budget=budget,
+                model=model, effort=effort, instructions=instructions, text=text + feedback, schema=schema,
+                images=images, shared_prefix=shared_prefix, budget=budget, mode=mode,
             )
         except ValueError as e:  # a schema Anthropic cannot take: a programming error, not retryable
             raise LLMError(str(e)) from e
@@ -296,6 +342,11 @@ async def structured(
         except anthropic.NotFoundError as e:
             raise LLMError(f"Anthropic does not know the model {model!r}: {e.message}") from e
         except anthropic.BadRequestError as e:  # bad schema / parameter / image: retrying cannot help
+            if mode == "grammar" and any(m in str(e.message).lower() for m in GRAMMAR_REFUSED):
+                _PROMPTED.add(schema.__name__)
+                log.warning("%s: Anthropic cannot compile its grammar (%s) — prompted JSON from now on", schema.__name__, e.message)
+                mode, attempt = "prompted", attempt - 1
+                continue
             if "workspace" in str(e.message).lower() and not settings.anthropic_workspace_id:
                 raise LLMError(
                     "The Anthropic key is not tied to a workspace: add ANTHROPIC_WORKSPACE_ID=<workspace id> to .env "
@@ -341,9 +392,15 @@ async def structured(
             last_error = LLMError(f"model returned no output (stop_reason {stop})")
             continue
         try:
-            return schema.model_validate(restore_nulls(json.loads(output), schema))
+            data = json.loads(_json_text(output) if mode == "prompted" else output)
+            return schema.model_validate(restore_nulls(data, schema))
         except (ValueError, ValidationError) as e:  # not JSON, or JSON that does not fit the schema
             last_error = e
+            if mode == "prompted":
+                feedback = (
+                    f"\n\nYOUR PREVIOUS REPLY WAS REJECTED — {str(e)[:2000]}\nReply again with the complete JSON object "
+                    "only, satisfying the schema."
+                )
             continue
 
     raise LLMError(f"{role} call failed after retries ({label}): {last_error}")

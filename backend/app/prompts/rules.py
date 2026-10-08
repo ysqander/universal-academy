@@ -423,3 +423,14 @@ of route B's product, key (1, -1, a, -b); s3 the real law for one shown pair (ch
 worked example conj(α+β) = conj(α) + conj(β); served true_false_set of 5 claims. Capstone: s1 μ = (2+i)(1+i), key
 1+3*i (earlier skill); s2 route A of conj(μα), key a-3*b-(3*a+b)*i; s3 the slots of conj(μ)·conj(α), key
 (1, -3, a, -b); s4 use — "μα = 4−7i for an α you are not told; enter conj(μ)·conj(α)", key 4+7*i."""
+
+
+# The planner's and writer's header above the skill's misconceptions (a Learner's miss is re-tested on NEW numbers).
+MISCONCEPTIONS_HEADER = (
+    "Known misconceptions (a line starting \"Learner's miss\" is what this learner actually got wrong: re-test it with "
+    "NEW numbers that set the same trap, in a format at least as demanding as the one it was missed in (a typed miss "
+    "typed; a miss on a choice question typed when its demand has a value), as a question served first in its "
+    "knowledge point or a capstone step — the missed problem itself with the wrong answer as an option is not a test; "
+    "a line starting \"Prerequisite slip\" needs no bridge: a one-line recall where it is first needed and one typed "
+    "question served first that includes the case):"
+)

@@ -600,6 +600,11 @@ REVISION: below are your previous draft of this lesson and a review of it. Write
 - fix the validation problems listed (they make the draft unusable);
 - keep everything that works — do not rewrite good blocks for the sake of it, and do not add new objectives."""
 
+SECOND_REVISION_NOTE = (
+    "SECOND REVISION: fix only the [blocking] items, the untaught-method exercises, the math errors and the validation "
+    "problems below; change nothing else — every other block, question and the capstone stay exactly as they are."
+)
+
 
 # ---------------------------------------------------------------------------
 # The proof track (proof.py): proof skills get their own planner, writer and reviewer instructions — the general

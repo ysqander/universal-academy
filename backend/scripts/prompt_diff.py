@@ -27,6 +27,11 @@ def texts(provider: str) -> dict[str, str]:
     return {k: v for k, v in vars(module).items() if k.isupper() and isinstance(v, str) and k not in shared}
 
 
+def _lines(text: str) -> list[str]:
+    """Each source line wrapped on its own, so an edit reflows only its paragraph in the diff."""
+    return [w for line in text.splitlines() for w in (textwrap.wrap(line, 120) or [""])]
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("name", nargs="?", help="one text to diff, e.g. WRITER_INSTRUCTIONS")
@@ -37,8 +42,7 @@ def main() -> int:
         if args.name not in a:
             print(f"unknown text {args.name!r}; one of: {', '.join(sorted(a))}")
             return 2
-        old = textwrap.fill(a[args.name], 120, replace_whitespace=False).splitlines()
-        new = textwrap.fill(b[args.name], 120, replace_whitespace=False).splitlines()
+        old, new = _lines(a[args.name]), _lines(b[args.name])
         diff = list(difflib.unified_diff(old, new, "openai", "anthropic", n=args.context, lineterm=""))
         print("\n".join(diff) if diff else f"{args.name}: the same in both sets")
         return 0

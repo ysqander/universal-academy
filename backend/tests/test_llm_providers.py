@@ -335,3 +335,127 @@ def test_the_dispatcher_sends_anthropic_roles_to_the_anthropic_module(monkeypatc
         object.__setattr__(settings, "fake_llm", True)
         object.__setattr__(settings, "provider_lesson", "")
     assert seen["model"] == "claude-opus-5-5" and seen["effort"] == "high" and seen["label"].endswith("@high")
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (2026-10-08): errors inside a stream, ambient SDK variables, the project's key first, mixed setups
+# ---------------------------------------------------------------------------
+
+
+def _sse(*events: tuple[str, dict]) -> bytes:
+    return "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events).encode()
+
+
+_START = ("message_start", {"type": "message_start", "message": {
+    "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-5-5", "content": [], "stop_reason": None,
+    "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 1, "cache_creation_input_tokens": 0,
+                                     "cache_read_input_tokens": 0}}})
+
+
+def _answer_stream(payload: dict) -> bytes:
+    return _sse(
+        _START,
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": json.dumps(payload)}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 20}}),
+        ("message_stop", {"type": "message_stop"}),
+    )
+
+
+def test_an_overload_inside_a_stream_is_retried(monkeypatch):
+    """The SDK raises an error event that arrives after HTTP 200 as APIStatusError(status 200) — it must be retried."""
+    bodies = [_sse(_START, ("error", {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})),
+              _answer_stream(ANSWER)]
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=bodies[len(calls) - 1])
+
+    client = llm_anthropic.AsyncAnthropic(api_key="sk-test", base_url="https://api.anthropic.com", max_retries=0,
+                                          http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+    monkeypatch.setattr(llm_anthropic, "_get_client", lambda: client)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    answer = asyncio.run(llm_anthropic.structured(
+        role="verify", model="claude-haiku-5-5", effort="high", instructions="RULES", text="TASK", schema=S.IndependentAnswer,
+        images=None, shared_prefix=None, max_output_tokens=16000, label="t"))
+    assert answer.answer == "3+i" and len(calls) == 2
+
+
+def test_no_ambient_anthropic_variable_reaches_the_client(monkeypatch):
+    monkeypatch.setattr(llm_anthropic, "_client", None)
+    monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "x-api-key: someone-elses-key\nx-extra: 1")
+    object.__setattr__(settings, "anthropic_api_key", "sk-ant-test")
+    try:
+        client = llm_anthropic._get_client()
+        headers = {k.lower(): v for k, v in client.default_headers.items()}
+        assert "x-extra" not in headers and headers.get("x-api-key") in (None, "sk-ant-test")
+        assert os.environ["ANTHROPIC_CUSTOM_HEADERS"].startswith("x-api-key")  # the environment itself is left as it was
+    finally:
+        object.__setattr__(settings, "anthropic_api_key", "")
+        monkeypatch.setattr(llm_anthropic, "_client", None)
+
+
+def test_the_projects_anthropic_key_wins_over_the_shells(monkeypatch):
+    from app import config
+
+    monkeypatch.setattr(config, "_DOTENV", {"ANTHROPIC_API_KEY": "from-dotenv"})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-the-shell")
+    assert config._project_first("ANTHROPIC_API_KEY") == "from-dotenv"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # an explicit blank (test server, pytest) still wins
+    assert config._project_first("ANTHROPIC_API_KEY") == ""
+    monkeypatch.setattr(config, "_DOTENV", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-the-shell")
+    assert config._project_first("ANTHROPIC_API_KEY") == "from-the-shell"
+
+
+def test_a_shared_rule_in_one_set_is_in_the_other_set_too():
+    from app.prompts import rules
+
+    openai, anthropic = (public_texts(prompts.for_provider(p)) for p in PROVIDERS)
+    for rule_name, rule in public_texts(rules).items():
+        for name in openai:
+            if name in public_texts(rules):
+                continue
+            assert (rule in openai[name]) == (rule in anthropic[name]), f"{rule_name} in {name}"
+
+
+def test_in_a_mixed_setup_every_call_gets_its_own_roles_texts(tmp_path, monkeypatch):
+    """Claude writes (lesson role), GPT plans, reviews and verifies: each call's instructions — and the revision note the
+    writer reads — come from the set of the provider that runs that call's role."""
+    from test_pipeline_v2 import built_course, skill_by_title
+
+    from app import fake_llm
+    from app.pipeline.replan import replan
+
+    anthropic = prompts.for_provider("anthropic")
+    for name, text in public_texts(anthropic).items():
+        monkeypatch.setattr(anthropic, name, "ANTHROPIC::" + text)  # mark the Claude set
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Justify commutativity")["key"]
+    seen: list[tuple[str, str, str]] = []
+    original = fake_llm.respond
+
+    def capture(**kwargs):
+        seen.append((kwargs["role"], kwargs["instructions"], kwargs["text"]))
+        return original(**kwargs)
+
+    monkeypatch.setattr(fake_llm, "respond", capture)
+    object.__setattr__(settings, "provider_lesson", "anthropic")
+    try:
+        result = asyncio.run(replan(cid, key, no_split=True)).results[0]
+    finally:
+        object.__setattr__(settings, "provider_lesson", "")
+    assert result.ok, result.error
+    roles = {role for role, _, _ in seen}
+    assert {"graph", "lesson", "verify"} <= roles
+    for role, instructions, text in seen:
+        assert instructions.startswith("ANTHROPIC::") == (role == "lesson"), (role, instructions[:60])
+        if "REVISION:" in text:
+            assert ("ANTHROPIC::REVISION:" in text) == (role == "lesson")
+    assert any("ANTHROPIC::REVISION:" in text for role, _, text in seen if role == "lesson")

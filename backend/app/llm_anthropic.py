@@ -17,8 +17,10 @@ import copy
 import functools
 import json
 import logging
+import os
 import time
 from typing import Any
+from unittest import mock
 
 import anthropic
 from anthropic import AsyncAnthropic
@@ -41,6 +43,8 @@ PRICES: dict[str, tuple[float, float, float, float, float]] = {
     "claude-haiku-5-5": (0.10, 0.125, 0.20, 0.01, 0.50),
 }
 LONG_PROMPT: dict[str, tuple[int, float]] = {"claude-haiku-5-5": (100_000, 5.0)}
+# error types worth another attempt, also when they arrive inside a stream that began with HTTP 200
+RETRYABLE_TYPES = {"overloaded_error", "api_error", "timeout_error", "rate_limit_error"}
 _SENTINEL = {"string": "", "integer": -1, "number": -1, "array": []}
 
 _client: AsyncAnthropic | None = None
@@ -53,12 +57,17 @@ def _get_client() -> AsyncAnthropic:
 
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set — add it to the .env file in the project root.")
-        # explicit key and base URL: the SDK then consults no environment variable, profile or federation config
+        # Everything explicit, and the SDK built where it sees no ANTHROPIC_* variable at all: with a key it skips the
+        # credential chain, but it would still merge ANTHROPIC_CUSTOM_HEADERS into every request (headers that can
+        # carry another credential), and Claude Code exports ANTHROPIC_* settings to the shells it starts.
         headers = {"anthropic-workspace-id": settings.anthropic_workspace_id} if settings.anthropic_workspace_id else None
-        _client = AsyncAnthropic(
-            api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url, max_retries=5, timeout=900.0,
-            default_headers=headers,
-        )
+        with mock.patch.dict(os.environ):
+            for name in [k for k in os.environ if k.startswith("ANTHROPIC_")]:
+                del os.environ[name]
+            _client = AsyncAnthropic(
+                api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url, max_retries=5, timeout=900.0,
+                default_headers=headers,
+            )
     return _client
 
 
@@ -287,10 +296,10 @@ async def structured(
         except anthropic.NotFoundError as e:
             raise LLMError(f"Anthropic does not know the model {model!r}: {e.message}") from e
         except anthropic.BadRequestError as e:  # bad schema / parameter / image: retrying cannot help
-            if "workspace" in str(e.message).lower():
+            if "workspace" in str(e.message).lower() and not settings.anthropic_workspace_id:
                 raise LLMError(
                     "The Anthropic key is not tied to a workspace: add ANTHROPIC_WORKSPACE_ID=<workspace id> to .env "
-                    "(Claude Console → Settings → Workspaces), or use a key created inside a workspace."
+                    f"(Claude Console → Settings → Workspaces), or use a key created inside a workspace. ({e.message})"
                 ) from e
             raise LLMError(f"Anthropic rejected the request ({model}): {e.message}") from e
         except anthropic.RateLimitError as e:  # the SDK already honoured retry-after; a spend cap does not clear
@@ -302,12 +311,14 @@ async def structured(
             await asyncio.sleep(5 * (attempt + 1))
             continue
         except anthropic.APIStatusError as e:
-            if e.status_code in (408, 409) or e.status_code >= 500:
+            # an error event inside a stream arrives as status 200 (the stream's own response) with its type in the body
+            kind = _error_type(e)
+            if e.status_code < 400 or e.status_code in (408, 409) or e.status_code >= 500 or kind in RETRYABLE_TYPES:
                 last_error = e
-                await asyncio.sleep(5 * (attempt + 1))
+                await asyncio.sleep((10 if kind == "rate_limit_error" else 5) * (attempt + 1))
                 continue
             raise LLMError(f"Anthropic rejected the request ({model}): HTTP {e.status_code} {e.message}") from e
-        except Exception as e:  # noqa: BLE001 — stream protocol errors, mid-stream error events …: retried
+        except Exception as e:  # noqa: BLE001 — stream protocol errors, connections dropped mid-stream …: retried
             log.warning("%s call %s: unexpected %s: %s", role, label, type(e).__name__, e)
             last_error = e
             await asyncio.sleep(5 * (attempt + 1))
@@ -336,6 +347,17 @@ async def structured(
             continue
 
     raise LLMError(f"{role} call failed after retries ({label}): {last_error}")
+
+
+def _error_type(e: Exception) -> str | None:
+    body = getattr(e, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("type"), str):
+            return error["type"]
+        if isinstance(body.get("type"), str) and body["type"] != "error":
+            return body["type"]
+    return getattr(e, "type", None)
 
 
 def _record_usage(role: str, model: str, message, label: str, seconds: float) -> None:

@@ -28,6 +28,7 @@ from typing import Any
 import networkx as nx
 
 from .. import db, llm, prompts
+from ..prompts.rules import MISCONCEPTIONS_HEADER
 from ..config import settings
 from ..llm_schemas import (
     BridgeIssue,
@@ -109,14 +110,6 @@ _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
 _QUESTION_KEY = re.compile(r"\bk\d+q\d+\b")
 _CAPSTONE_LOCATION = re.compile(r"\bcap\b|capstone", re.IGNORECASE)
-MISCONCEPTIONS_HEADER = (
-    "Known misconceptions (a line starting \"Learner's miss\" is what this learner actually got wrong: re-test it with "
-    "NEW numbers that set the same trap, in a format at least as demanding as the one it was missed in (a typed miss "
-    "typed; a miss on a choice question typed when its demand has a value), as a question served first in its "
-    "knowledge point or a capstone step — the missed problem itself with the wrong answer as an option is not a test; "
-    "a line starting \"Prerequisite slip\" needs no bridge: a one-line recall where it is first needed and one typed "
-    "question served first that includes the case):"
-)
 MAX_SHOWN_MISSES = 10  # learner misses on this skill (any lesson version) shown to the planner
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
 V2_VIZ = {"format": "none"}  # skills.viz_json of a v2 lesson: its visuals live in the blocks
@@ -682,17 +675,11 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
     return "\n".join(lines)
 
 
-SECOND_REVISION_NOTE = (
-    "SECOND REVISION: fix only the [blocking] items, the untaught-method exercises, the math errors and the validation "
-    "problems below; change nothing else — every other block, question and the capstone stay exactly as they are."
-)
-
-
 def revision_request(
     request: str, draft: LessonV2Draft, review: LessonReview, problems: list[str], round_: int = 0
 ) -> str:
-    revision_note = prompts.for_role("lesson").REVISION_NOTE  # read by the writer: its provider's wording
-    note = [revision_note] if round_ == 0 else [revision_note, "", SECOND_REVISION_NOTE]
+    texts = prompts.for_role("lesson")  # read by the writer: its provider's wording
+    note = [texts.REVISION_NOTE] if round_ == 0 else [texts.REVISION_NOTE, "", texts.SECOND_REVISION_NOTE]
     lines = [request, "", *note, "", "## Your previous draft (JSON)", draft.model_dump_json(), "", "## Review"]
     lines += review_lines(review) or ["(no issues reported)"]
     if problems:

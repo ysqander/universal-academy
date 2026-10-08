@@ -194,6 +194,11 @@ Details: [SPEC.md §6.7](SPEC.md).
   answer that still holds a complex computation — the question's product typed back, '(a+bi)(c+di)', 'c(a+bi)',
   '(a+bi)^2' — is "Not yet computed" (asked again, not counted), like an unsimplified number. Unexpanded real
   coordinates ('a(−d)−bc+(ac+b(−d))i') are accepted. A real key with letters takes no i.
+  The same day's bypass audit typed every expression printed in the course's 411 typed questions back as the
+  answer; 18 passed. Closed in the grader: list arithmetic typed back ('compute i(2,−1)' → 'i(2,-1)', '(a,b)+(c,d)')
+  is "work out each component", and a one-symbol key ('v', '2v') refuses '-(-v)', 'v+0', 'x+x'. Closed at
+  generation: a question whose prompt lets the learner type the answer back (`typed_back`, e.g. "forces λ = −1+2i"
+  for the key {−1+2i}) is rewritten like a printed answer. Not counted: a small integer, a zero answer, "or enter ∅".
 - A single value for a pair key (or vice versa) is invalid input (asked again), not wrong.
 - Roots left in a denominator (e.g. 1/√2) count as simplified (Axler doesn't require rationalising).
 
@@ -221,6 +226,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   a lesson (`scripts/regenerate.py`, keeps progress) applies the current rules. Three S27 multiple-choice questions
   with several correct options are withheld and need rewriting.
 - Generation-time check for "more than one correct option" (§3).
+- Questions in the real course whose prompt prints the answer (bypass audit 2026-10-08): S8b k3q3 (v2 — rewrite
+  with `regenerate.py --only questions --note`), S1 k1q4, S11 k2q1, S24 k1q1 (v1 lessons — fixed when re-planned);
+  inline checks S3b block 8 and S8b block 9 ask for a value their block prints.
 - The Library had no way to delete a course or a book (course deletion sat only at the very bottom of the course
   page; books had none). Added 2026-10-07: a delete button on every course card and book row, each with a
   confirmation; a book can be deleted once no course is built from it.

@@ -498,6 +498,7 @@ class Node:
     expr: sp.Expr | None = None
     items: list[Node] = field(default_factory=list)
     raw: sp.Expr | None = None  # scalar: the unevaluated parse tree (the form the learner typed)
+    arithmetic: bool = False  # tuple: read from list arithmetic ('i(2,-1)', '(1,2)+(0,1)'), not typed as a list
 
     def size(self) -> int:
         return 1 if self.kind == "scalar" else sum(i.size() for i in self.items)
@@ -624,7 +625,7 @@ def _parse_list_arithmetic(s: str) -> Node | None:
     for k in range(next(iter(sizes))):
         expr, raw = _parse_scalar(substitute(lambda j, parts: parts[k]))
         items.append(Node("scalar", expr=expr, raw=raw))
-    return Node("tuple", items=items)
+    return Node("tuple", items=items, arithmetic=True)
 
 
 _ALLOWED = re.compile(r"^[A-Za-z0-9_+\-*/(). ]*$")
@@ -1116,6 +1117,35 @@ def _uncomputed(raw: sp.Basic) -> bool:
     return False
 
 
+LIST_NOT_COMPUTED = "Same values — now work out each component and enter the resulting list itself."
+SYMBOL_NOT_SIMPLIFIED = "Same value — now simplify it."
+_SINGLE_SYMBOL = re.compile(r"^-?\s*(?:\d+\s*\*?\s*)?[A-Za-z]\w*$")
+
+
+def _list_arithmetic_feedback(expected: Node, got: Node) -> str | None:
+    """A list asked for, and the learner typed the arithmetic that produces it — the question's own 'i(2,-1)' or
+    '(1,2)+3(0,1)' — instead of working out the components (the bypass audit of 2026-10-08: 'compute i(2,-1)' accepted
+    'i(2,-1)', because distributing the scalar left reduced-looking components)."""
+    if got.arithmetic and expected.kind == "tuple" and not expected.arithmetic:
+        return LIST_NOT_COMPUTED
+    return None
+
+
+def _symbol_feedback(expected: Node, got: Node, response: str) -> str | None:
+    """A key that is one symbol, possibly with a number in front ('v', '-v', '2v' — a vector in an abstract space):
+    the answer must be that short too. '-(-v)', 'v+0', '1v+v' are the expression still to simplify (the audit found
+    'simplify -(-v)' accepting '-(-v)'; the parser folds the double sign, so the typed text is compared)."""
+    if expected.kind != "scalar" or got.kind != "scalar" or expected.raw is None or expected.expr is None:
+        return None
+    if not expected.expr.free_symbols or len(expected.expr.free_symbols) != 1:
+        return None
+    key_text = str(expected.raw).replace(" ", "")
+    if not _SINGLE_SYMBOL.match(key_text):
+        return None
+    typed = re.sub(r"\s+", "", response)
+    return SYMBOL_NOT_SIMPLIFIED if re.search(r"[()+]|--|-\s*-", typed) else None
+
+
 def _uncomputed_feedback(expected: Node, got: Node) -> str | None:
     """The standard-form rule for keys with letters (the proof track, 2026-10-08): "enter α(βi) in standard form" only
     measures something when '(a+bi)(-d+ci)' — the product retyped — is not accepted as the computed result. Applies
@@ -1427,7 +1457,12 @@ def _check_math(kind: str, answer: str, tolerance: float | None, response: str |
     if _same_text(answer, response or "", keep):
         return GradeResult(True, "Correct.")
     if require_simplified:
-        form = _uncomputed_feedback(expected, got) or _unsimplified_feedback(expected, got)
+        form = (
+            _list_arithmetic_feedback(expected, got)
+            or _uncomputed_feedback(expected, got)
+            or _symbol_feedback(expected, got, response or "")
+            or _unsimplified_feedback(expected, got)
+        )
         if form:
             return GradeResult(False, form, invalid=True)
     if tolerance is not None and _differs_numerically(expected, got):

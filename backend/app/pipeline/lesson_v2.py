@@ -1328,11 +1328,19 @@ async def draft_problems(
         if problem not in hard:
             hard.append(problem)
     soft = quality_problems(draft, proof=proof)
-    if proof and spec.proof is not None:
+    if proof and spec.proof is not None:  # the proof track's problems go to the revision; proof_debt weighs them
         p_hard, p_soft = proof_problems(draft, spec.proof)
-        hard += [p for p in p_hard if p not in hard]
-        soft += p_soft
+        soft += [f"proof track (must fix): {p}" for p in p_hard] + [f"proof track: {p}" for p in p_soft]
     return hard, [p for p in dict.fromkeys(soft) if p not in hard]
+
+
+def proof_debt(draft: LessonV2Draft, spec: TeachingSpec) -> int:
+    """The proof track's must-fix problems of a draft: weighed with the review's blocking issues when a revision is
+    compared with the draft before it (a revision that fixes the review but adds one style problem is still kept —
+    the second live S4a run lost two good revisions to a slot table in the capstone)."""
+    if spec.proof is None or not is_proof_spec(spec):
+        return 0
+    return len(proof_problems(draft, spec.proof)[0])
 
 
 # ---------------------------------------------------------------------------
@@ -1454,10 +1462,12 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
                 log.warning("revision %d of %s failed: %s", round_ + 1, key, e)
                 result.notes.append(f"revision {round_ + 1} failed ({e}); kept the previous draft")
                 break
-            if not hard and blocking_count(revised_review) > blocking_count(final_review):
+            before = blocking_count(final_review) + proof_debt(final, spec)
+            after = blocking_count(revised_review) + proof_debt(revised, spec)
+            if not hard and after > before:
                 result.notes.append(
-                    f"revision {round_ + 1} left more blocking issues ({blocking_count(revised_review)}) than the draft "
-                    f"before it ({blocking_count(final_review)}); kept that draft"
+                    f"revision {round_ + 1} left more blocking issues ({after}, proof-track problems included) than the "
+                    f"draft before it ({before}); kept that draft"
                 )
                 continue
             final, final_review, hard, soft = revised, revised_review, r_hard, r_soft

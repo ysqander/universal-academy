@@ -402,7 +402,11 @@ DENSITY (second pass): the new ideas of a proof lesson are the picture, the slot
 A fifth idea is surplus: move it to 'deeper' or cut it (a helper shortcut such as "multiplying by i sends (x, y) to
 (−y, x)", a second strategy, a second statement in the teaching, named inner results). A teaching sequence that spends
 more blocks on expansions than on the routes and their comparison is blocking.
-DO NOT REPORT (on purpose in the proof track): a faded example that continues the running statement; a faded check
+DO NOT REPORT (on purpose in the proof track): route B's final value or its coordinate comparison shown in an
+explanation instead of scored — the statement forces it, so it is never typed (the learner's decision), and the
+comparison is scored at most once, by the walkthrough's "which real law" choice or true_false_set step; a capstone
+without a comparison step (its four steps are the earlier skill, route A, route B's slots or first leg, and the use);
+a faded example that continues the running statement; a faded check
 whose answer equals route A's result when route A is shown only after it; a general case given only as a table; a
 generalize block that ends with the method instead of a summary block; knowledge point 2 leading with a
 true_false_set; a slot tuple (x, y, u, v) as a typed answer; real-number laws used freely inside coordinates; slot

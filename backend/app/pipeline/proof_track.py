@@ -47,6 +47,9 @@ _SLOT_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _RESET = re.compile(r"reset\s+the\s+slots", re.IGNORECASE)
 _GREEK_NAME = re.compile(r"\\(alpha|beta|gamma|lambda|mu)\b|([αβγλμ])")
 _GREEK_TO_NAME = {"α": "alpha", "β": "beta", "γ": "gamma", "λ": "lambda", "μ": "mu"}
+_CONDITIONAL_ANSWER = re.compile(
+    r"\bif\b[^.]{0,200}\benter\b[^.]{0,200}\binstead\b|\botherwise,?\s+enter\b|submit\s+one\s+answer", re.IGNORECASE
+)
 _COMPARISON_TABLE = re.compile(r"^\s*\|[^\n]*route\s*a[^\n]*\|[^\n]*route\s*b", re.IGNORECASE | re.MULTILINE)
 
 
@@ -287,6 +290,11 @@ def _arc_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], lis
             )
     elif first is not None:
         soft.append(f"block {first + 1}: the first graded check should finish a route on the plan's numbers (numeric or expression)")
+    if first is not None and plan.pattern == "two_routes" and _SLOT_ROW.search(blocks[first].body or "") and _unknown_cells(blocks[first].body) < 2:
+        hard.append(
+            f"block {first + 1}: the slot table of the first graded check prints the arithmetic it asks for — show the "
+            "product's slots and leave both results as '?', so the learner applies the definition (complaint 14)"
+        )
     faded = [n for n, b in enumerate(blocks) if b.kind == "faded_example"]
     if len(faded) != 1:
         soft.append(f"the teaching has {len(faded)} faded examples; exactly one — the guided case's key line")
@@ -363,6 +371,12 @@ def _walkthrough_problems(q: QuestionDraft, plan: ProofPlan, *, capstone: bool =
     for s in tf_steps:
         if not _tf_set_ok(s.choices, s.answer) or len(s.choices) > 5:
             problems.append(f"{q.key}: a true_false_set step needs 3–5 statements, both true and false ones")
+    for i, st in enumerate(steps, start=1):
+        if _CONDITIONAL_ANSWER.search(st.prompt or ""):
+            problems.append(
+                f"{q.key} step {i}: its answer depends on a condition ('if …, enter …; otherwise enter … instead') — one "
+                "step asks for one result; split it or drop the condition"
+            )
     slot_tuples: list[tuple[str, ...]] = []
     for i, s in enumerate(steps, start=1):
         if s.kind != "expression" or "slot" not in f"{s.prompt} {q.prompt}".lower():

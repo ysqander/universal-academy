@@ -254,3 +254,28 @@ def test_explanations_do_not_answer_the_next_step_and_the_capstone_keeps_the_let
     assert any("k1q1 step 2: its explanation prints the route comparison" in p for p in soft)
     assert any("\\lambda names a computed number" in p for p in soft)
     assert not any("\\alpha names" in p or "\\beta names" in p for p in soft)  # αβ = 2−5i assigns nothing
+
+
+def test_a_conditional_step_and_printed_arithmetic_are_found():
+    """The second live S4a: a capstone step 'if this justification holds enter the slots, otherwise enter {}', and a
+    numbers check whose table printed 1·(−1)−1·2 in the result cells."""
+    draft = lesson()
+    steps = list(draft.capstone.steps)
+    steps[2] = steps[2].model_copy(update={"prompt": "If the comparison holds, enter the four slots; otherwise enter {} instead."})
+    blocks = list(draft.blocks)
+    printed = blocks[2].model_copy(update={"body": blocks[2].body + "\n\n| product | $x$ | $y$ | $u$ | $v$ | real | imaginary |\n|---|---|---|---|---|---|---|\n| $\\alpha(\\beta\\lambda)$ | $1$ | $1$ | $-1$ | $2$ | $1(-1)-1\\cdot2$ | $1\\cdot2+1(-1)$ |"})
+    hard, _ = problems(draft.model_copy(update={"capstone": draft.capstone.model_copy(update={"steps": steps}),
+                                                 "blocks": [*blocks[:2], printed, *blocks[3:]]}))
+    assert any("cap step 3: its answer depends on a condition" in p for p in hard)
+    assert any("block 3: the slot table of the first graded check prints the arithmetic" in p for p in hard)
+
+
+def test_proof_problems_are_weighed_not_fatal_in_a_revision():
+    from app.pipeline.lesson_v2 import proof_debt
+
+    spec = fake_llm._spec("a", "Prove the laws", "Prove that αβ = βα for all α, β.", "proof", [], [0]).model_copy(update={"proof": proof_plan()})
+    draft = lesson()
+    assert proof_debt(draft, spec) == 0
+    cap = draft.capstone.model_copy(update={"prompt": draft.capstone.prompt + "\n\n| product | $x$ |\n|---|---|\n| $\\alpha\\mu$ | $a$ |"})
+    assert proof_debt(draft.model_copy(update={"capstone": cap}), spec) == 1
+    assert proof_debt(draft, spec.model_copy(update={"proof": None})) == 0

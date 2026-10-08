@@ -685,7 +685,7 @@ def test_a_revision_with_a_worse_review_is_not_taken(tmp_path, llm_calls, monkey
                 review_edit=lambda n, kw: _review_as(n > 1)(kw))
     result = asyncio.run(replan(cid, key)).results[0]
     assert result.ok and result.revisions == 0 and blocking_count(result.final_review) == 0
-    assert sum("left more blocking issues (1) than the draft before it (0)" in n for n in result.notes) == 2
+    assert sum("left more blocking issues (1, proof-track problems included) than the draft before it (0)" in n for n in result.notes) == 2
     assert any(n.startswith("stored although: the teaching sequence is too long (11 blocks") for n in result.notes)
 
 

@@ -18,6 +18,17 @@ When you change one of these decisions, update this file (and the SPEC section i
 Decision (2026-10-06): keep v2 off the in-app build for now; use it per skill from the command line while the
 generator is still being tuned.
 
+**Providers (decided 2026-10-08, the learner: "switch between openAI and anthropic").** Every LLM role runs on OpenAI
+or Anthropic (`UA_LLM_PROVIDER`, per role `UA_PROVIDER_<ROLE>`; default OpenAI until a Claude-generated lesson has been
+judged). Anthropic takes Opus 5.5 where OpenAI uses Sol and Haiku 5.5 where it uses Luna, at the same per-role efforts
+(Opus is twice Sol's price; Haiku costs what Luna does). **Prompts — option A:** the learner's rules are written once in
+`app/prompts/rules.py` and both providers follow them; each provider's wording and the corrections tuned against its
+model live in its own set (`app/prompts/openai/`, `app/prompts/anthropic/`), so tuning one never changes the other. A
+rule still written inside a provider template moves to rules.py the next time it changes. The automatic checks
+(proof track, answers the learner can read or type back, served sequence, grader) are code and apply to both. Before
+Anthropic becomes the default: the verification benchmark (§6) is rerun with Haiku 5.5, and a Claude S4a is judged
+blind against the Sol one (with GPT as a second reviewer, since the judges are Claude models).
+
 ## 2. Lessons
 
 - **Skills are outcomes** (decided 2026-10-07, from the learner's review of S3b). A skill names a task the learner

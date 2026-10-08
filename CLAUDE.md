@@ -2,7 +2,8 @@
 
 Local web app that turns a textbook chapter (PDF) into a Math-Academy-style course: a knowledge graph of micro-skills,
 lessons, checked practice and FSRS spaced repetition. FastAPI + SQLite backend in `backend/`, React + Vite frontend in
-`frontend/`, generation via the OpenAI API (and NVIDIA Nemotron for page layout).
+`frontend/`, generation via the OpenAI or Anthropic API (switchable per role, `UA_LLM_PROVIDER`; NVIDIA Nemotron for page
+layout).
 
 ## Read before changing anything
 
@@ -17,6 +18,10 @@ lessons, checked practice and FSRS spaced repetition. FastAPI + SQLite backend i
 `backend/app/schemas.py` (HTTP API), `backend/app/llm_schemas.py` (LLM structured outputs), `backend/app/db.py`
 (SQLite schema + migrations) and `frontend/src/types.ts` (TypeScript mirror of schemas.py). Keep schemas.py and
 types.ts in sync.
+
+Prompts: `backend/app/prompts/rules.py` holds the learner's rules, shared by both providers — a rule the learner gives
+goes there, once. `backend/app/prompts/openai/` and `backend/app/prompts/anthropic/` hold each provider's own wording;
+tuning for one model goes into that provider's set only (`backend/scripts/prompt_diff.py` shows the differences).
 
 ## Commands
 

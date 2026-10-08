@@ -14,9 +14,10 @@ FastAPI (Python 3.12, uvicorn)
    ├─ pipeline/    build job: render → parse → graph → lessons → visuals → verify → finalize
    ├─ learning/    grading, FSRS + FIRe-lite scheduler, task selector, XP
    ├─ api/         routers: books, courses, study
-   └─ llm.py       OpenAI wrapper (structured outputs, retries, concurrency, fake mode)
+   └─ llm.py       LLM entry point (structured outputs, retries, concurrency, fake mode); OpenAI here,
+                   Anthropic in llm_anthropic.py; prompts/ = rules.py (shared) + openai/ + anthropic/
 SQLite (<data>/academy.sqlite3) + files (<data>/books/<book_id>/…, <data>/courses/<course_id>/…); <data> = UA_DATA_DIR, default ~/Library/Application Support/UniversalAcademy (outside the cloud-synced project)
-External: OpenAI Responses API · NVIDIA Nemotron Parse (build.nvidia.com, optional)
+External: OpenAI Responses API or Anthropic Messages API (per role) · NVIDIA Nemotron Parse (build.nvidia.com, optional)
 ```
 
 Run: `./run.sh` (builds frontend if needed, starts uvicorn on :8000). Dev: `uvicorn app.main:app --reload` + `npm run dev`.
@@ -254,7 +255,7 @@ Markdown everywhere through one `<Markdown>` component (react-markdown + remark-
 
 ## 8. Configuration (.env at project root)
 
-`OPENAI_API_KEY` (required), `NVIDIA_API_KEY` (optional), `UA_MODEL_VISION` (gpt-6-luna), `UA_MODEL_GRAPH`/`UA_MODEL_LESSON`/`UA_MODEL_VIZ` (gpt-6.1-sol), `UA_MODEL_VERIFY` (gpt-6-luna), `UA_EFFORT_*` per role, `UA_MODEL_VISION`, `UA_MODEL_GRAPH`, `UA_MODEL_LESSON`, `UA_MODEL_VIZ`, `UA_MODEL_VERIFY`, `UA_PARSE_ENGINE` (auto|openai|nemotron), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR`, `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work).
+Provider (2026-10-08): `UA_LLM_PROVIDER` (`openai` default | `anthropic`) runs every LLM role on one provider; `UA_PROVIDER_VISION|GRAPH|LESSON|VIZ|VERIFY` overrides one role (e.g. Claude writes, GPT verifies). Keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (+ `ANTHROPIC_WORKSPACE_ID` for an organisation-level key) — each needed only when a role uses that provider — and `NVIDIA_API_KEY` (optional). OpenAI models: `UA_MODEL_VISION` (gpt-6-luna), `UA_MODEL_GRAPH`/`UA_MODEL_LESSON`/`UA_MODEL_VIZ` (gpt-6.1-sol), `UA_MODEL_VERIFY` (gpt-6-luna), `UA_EFFORT_*` per role (minimal…xhigh). Anthropic models: `UA_ANTHROPIC_MODEL_VISION`/`_VERIFY` (claude-haiku-5-5), `_GRAPH`/`_LESSON`/`_VIZ` (claude-opus-5-5), `UA_ANTHROPIC_EFFORT_*` (low…max; same defaults as OpenAI), `UA_ANTHROPIC_CACHE_TTL` (1h), `UA_ANTHROPIC_BASE_URL` (the ambient `ANTHROPIC_BASE_URL` is never used). `UA_PROOF_EFFORT_NOTCHES` (1) raises proof skills' effort on either scale. Prompts: `app/prompts/rules.py` (the learner's rules, shared) + one set per provider (`app/prompts/openai/`, `app/prompts/anthropic/`); `backend/scripts/prompt_diff.py` shows where the sets differ. Other: `UA_PARSE_ENGINE` (auto|openai|nemotron — "openai" means the vision model only, whichever provider runs it), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR`, `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work, whatever the provider).
 
 ## 9. Maintenance
 

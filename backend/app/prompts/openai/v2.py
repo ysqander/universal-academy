@@ -1,181 +1,38 @@
-"""Instruction texts for lesson generation v2 (docs/lesson-v2.md): planner → writer → missing-bridge reviewer → one
-revision. Written from the learner's own review of the first lessons."""
+"""OpenAI prompt set — the v2 planner, writer and reviewer instructions, repair notes and the proof-track assembly: the instruction texts tuned against GPT (gpt-6.1-sol / gpt-6-luna)."""
 
 from __future__ import annotations
 
-from .prompts import (
+from ..rules import (
     CAPSTONE_RULE,
     COMPLEX_FORM_RULE,
     COUNT_QUESTION_RULE,
     DISTINCT_DEMANDS_RULE,
+    KIND_STRUCTURES,
     MATH_FORMAT,
     MULTISTEP_FORMAT,
     NO_WRITTEN_ANSWERS_RULE,
     ONE_ANSWER_RULE,
     OUTCOME_RULE,
-    TYPED_FIRST_RULE,
+    PRINCIPLE,
+    REFERENCE_CHECKING,
+    REFERENCE_EXAMPLE,
+    REPRESENTATION_RULE,
+    SERVED_SEQUENCE_RULE,
+    SPLIT_TEST,
     TARGET_RULE,
     TF_SET_KIND,
+    TYPED_FIRST_RULE,
     UNORDERED_RULE,
+    V1_FAILURES,
+    V2_FEEDBACK,
+    V3_FEEDBACK,
 )
-from .prompts_proof import (
+from .proof import (
     PROOF_CAPSTONE_REPAIR,
     PROOF_PLANNER_RULES,
     PROOF_QUESTION_REPAIR,
     PROOF_REVIEW_PASS,
     PROOF_TRACK,
-)
-
-PRINCIPLE = """\
-PRINCIPLE: Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects
-them. A summary tells you what someone who understands the subject should remember. A lesson helps you become that
-person."""
-
-V1_FAILURES = """\
-WHAT WENT WRONG IN THE FIRST LESSONS (the learner's review — never repeat these)
-1. One lesson, several outcomes: multiplication, powers and finding square roots (with checking roots — a step of
-   finding them, see 13) were taught together.
-   Connected is not the same as "teach together"; a mixed lesson also makes the mastery score uninformative.
-2. Formula before a concrete case: $(a+bi)(c+di)=(ac-bd)+(ad+bc)i$ appeared before any worked numerical product
-   showing where the four products come from and why one of them becomes negative. Describing a procedure is not
-   demonstrating it.
-3. Representations before their question: a table of "four candidates with $a^2-b^2=3$" appeared before the problem
-   and the role of the candidates had been established.
-4. "Show the missing steps" held essential reasoning. If an explanation is necessary for the objective it belongs in
-   the main path (or in an explicit prerequisite). Optional depth is only an alternative explanation, a deeper
-   derivation or a reminder.
-5. Fixed headings ("Why this matters", "The idea", "See it") do not by themselves produce a teaching sequence."""
-
-V2_FEEDBACK = """\
-WHAT THE LEARNER SAID AFTER STUDYING THE SECOND ROUND (the v2 lessons) — never repeat these either
-6. "Show your working" questions: a free-response question ("Write a worked evaluation of $(3-2i)(-1+4i)$ … your
-   working must show all four products") cannot be checked by the app. Wanted instead: guided multistep questions
-   whose every step is checked, and ONE multistep problem at the end that builds on the simpler questions and shows
-   that the learner can chain several ideas and steps to solve a problem.
-7. Drill: in the powers lesson the learner had already shown they could multiply successively, and was still asked
-   to do it again ("Given $(1-i)^2=-2i$, evaluate $(1-i)^4$ by multiplying successively"). Balance practice with
-   thoughtful exercises: once a knowledge point has been demonstrated, stop — knowledge points need not have the
-   same number of questions, and every question must ask for something new.
-8. The "common mistakes" section was useless; it no longer exists."""
-
-V3_FEEDBACK = """\
-WHAT THE LEARNER SAID AFTER THE THIRD ROUND (the complex-quotient lesson, "a little dense and unclear") — never
-repeat these either
-9. Too many new ideas in one lesson: division as multiplication by the reciprocal, then a second layout (multiply top
-   and bottom by the same number), a general formula in new letters, and a derivation of the solving step from
-   associativity — each fine alone, together dense. One new idea per block, about four per lesson, one method.
-10. Used before taught: a check asked the learner to multiply back to test an answer before multiplying back had
-   been shown.
-11. "Using the construction you already know" without showing it: recall the needed fact in one line instead.
-12. A warning in the summary ("use $\\beta/\\alpha$, not $\\alpha/\\beta$") that nothing had taught or checked — and the
-   learner then chose the wrong quotient in practice.
-13. Skills are outcomes: the learner wants to come out of a lesson able to DO something (solve an equation, find all
-   roots, prove a statement); evaluating, checking or identifying are steps toward that, not lessons of their own. A
-   proof is an outcome."""
-
-SPLIT_TEST = """\
-SPLIT TEST: does this node hold separate OUTCOMES — tasks someone could be able to do one of and not the other, each
-worth doing on its own (multiplying vs. computing powers vs. finding square roots; a computation vs. proving the laws
-it relies on)? If yes, split into those tasks. A step on the way to the node's outcome stays in the lesson, even when
-it needs reasoning of its own: computing $\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$, and checking a supplied
-root is how you confirm the roots you found — both are knowledge points (or capstone steps) of the outcome skill,
-not skills of their own. Each new skill must be a meaningful task on its own — "Multiply two complex numbers", never
-"multiply the first two terms". Keep the node when one small family of problems assesses all of it. Statements
-proved with the same strategy are ONE outcome ("prove commutativity, associativity, identities and distributivity of
-complex arithmetic by comparing coordinates" is one skill whose groups of laws are knowledge points); a proof that needs a
-different strategy may be its own. A new skill must be worth a 5–15-minute lesson: an operation learned in a few
-minutes that the node's outcome uses at every step (scaling a vector inside solving $u+ax=v$) stays a step of that
-outcome, and a dependent that needs only that operation maps to the skill that teaches it."""
-
-KIND_STRUCTURES = """\
-STRUCTURE DEPENDS ON THE KIND OF SKILL (do not hard-code example-before-formula):
-- procedure / computation: concrete case → the steps, carried out on it → generalize to the formula ("the formula is
-  a record of the steps we just performed") → faded example → independent practice.
-- definition: the question the definition answers → the definition (quoted faithfully from the book, with its
-  number) → examples and non-examples → check.
-- distinction: the two confusable ideas side by side on the same object → contrasting examples → check.
-- proof: the statement and why it is plausible (a small case) → the strategy → the proof with every step justified
-  → a check of one step's justification.
-- interpretation: the picture ↔ algebra correspondence, read explicitly in both directions.
-- checking supplied answers (normally a knowledge point of the skill that finds the answers; a lesson of its own
-  only when deciding is itself the hard part, or for an older node that must be kept — then its objective is the
-  computation, e.g. "compute the cube of $w$ and find which number it is a cube root of"): state what is being checked
-  and what counts as "works" before any candidate appears; work one candidate fully; only then a comparison table (suggestion |
-  what we get | matches?); then the point (e.g. getting the real part right is not enough — the imaginary part,
-  including its sign, must match too). At least one supplied candidate in the main path (a table row or the faded
-  example) is actually computed and matches the target in exactly one coordinate — e.g. the right real part with
-  the imaginary part of the wrong sign — and the lesson says explicitly why it fails (one matching coordinate is
-  not enough: every coordinate must match). Never make this point only with an invented result, and use numbers
-  that differ from the practice questions. When checking is a knowledge point of a skill that finds the answers, the
-  main path only confirms the answer it found, in one line, after the method has been shown; the near-miss decision
-  about supplied candidates goes into that knowledge point's practice (a true_false_set with one candidate that
-  matches exactly one coordinate). The full structure above is for a lesson whose objective is the check."""
-
-REPRESENTATION_RULE = """\
-REPRESENTATIONS: every visual must finish the sentence "This representation helps the learner notice ___" and say
-how it is read (what rows, columns, arrows or highlights mean). "No additional visual" is a valid choice; an
-annotated sequence of equations is often best. A representation appears only after the question it answers has been
-established, and every row/candidate/arrow in it is explained before or as it is shown."""
-
-REFERENCE_EXAMPLE = r"""### Multiply two complex numbers
-
-**Your goal:** Calculate a product such as $(2+3i)(1+2i)$, and explain why multiplying two terms containing $i$ can
-produce a real number.
-
-**What changes when we multiply complex numbers?** You already know how to multiply brackets: each term in the first
-bracket multiplies each term in the second. We do the same thing here. The extra step is to use $i^2=-1$.
-Let's work out $(2+3i)(1+2i)$.
-
-**First, account for all four products.** A small multiplication grid helps us avoid missing a term:
-
-| $\times$ | $1$ | $2i$ |
-|---|---:|---:|
-| $2$ | $2$ | $4i$ |
-| $3i$ | $3i$ | $6i^2$ |
-
-Adding the four entries gives $2+4i+3i+6i^2$. Notice the bottom-right entry: $(3i)(2i)=3\cdot2\cdot i\cdot i=6i^2$.
-There are **two factors of $i$**, so the result contains $i^2$, not just $i$.
-
-**Next, use the fact that $i^2=-1$.** *Quick check: what does $6i^2$ become?* (after the learner responds)
-$6i^2=6(-1)=-6$, so the expression is $2+4i+3i-6$.
-
-**Finally, collect the two kinds of terms.**
-$\underbrace{2-6}_{\text{real terms}}+\underbrace{4i+3i}_{\text{terms containing }i}=\boxed{-4+7i}$.
-That is the whole method: **expand, replace $i^2$, collect terms.**
-
-**Where does the general formula come from?** Replace the particular numbers with real numbers $a,b,c,d$:
-$(a+bi)(c+di)=ac+ad\,i+bc\,i+bd\,i^2$. The last term becomes $-bd$, just as $6i^2$ became $-6$:
-$\boxed{(a+bi)(c+di)=(ac-bd)+(ad+bc)i}$. The formula is a record of the steps we just performed — not a separate trick.
-
-**Your turn — with one step left to complete.** $(1+2i)(3+i)=3+i+6i+2i^2$. Replace $2i^2$, then combine the terms.
-(After that, a fresh product to solve independently, and the explanation question "Why did the bottom-right entry
-become a real number?")
-
-*Not included:* roots, fourth powers, exponent rules, a second example needing a new method."""
-
-REFERENCE_CHECKING = r""""We want to check suggested solutions to $z^2=3+4i$. Someone has suggested the four numbers below; we check whether these
-suggestions work. A suggestion works only if squaring it gives the entire target number." Work one candidate fully ($(2+i)^2=4+2i+2i+i^2=3+4i$), then the comparison table
-(suggestion | what we get when we square it | matches?) — one row is a real near miss: $2-i$ squares to
-$4-4i+i^2=3-4i$, the same real part as $3+4i$ but the imaginary part has the wrong sign, so $2-i$ does not work — then
-the point: getting the real part right is not enough — the imaginary part, including its sign, must match too."""
-
-SERVED_SEQUENCE_RULE = (
-    "Read what the learner is actually served as ONE sequence: the first target_questions questions of knowledge "
-    "point 1, then those of knowledge point 2, …, then the capstone. In that sequence the lesson's main procedure "
-    "from scratch (e.g. a whole quotient) appears exactly once before the capstone, as one independent typed answer on "
-    "fresh numbers — normally the first served question of knowledge point 1 (the faded example was guided, so it does "
-    "not count). A later knowledge point leads with ITS new demand (for \"interpret an equation as a "
-    "quotient\": which quotient solves it, or whether a candidate satisfies it — not another full quotient in a new "
-    "wrapper); a plain repeat of the procedure may only be one of its spare questions. The capstone then applies the "
-    "main procedure once more, but to an input an earlier skill produces (or a case that needs a decision), in one "
-    "unguided step, and ends with a step that uses or interprets the result: it is never the sub-steps of a served "
-    "question, a teaching check or the faded example re-run on new numbers. The one independent application is the "
-    "general case of the outcome (e.g. a nonreal target), not a special case; a special case the learner missed is "
-    "re-tested as its own question served first (raise that knowledge point's target_questions to 2 when two misses "
-    "need it) or as a capstone step. (This is for procedure and computation skills. In a proof skill each knowledge "
-    "point's first question is a walkthrough of a statement the teaching did not prove, with at least one typed step, "
-    "and walkthroughs of different statements are not repeats; in a definition, distinction or interpretation skill a "
-    "typed concrete instance is enough.)"
 )
 
 QUESTION_RULES = f"""\
@@ -217,6 +74,7 @@ PRACTICE QUESTIONS (knowledge_points[].questions)
 - Keys "k1q1", "k1q2", … for knowledge point 1, "k2q1", … for knowledge point 2. Before writing each answer, solve
   the question again from scratch and make sure answer, answer_display, the correct choice and the solution agree."""
 
+
 PROOF_RULE = """\
 PROOF SKILLS (kind 'proof', or an objective starting with Prove / Justify): the learner never writes a proof as free
 text. The teaching proves 1–2 representative statements in full (for a family of only two statements, the harder
@@ -238,6 +96,7 @@ an earlier skill produces, or walks through a variant nothing else proves; its p
 learner computes (typed, e.g. the imaginary coordinate of $\\alpha(\\beta\\rho)$), optionally followed by one
 justification choice — never a choice among complete proofs that differ in one sign."""
 
+
 VISUAL_FORMAT_RULES = """\
 A block's `visual` (a VisualizationPlan) — only when a representation planned for this block earns its place:
 - purpose = "This representation helps the learner notice ___" (completed); caption = one line on how to read it;
@@ -252,6 +111,7 @@ A block's `visual` (a VisualizationPlan) — only when a representation planned 
 - A small grid or table that is part of the explanation (like the multiplication grid of the reference) can simply
   be a Markdown table in the block body; then visual = null.
 - Never decorative, never 3D, never a re-typesetting of the block's own equations."""
+
 
 PLANNER_INSTRUCTIONS = f"""\
 You plan how ONE node of a knowledge graph will be taught, in a Math-Academy-style course generated from a textbook
@@ -378,6 +238,7 @@ FOR EACH SKILL (TeachingSpec)
   the method invites — not generic slips the learner never showed.
 {MATH_FORMAT}
 """
+
 
 WRITER_INSTRUCTIONS = f"""\
 You write ONE lesson of a Math-Academy-style course generated from a textbook the learner owns. Below this message:
@@ -551,6 +412,7 @@ REFERENCE STRUCTURE — checking supplied answers:
 {MATH_FORMAT}
 """
 
+
 REVIEWER_INSTRUCTIONS = f"""\
 You review a lesson draft of a Math-Academy-style course as a FIRST explanation for a learner who knows only the
 stated prerequisites (the spec's assumed_prerequisites and the in-chapter prerequisite skills listed in the request) —
@@ -687,6 +549,7 @@ Report only real problems — no clarity scores, no praise, no restating what wo
 {MATH_FORMAT}
 """
 
+
 QUESTION_REPAIR_NOTE = """\
 QUESTION REPAIR: the lesson below is final except one practice question. Return ONLY a new `question` for that slot
 (same key, same knowledge point) that makes the demand its knowledge point needs, fixes every problem listed under it
@@ -700,6 +563,7 @@ and follows the PRACTICE QUESTIONS rules:
 - fresh numbers (not the running example's, a worked example's or another question's), self-contained, only methods
   the lesson taught; three progressive hints (multistep: one per step); a complete solution that agrees with the key.
 """
+
 
 CAPSTONE_REPAIR_NOTE = """\
 CAPSTONE REPAIR: the lesson below is final except its capstone (the final multistep problem). Return ONLY a new
@@ -719,6 +583,7 @@ CAPSTONE REPAIR: the lesson below is final except its capstone (the final multis
   optionally followed by one justification choice — never a choice among complete proofs that differ in one sign.
 """
 
+
 REVISION_NOTE = """\
 REVISION: below are your previous draft of this lesson and a review of it. Write the complete revised lesson:
 - fix every blocking issue with the smallest adequate repair the review suggests (or a better one), and the minor
@@ -737,7 +602,7 @@ REVISION: below are your previous draft of this lesson and a review of it. Write
 
 
 # ---------------------------------------------------------------------------
-# The proof track (prompts_proof.py): proof skills get their own planner, writer and reviewer instructions — the general
+# The proof track (proof.py): proof skills get their own planner, writer and reviewer instructions — the general
 # texts with the general proof rules swapped for the track. Each swap must find its text (checked at import).
 # ---------------------------------------------------------------------------
 
@@ -755,13 +620,18 @@ PROOF_PLANNER_INSTRUCTIONS = _swap(
     "For a proof skill follow THE PROOF PLAN below.",
 ) + "\n" + PROOF_PLANNER_RULES
 
+
 PROOF_KIND_STRUCTURE = (
     "- proof: follow THE PROOF TRACK below — one statement; numbers → why that is not a proof → a guided special case\n"
     "  the learner builds → what was proved → the general case as a worked table."
 )
 
+
 _PROOF_SERVED_CLAUSE = SERVED_SEQUENCE_RULE[SERVED_SEQUENCE_RULE.index("In a proof skill each knowledge point") :]
+
+
 _PROOF_WALKTHROUGH_EXAMPLE = MULTISTEP_FORMAT[MULTISTEP_FORMAT.index(" A proof as a walkthrough") :]
+
 
 PROOF_WRITER_INSTRUCTIONS = _swap(
     _swap(
@@ -782,11 +652,13 @@ PROOF_WRITER_INSTRUCTIONS = _swap(
     " A proof walkthrough follows THE PROOF TRACK below.",
 )
 
+
 PROOF_REVIEWER_INSTRUCTIONS = _swap(
     REVIEWER_INSTRUCTIONS,
     "split_recommended: true only when",
     PROOF_REVIEW_PASS + "\nsplit_recommended: true only when",
 )
+
 
 PROOF_QUESTION_REPAIR_NOTE = _swap(
     QUESTION_REPAIR_NOTE,
@@ -794,6 +666,7 @@ PROOF_QUESTION_REPAIR_NOTE = _swap(
     "  the lesson taught; three progressive hints (multistep: one per step); a complete solution that agrees with the key.",
     "- " + PROOF_QUESTION_REPAIR,
 )
+
 
 PROOF_CAPSTONE_REPAIR_NOTE = _swap(
     CAPSTONE_REPAIR_NOTE,

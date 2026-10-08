@@ -556,6 +556,10 @@ export interface HintResponse {
 
 export interface Health {
   openai: boolean;
+  anthropic: boolean;
+  provider: string;
+  llm_ready: boolean;
+  missing_keys: string[];
   nvidia: boolean;
   fake_llm: boolean;
   parse_engine: string;

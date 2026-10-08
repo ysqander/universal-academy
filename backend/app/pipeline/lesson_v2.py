@@ -27,7 +27,7 @@ from typing import Any
 
 import networkx as nx
 
-from .. import db, llm
+from .. import db, llm, prompts
 from ..config import settings
 from ..llm_schemas import (
     BridgeIssue,
@@ -78,19 +78,6 @@ from .proof_track import (
     plan_problems,
     proof_problems,
     question_problems,
-)
-from .prompts_v2 import (
-    CAPSTONE_REPAIR_NOTE,
-    PLANNER_INSTRUCTIONS,
-    PROOF_CAPSTONE_REPAIR_NOTE,
-    PROOF_PLANNER_INSTRUCTIONS,
-    PROOF_QUESTION_REPAIR_NOTE,
-    PROOF_REVIEWER_INSTRUCTIONS,
-    PROOF_WRITER_INSTRUCTIONS,
-    QUESTION_REPAIR_NOTE,
-    REVIEWER_INSTRUCTIONS,
-    REVISION_NOTE,
-    WRITER_INSTRUCTIONS,
 )
 from .questions import (
     InvalidQuestion,
@@ -394,7 +381,7 @@ async def plan_skill(
         try:
             plan = await llm.structured(
                 role="graph",
-                instructions=PROOF_PLANNER_INSTRUCTIONS if is_proof_skill(skill) else PLANNER_INSTRUCTIONS,
+                instructions=planner_instructions(skill),
                 text=request,
                 schema=TeachingPlan,
                 max_output_tokens=32000,
@@ -415,7 +402,28 @@ def is_proof_spec(spec: TeachingSpec) -> bool:
 
 def writer_instructions(spec: TeachingSpec) -> str:
     """The proof track's writer instructions for a proof skill with a proof plan, else the general ones."""
-    return PROOF_WRITER_INSTRUCTIONS if spec.proof is not None and is_proof_spec(spec) else WRITER_INSTRUCTIONS
+    texts = prompts.for_role("lesson")
+    return texts.PROOF_WRITER_INSTRUCTIONS if spec.proof is not None and is_proof_spec(spec) else texts.WRITER_INSTRUCTIONS
+
+
+def repair_note(spec: TeachingSpec, part: str) -> str:
+    """QUESTION_REPAIR_NOTE / CAPSTONE_REPAIR_NOTE (proof-track variants for a proof plan) of the writer's provider."""
+    texts = prompts.for_role("lesson")
+    proof = "PROOF_" if spec.proof is not None and is_proof_spec(spec) else ""
+    return getattr(texts, f"{proof}{part}_REPAIR_NOTE")
+
+
+def planner_instructions(skill: dict[str, Any]) -> str:
+    """The planner's instructions (role "graph"), with the proof plan for a proof skill."""
+    texts = prompts.for_role("graph")
+    return texts.PROOF_PLANNER_INSTRUCTIONS if is_proof_skill(skill) else texts.PLANNER_INSTRUCTIONS
+
+
+def reviewer_instructions(spec: TeachingSpec) -> str:
+    """The reviewer's instructions (role "graph"), with the proof pass for a proof-track lesson."""
+    texts = prompts.for_role("graph")
+    proof_track = spec.proof is not None and is_proof_spec(spec)
+    return texts.PROOF_REVIEWER_INSTRUCTIONS if proof_track else texts.REVIEWER_INSTRUCTIONS
 
 
 def effort_notches(kind: str, objective: str) -> int:
@@ -683,7 +691,8 @@ SECOND_REVISION_NOTE = (
 def revision_request(
     request: str, draft: LessonV2Draft, review: LessonReview, problems: list[str], round_: int = 0
 ) -> str:
-    note = [REVISION_NOTE] if round_ == 0 else [REVISION_NOTE, "", SECOND_REVISION_NOTE]
+    revision_note = prompts.for_role("lesson").REVISION_NOTE  # read by the writer: its provider's wording
+    note = [revision_note] if round_ == 0 else [revision_note, "", SECOND_REVISION_NOTE]
     lines = [request, "", *note, "", "## Your previous draft (JSON)", draft.model_dump_json(), "", "## Review"]
     lines += review_lines(review) or ["(no issues reported)"]
     if problems:
@@ -903,10 +912,9 @@ async def review_lesson(
     spec: TeachingSpec, draft: LessonV2Draft, *, key: str = "", revised: bool = False, prereqs: list[str] | None = None
 ) -> LessonReview:
     """Missing-bridge and density review (role "graph", high effort) of a draft as a first explanation."""
-    proof_track = spec.proof is not None and is_proof_spec(spec)
     return await llm.structured(
         role="graph",
-        instructions=PROOF_REVIEWER_INSTRUCTIONS if proof_track else REVIEWER_INSTRUCTIONS,
+        instructions=reviewer_instructions(spec),
         text=review_request(spec, draft, key=key or spec.local_id, revised=revised, prereqs=prereqs),
         schema=LessonReview,
         max_output_tokens=32000,
@@ -1509,6 +1517,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         return result
 
     lesson["plan"] = spec.model_dump()
+    lesson["generator"] = llm.generator()  # provider and model per role (graph = planner + reviewer, lesson = writer)
     lesson["review"] = final_review.model_dump()
     if result.revised and result.initial_review is not None:
         lesson["initial_review"] = result.initial_review.model_dump()
@@ -1631,7 +1640,7 @@ async def rewrite_question(
         [
             write_request(course, skill, spec, spec_figures(course, skill, spec)),
             "",
-            PROOF_QUESTION_REPAIR_NOTE if spec.proof is not None and is_proof_spec(spec) else QUESTION_REPAIR_NOTE,
+            repair_note(spec, "QUESTION"),
             f"## The slot: question {question.key} of the knowledge point “{kp_title}” — {slot}",
             f"The other questions served first: {formats}." if served else "",
             "Nothing printed in the teaching text or a worked example may be an answer of the new question.",
@@ -1917,7 +1926,7 @@ async def rewrite_capstone(
         [
             write_request(course, skill, spec, spec_figures(course, skill, spec)),
             "",
-            PROOF_CAPSTONE_REPAIR_NOTE if spec.proof is not None and is_proof_spec(spec) else CAPSTONE_REPAIR_NOTE,
+            repair_note(spec, "CAPSTONE"),
             "## The lesson (final except its capstone)",
             lesson_text,
             "",

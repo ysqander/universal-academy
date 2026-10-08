@@ -1,158 +1,24 @@
-"""Instruction texts for the build pipeline's LLM calls (SPEC §4.2, §4.3)."""
+"""Anthropic prompt set — graph, v1 lesson, top-up, visual and verification instructions: the instruction texts for Claude (Opus 5.5 / Haiku 5.5); started 2026-10-08 as a verbatim copy
+of the OpenAI set — tune them here only."""
 
 from __future__ import annotations
 
-MATH_FORMAT = (
-    "Formatting: Markdown. Math only as $...$ (inline) or $$...$$ (display) — never \\( \\), \\[ \\] or bare LaTeX. "
-    "Keep the author's notation (e.g. $\\mathbf{F}^n$, $\\mathbf{C}$, 'list', 'length'). Words go outside math: no "
-    "\\text{...} phrases inside $...$ (they cannot wrap on a phone)."
+from ..rules import (
+    CAPSTONE_RULE,
+    COMPLEX_FORM_RULE,
+    COUNT_QUESTION_RULE,
+    DISTINCT_DEMANDS_RULE,
+    MATH_FORMAT,
+    MULTISTEP_FORMAT,
+    NO_WRITTEN_ANSWERS_RULE,
+    ONE_ANSWER_RULE,
+    OUTCOME_RULE,
+    SERVED_FIRST_RULE,
+    TARGET_RULE,
+    TF_SET_KIND,
+    TYPED_DEMAND_RULE,
+    UNORDERED_RULE,
 )
-
-# Iteration-3 review (capstones asked for "(real coordinate, imaginary coordinate)" after seven lessons of a+bi, and a
-# learner who typed the trained form failed the lesson): one answer form for complex numbers everywhere.
-COMPLEX_FORM_RULE = (
-    'A complex number is asked for and keyed in the form $a+bi$ — the prompt says "Enter it in the form $a+bi$" and '
-    'the answer is SymPy "a+b*i" (e.g. "1/5+2*i/5", "-3*i", "4") — as in every lesson of the course, including '
-    "multistep steps and the capstone. Never ask for a complex number as a coordinate pair \"(real coordinate, "
-    'imaginary coordinate)" unless the skill is about the ordered-pair definition itself; when only one coordinate '
-    "matters, ask for that coordinate alone as a numeric answer. When the problem already uses the letter $a$ or $b$ "
-    '(e.g. $\\alpha=a+bi$ with arbitrary real $a,b$, or a scalar $a$), say "Enter it as a complex number in standard '
-    'form (e.g. $3-2i$)" instead, or use two letters the problem does not use — never letters that name an unknown, '
-    "a vector, an input or a parameter."
-)
-
-# Question format rule for every question generator (v1 lessons, top-ups, v2 lessons and their inline checks).
-COUNT_QUESTION_RULE = (
-    'Never ask "How many of these are true / belong to …?" or any other count of correct statements or matching '
-    "items: the count hides which ones the learner got wrong. Use true_false_set instead — the learner marks each "
-    'statement true or false. Example: instead of "How many of these equalities are true? 1. $(1,9)=(9,1)$ '
-    '2. $\\{1,9\\}=\\{9,1\\}$ 3. $(1,9)=(1,9)$" ask "Mark each equality true or false." with choices '
-    '["$(1,9)=(9,1)$", "$\\{1,9\\}=\\{9,1\\}$", "$(1,9)=(1,9)$"] and answer "FTT".'
-)
-ONE_ANSWER_RULE = (
-    "Each question asks for exactly ONE answer, the one the app checks: never \"compute X, then decide Y\" (only "
-    "`answer` is checked, so the decision goes unassessed and the expected input is unclear). To assess a decision "
-    "about several candidates or claims, use true_false_set with one statement per candidate (e.g. \"$2+i$ is a square "
-    "root of $3+4i$\"); for a single decision, ask for the value that settles it (typed), and true_false only when "
-    "no value settles it (a general always / sometimes claim)."
-)
-UNORDERED_RULE = (
-    'Several values whose order does not matter (both square roots, all solutions) are a set in braces, e.g. answer '
-    '"{1+i, -1-i}", and the prompt says "Enter both roots separated by a comma, in any order"; a tuple "( … )" is '
-    "only for ordered lists and vectors, where the order is part of the answer. A set with no element is answer \"{}\" "
-    '(the prompt says "enter {} or ∅ when no value works"); the whole field is answer "C" or "R" (the prompt says '
-    '"enter C if every complex number works").'
-)
-TF_SET_KIND = (
-    'true_false_set: "Mark each statement true or false" — choices holds the 2–5 statements (each self-contained, '
-    'without its own number); answer = one letter per statement in order, T or F (e.g. "FTT"); correct_choice null; '
-    "tolerance null. Mix true and false statements; the hints and the solution address every statement by its "
-    "number (why it is true, or a counterexample). With 3 or more statements it is not a guessable choice question."
-)
-
-# The learner's review of the S2 lessons (iteration 3): no "show your working", fewer and more varied questions, a
-# multistep problem at the end that chains the ideas. Shared by every question generator.
-TARGET_RULE = (
-    "target_questions (1–3) = how many answers really demonstrate THIS knowledge point. Be honest: 1 when a single "
-    "answer shows it (the method was already demonstrated before the questions), 2–3 only when the "
-    "point has real variety (cases that need different thinking). Write target_questions + 2 questions: the first "
-    "target_questions are served as the knowledge point's test; the 2 extra ones are served only after a miss (so "
-    "the learner can recover) and in later reviews. Knowledge points need not have the same number of questions — "
-    "never pad with repetition."
-)
-DISTINCT_DEMANDS_RULE = (
-    "Every question makes a DIFFERENT demand — never the same procedure again with new numbers: a learner who has "
-    "shown the method once experiences a second identical exercise as pointless drill. Demands to choose from: one "
-    "straightforward application of the method (once among the questions served first; otherwise only as a spare); a new case that needs a different thought (a "
-    "negative or zero part, a real or pure imaginary number, an edge case); a prediction or decision without the full "
-    "computation (is it real? which sign? which is larger?); spotting the error in a shown working (typed: the "
-    "corrected value; multiple_choice \"which line is wrong\" only when locating the error is itself the demand); a reverse problem (find the missing number or factor that "
-    "gives a stated result); interpreting a result; deciding which method or fact applies. Questions stay inside the "
-    "objective: a different demand, not a new method. Every question needs THIS knowledge point's idea to answer: "
-    "not one whose answer follows from a prerequisite or outside fact alone, or is the only special value the prompt "
-    'allows (e.g. "for real $a,b$ with $a^2+b^2=0$, what is $b$?" needs only that real squares are nonnegative) — '
-    "make such a question a decision with a near miss that needs the lesson's idea."
-)
-# The evaluation of the 2026-10-07 re-plans: target 1 per knowledge point + "no drill" pushed every question served
-# first to multiple choice — the learner recognised answers instead of producing them.
-TYPED_DEMAND_RULE = (
-    "TYPED ANSWERS FIRST: the learner should produce answers, not recognise them. A different demand is still a typed "
-    "numeric/expression answer whenever it has a value: a prediction → the predicted value; spotting an error → the "
-    "corrected value; a reverse problem → the missing number; a decision about one candidate → the value that settles "
-    "it (several candidates → a true_false_set). multiple_choice and true_false only when the demand has no value to "
-    "type: choosing a method, a law or a justification, or judging a general claim. A choice question's distractors "
-    "are the answers a learner holding a specific misconception would give (computed, not strawmen), the key differs "
-    "from every one of them, and no option carries a computed result the learner should produce (e.g. a method option "
-    '"multiply by $2-3i$, giving $\\frac{7-4i}{13}$").'
-)
-SERVED_FIRST_RULE = (
-    "Among the questions served first (the first target_questions of each knowledge point) at most one is "
-    "choice-based (multiple_choice, true_false, or a true_false_set of only 2 statements), and at least one is a typed "
-    "independent answer (a multistep question counts when at least one of its steps is typed)."
-)
-TYPED_FIRST_RULE = f"{TYPED_DEMAND_RULE} {SERVED_FIRST_RULE}"
-NO_WRITTEN_ANSWERS_RULE = (
-    'No free_response questions and no "show your working": the app checks only the answer, so an instruction to '
-    "write out the steps, the products or a proof is never assessed. A computation is a typed numeric/expression "
-    "answer; a chain of reasoning (a proof, an explanation, a computation with several stages) is a multistep "
-    "question whose steps are each machine-checked."
-)
-MULTISTEP_FORMAT = (
-    "multistep: a guided problem. The prompt states the whole problem and its goal; `steps` holds 2–4 steps the "
-    "learner answers one at a time (seeing each result and its explanation before the next), and a later step uses "
-    "an earlier result. Each step: prompt (what to do now and the exact form to enter — a complex result in the form "
-    "$a+bi$), kind numeric / expression / "
-    "multiple_choice / true_false / true_false_set with that kind's conventions for choices, correct_choice, answer, "
-    "answer_display and tolerance, ONE hint (using it halves the step's point) and an explanation (1–2 sentences "
-    "shown after the step: why this is the result). The question itself: answer \"\", choices [], correct_choice "
-    "null, tolerance null, hints [], checklist []; answer_display = the final result; solution = the full worked "
-    "solution. A proof as a walkthrough: steps like \"Which definition do we apply first?\" (multiple_choice), "
-    "\"What is the first coordinate of $x+y$?\" (expression), \"Which property of $\\mathbf{F}$ justifies this "
-    'line?" (multiple_choice), "Which hypothesis was used?" (multiple_choice).'
-)
-
-# The lesson's final problem (v1 and v2 lessons). Iteration-3 review of S3a/S3b: both capstones were the lesson's
-# own procedure split into its sub-steps (the lesson's key decision given away in a step prompt) plus a "multiply
-# back" step whose answer — 1, or the right side printed in the problem — was known before computing anything.
-CAPSTONE_RULE = """\
-CAPSTONE (`capstone`) — the lesson's final problem, served after the practice
-- ONE problem, key "cap", kind "multistep", tier 3, with 2–4 steps; a later step uses an earlier step's result.
-- It CHAINS this lesson's idea with at least one earlier skill (a prerequisite named in the request) into one
-  problem. The earlier skill does real work in a step of its own — it produces the input this lesson's method is
-  applied to, or it uses this lesson's result — not merely the arithmetic already inside this lesson's procedure.
-  This lesson's method is applied ONCE and unguided: do not split it into the sub-steps the lesson taught, and do not
-  give away its key decision (e.g. which factor to multiply by) in the problem or a step prompt.
-- Not a replay: taken together, the steps must not re-run a practice question, an inline check, the faded example or
-  a worked example on new numbers — neither whole nor split into parts. Use a fresh problem: its numbers are not
-  the running example's, a worked example's or a practice question's — not even those numbers multiplied in another
-  order (a step whose result the lesson has already shown is not fresh work).
-- Pattern: an earlier skill produces the input → this lesson's method on it, in one step → a different move that
-  uses the result (a prediction or decision without a full recomputation, a second use of the result, an
-  interpretation). Illustration for a lesson on complex reciprocals whose prerequisite is complex multiplication
-  (use your own problem and numbers): "Let $w=(1+3i)(2-i)$. Step 1: enter $w$ in the form $a+bi$ ($5+5i$). Step 2:
-  enter $1/w$ in the form $a+bi$ ($\\frac{1}{10}-\\frac{1}{10}i$). Step 3: $5-5i$ differs from $w$ only in the sign of
-  its imaginary coordinate — without a new construction, enter $1/(5-5i)$ ($\\frac{1}{10}+\\frac{1}{10}i$)." NOT:
-  "multiply $1-2i$ by $1+2i$; divide by $5$; multiply back and confirm you get $1$" — a practice question split into
-  its parts, plus a step whose answer is known in advance.
-- No step's answer may be known before it is computed: never stated in the problem or in a step prompt (e.g. the
-  right side of the equation being solved), never an earlier step's result again, never forced by a definition (a
-  number times its reciprocal is $1$, multiplying a solution back gives the right side, the reciprocal of a
-  reciprocal is the number). Checking the result ("multiply back") belongs in the last step's explanation and the
-  solution, not in a scored step; a checking step is allowed only when it asks for a value the learner must compute
-  and that is shown nowhere. A step's hint points to the move; it never contains the whole computation of the answer.
-- Each step: one machine-checked answer, ONE hint, an explanation and answer_display (the multistep format); complex
-  results in the form $a+bi$, never as coordinate pairs. The question prompt states the whole problem and its goal;
-  each step prompt says exactly what to do now and the form to enter."""
-
-OUTCOME_RULE = """\
-SKILLS ARE OUTCOMES (the learner's rule): a skill is defined by what the learner can DO at the end of its lesson — a
-task they complete: solve an equation, compute a result, find all solutions, construct an example, prove a general
-statement (a proof is an outcome). Ask "which problem can the learner solve after this lesson that they could not
-solve before?" — the objective names that problem. Evaluating an expression, checking a supplied answer, identifying
-or recognising something are steps on the way to such a task: they belong inside the skill that uses them (a
-knowledge point, an inline check, a capstone step), not in a skill of their own — unless the judgement itself is the
-hard part (deciding whether a set with given operations is a vector space; whether a sum is direct). Computing
-$\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$; checking a candidate root is how you confirm the roots you found."""
 
 GRAPH_INSTRUCTIONS = f"""\
 You design the knowledge graph of a Math-Academy-style course generated from pages of a textbook the learner owns.
@@ -222,6 +88,7 @@ FIELDS
 - excluded: content deliberately left out, each with a short reason; [] if none.
 {MATH_FORMAT}
 """
+
 
 LESSON_INSTRUCTIONS = f"""\
 You write the lesson package for ONE skill of a Math-Academy-style course generated from a textbook the learner owns.
@@ -321,6 +188,7 @@ QUESTIONS
 {MATH_FORMAT}
 """
 
+
 VIZ_INSTRUCTIONS = f"""\
 You plan at most ONE visual for a lesson of a course generated from a textbook. First name what the learner is most
 likely to misunderstand in this skill; then pick the SIMPLEST representation that makes exactly that clearer — or none.
@@ -361,6 +229,7 @@ RULES
 {MATH_FORMAT}
 """
 
+
 VERIFY_INSTRUCTIONS = """\
 You independently check an auto-generated practice question. Solve it yourself, carefully, from scratch.
 - multiple_choice / true_false: choice = 0-based index of the correct option (for true/false: 0 = True, 1 = False);
@@ -382,6 +251,7 @@ You independently check an auto-generated practice question. Solve it yourself, 
   statements, and multiple-choice distractors are wrong by design.
 """
 
+
 # Second solve of a true_false_set question whose first independent solve disagreed with the key (verify.py): a
 # careful statement-by-statement check against the stated definitions, so one misread statement does not flag a
 # correct question.
@@ -396,7 +266,10 @@ THIS IS A CAREFUL SECOND CHECK of a true_false_set question. Decide every statem
   the wording to make it true or false.
 - Only after deciding each statement separately, write one letter per statement, in order.
 """
+
+
 VERIFY_STATEMENTS_RECHECK = VERIFY_INSTRUCTIONS + STATEMENT_RULES
+
 
 # One step of a multistep question (verify.py): the solver sees the problem, the earlier steps with their correct
 # results and the current step — never its answer.
@@ -407,12 +280,17 @@ step, in the format its question type asks for. That a step builds on earlier re
 report a problem only when the current step itself is ambiguous, unsolvable from what is given, or has no / several
 correct options.
 """
+
+
 VERIFY_STEP_RECHECK = VERIFY_STEP_INSTRUCTIONS + """
 THIS IS A CAREFUL SECOND CHECK of that step: a first solver disagreed with the stored answer. Re-read the problem and
 the current step word by word, recompute every number from scratch (signs, $i^2=-1$, which quantity the step asks
 for), and answer exactly what the step asks — not a later or earlier step's quantity.
 """
+
+
 VERIFY_STEP_STATEMENTS_RECHECK = VERIFY_STEP_INSTRUCTIONS + STATEMENT_RULES
+
 
 TOPUP_INSTRUCTIONS = f"""\
 You write additional practice questions for one knowledge point of a lesson in a Math-Academy-style course generated

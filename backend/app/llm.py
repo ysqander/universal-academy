@@ -1,10 +1,12 @@
-"""Single entry point for OpenAI calls: structured outputs, images, concurrency, retries, usage/cost accounting.
+"""Single entry point for LLM calls: structured outputs, images, concurrency, retries, usage/cost accounting.
 
 Usage:
     result = await structured(role="graph", instructions=..., text=..., schema=KnowledgeGraphDraft)
 
-Roles map to (model, reasoning effort) via settings. With UA_FAKE_LLM=1 the call is answered by
-app.fake_llm.respond(schema, role, instructions, text) instead (offline tests / UI development).
+Roles map to (provider, model, reasoning effort) via settings: OpenAI (this module) or Anthropic (llm_anthropic.py),
+chosen with UA_LLM_PROVIDER and per role with UA_PROVIDER_<ROLE>. Callers take their instruction texts from the same
+provider's prompt set (app.prompts.for_role). With UA_FAKE_LLM=1 every call is answered by
+app.fake_llm.respond(schema, role, instructions, text) instead (offline tests / UI development), whatever the provider.
 """
 
 from __future__ import annotations
@@ -53,8 +55,12 @@ class Usage:
     by_role: dict[str, float] = field(default_factory=dict)
 
     def add(self, role: str, model: str, inp: int, cached: int, out: int) -> float:
+        """An OpenAI call: `inp` includes the `cached` tokens."""
         p_in, p_cached, p_out = PRICES.get(model, (2.0, 0.2, 10.0))
-        cost = ((inp - cached) * p_in + cached * p_cached + out * p_out) / 1_000_000
+        return self.record(role, inp, cached, out, ((inp - cached) * p_in + cached * p_cached + out * p_out) / 1_000_000)
+
+    def record(self, role: str, inp: int, cached: int, out: int, cost: float) -> float:
+        """A call whose cost the provider module computed (Anthropic prices cache writes separately)."""
         self.calls += 1
         self.input_tokens += inp
         self.cached_tokens += cached
@@ -101,21 +107,33 @@ def _get_semaphore() -> asyncio.Semaphore:
 EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
 
 
-def raise_effort(effort: str, notches: int) -> str:
-    """The reasoning effort `notches` levels higher (capped at the top level; an unknown effort is kept)."""
+def raise_effort(effort: str, notches: int, provider: str = "openai") -> str:
+    """The reasoning effort `notches` levels higher on the provider's scale (capped at its top level; an unknown effort
+    is kept). OpenAI: minimal … xhigh; Anthropic: low … max."""
+    if provider == "anthropic":
+        from . import llm_anthropic
+
+        return llm_anthropic.raise_effort(effort, notches)
     if notches <= 0 or effort not in EFFORT_LEVELS:
         return effort
     return EFFORT_LEVELS[min(len(EFFORT_LEVELS) - 1, EFFORT_LEVELS.index(effort) + notches)]
 
 
 def role_model(role: Role) -> tuple[str, str]:
-    return {
-        "vision": (settings.model_vision, settings.effort_vision),
-        "graph": (settings.model_graph, settings.effort_graph),
-        "lesson": (settings.model_lesson, settings.effort_lesson),
-        "viz": (settings.model_viz, settings.effort_viz),
-        "verify": (settings.model_verify, settings.effort_verify),
-    }[role]
+    """(model, effort) of a role on the provider that runs it."""
+    _, model, effort = settings.role_config(role)
+    return model, effort
+
+
+def provider_for(role: Role) -> str:
+    return settings.provider(role)
+
+
+def generator(roles: tuple[str, ...] = ("graph", "lesson", "verify")) -> dict[str, str]:
+    """Which provider and model ran each role — stored with generated content so providers can be compared."""
+    if settings.fake_llm:
+        return {role: "fake" for role in roles}
+    return {role: "{}:{}".format(*settings.role_config(role)[:2]) for role in roles}
 
 
 def png_data_url(png: bytes) -> str:
@@ -149,15 +167,22 @@ async def structured(
     broken streams, truncation (with a larger output budget) and output that does not fit the schema. Every failure
     surfaces as LLMError. The usage of every billed attempt — also failed and invalid ones — is recorded.
     """
-    if settings.fake_llm:
+    if settings.fake_llm:  # first, whatever the provider: tests and fake runs never reach a client
         from . import fake_llm
 
         return fake_llm.respond(schema=schema, role=role, instructions=instructions, text=text, shared_prefix=shared_prefix)
 
-    model, effort = role_model(role)
-    effort = raise_effort(effort, effort_notches)
+    provider, model, effort = settings.role_config(role)
+    effort = raise_effort(effort, effort_notches, provider)
     if effort_notches:
         label = f"{label} @{effort}"
+    if provider == "anthropic":
+        from . import llm_anthropic
+
+        return await llm_anthropic.structured(  # type: ignore[return-value]
+            role=role, model=model, effort=effort, instructions=instructions, text=text, schema=schema, images=images,
+            shared_prefix=shared_prefix, max_output_tokens=max_output_tokens, label=label,
+        )
     developer_content: list[dict] = [{"type": "input_text", "text": instructions}]
     if shared_prefix:
         developer_content.append(

@@ -1,5 +1,5 @@
 """Offline proof-track fixtures for the fake LLM (UA_FAKE_LLM=1) and the tests: a proof plan and a lesson that follow
-THE PROOF TRACK (prompts_proof.py) — the S4a design ("Prove complex arithmetic laws by comparing coordinates") with
+THE PROOF TRACK (app/prompts/<provider>/proof.py) — the S4a design ("Prove complex arithmetic laws by comparing coordinates") with
 every key checked in SymPy. The lesson passes every check of pipeline/proof_track.py; tests break it on purpose."""
 
 from __future__ import annotations

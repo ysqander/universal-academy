@@ -24,7 +24,7 @@ from .. import llm
 from ..config import settings
 from ..llm_schemas import FigureRef, PageTranscription
 from . import nemotron, pdf
-from .prompts import TRANSCRIBE_INSTRUCTIONS
+from .. import prompts
 
 log = logging.getLogger("ua.ingest")
 
@@ -129,7 +129,8 @@ async def parse_page(pdf_path: Path, page_index: int, label: str, work_dir: Path
         return await _text_layer_page(
             pdf_path, page_index, label, work_dir, scan, text_blocks, "textlayer", uncertain, raw
         )
-    engine = f"openai:{settings.model_vision}" + (f"+{nemotron_engine}" if nemotron_engine else "")
+    provider, model, _ = settings.role_config("vision")
+    engine = f"{provider}:{model}" + (f"+{nemotron_engine}" if nemotron_engine else "")
     page = await _assemble(pdf_path, page_index, label, work_dir, scan, result, width_pt, height_pt, engine, raw)
     if quality.coverage is not None and quality.coverage < MIN_COVERAGE:
         page.uncertain.append(f"The transcription may be incomplete: only {quality.coverage:.0%} of the page's words were found.")
@@ -183,7 +184,7 @@ async def _transcribe(
         try:
             result = await llm.structured(
                 role="vision",
-                instructions=TRANSCRIBE_INSTRUCTIONS,
+                instructions=prompts.for_role("vision").TRANSCRIBE_INSTRUCTIONS,
                 text=text,
                 schema=PageTranscription,
                 images=images,

@@ -133,7 +133,7 @@ async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     db.init_db()
-    print(f"data dir: {settings.data_dir} · {'FAKE LLM' if settings.fake_llm else 'live OpenAI calls'}")
+    print(f"data dir: {settings.data_dir} · {'FAKE LLM' if settings.fake_llm else 'live calls: ' + ', '.join(f'{r} {p}:{m}' for r, (p, m, _) in ((r, settings.role_config(r)) for r in ('graph', 'lesson', 'verify')))}")
     if not args.course:
         list_courses()
         return 0

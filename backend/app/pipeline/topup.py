@@ -26,7 +26,7 @@ from .. import db, llm
 from ..llm_schemas import QuestionDraft
 from .context import load_course, page_marker
 from .lessons import is_proof_skill, next_question_key
-from .prompts import TOPUP_INSTRUCTIONS
+from .. import prompts
 from .questions import PENDING_REASON, clean_questions, insert_questions, length_cue, normalized_prompt
 from .verify import keep_kps_servable, needs_verification, verify_question
 
@@ -106,7 +106,7 @@ async def _top_up(skill: dict[str, Any], lesson: dict[str, Any], kp: int, n: int
 
     draft = await llm.structured(
         role="lesson",
-        instructions=TOPUP_INSTRUCTIONS,
+        instructions=prompts.for_role("lesson").TOPUP_INSTRUCTIONS,
         text=topup_request(skill, lesson, kp, existing, planned_keys),
         schema=TopUpDraft,
         max_output_tokens=24000,

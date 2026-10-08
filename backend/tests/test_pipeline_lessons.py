@@ -98,7 +98,7 @@ def test_new_lessons_have_no_free_response_questions():
 def test_proof_lessons_are_practised_with_multistep_walkthroughs(tmp_path):
     from app.pipeline.context import load_course
     from app.pipeline.lessons import lesson_request
-    from app.pipeline.prompts import LESSON_INSTRUCTIONS
+    from app.prompts.openai import LESSON_INSTRUCTIONS
 
     assert "free_response" not in LESSON_INSTRUCTIONS.split("PROOF SKILLS")[1].split("QUESTIONS")[0]
     assert "multistep walkthrough" in LESSON_INSTRUCTIONS

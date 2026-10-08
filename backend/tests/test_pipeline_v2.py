@@ -158,7 +158,7 @@ def test_choice_share_counts_true_false_sets_of_two_only():
 
 
 def test_question_format_rule_is_in_every_question_generating_prompt():
-    from app.pipeline.prompts import (
+    from app.prompts.openai import (
         COUNT_QUESTION_RULE,
         LESSON_INSTRUCTIONS,
         ONE_ANSWER_RULE,
@@ -166,7 +166,7 @@ def test_question_format_rule_is_in_every_question_generating_prompt():
         UNORDERED_RULE,
         VERIFY_INSTRUCTIONS,
     )
-    from app.pipeline.prompts_v2 import REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
+    from app.prompts.openai import REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
 
     assert "How many of these equalities are true?" in COUNT_QUESTION_RULE and '"FTT"' in COUNT_QUESTION_RULE
     for prompt in (LESSON_INSTRUCTIONS, TOPUP_INSTRUCTIONS, WRITER_INSTRUCTIONS):
@@ -178,8 +178,8 @@ def test_question_format_rule_is_in_every_question_generating_prompt():
 
 
 def test_v2_prompts_follow_the_design():
-    from app.pipeline.prompts import GRAPH_INSTRUCTIONS
-    from app.pipeline.prompts_v2 import PLANNER_INSTRUCTIONS, REFERENCE_EXAMPLE, REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
+    from app.prompts.openai import GRAPH_INSTRUCTIONS
+    from app.prompts.openai import PLANNER_INSTRUCTIONS, REFERENCE_EXAMPLE, REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
 
     principle = "Reduce the number of new ideas the learner must handle at once; do not reduce the reasoning that connects"
     for prompt in (PLANNER_INSTRUCTIONS, WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS):

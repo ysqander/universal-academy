@@ -17,7 +17,7 @@ from app.llm_schemas import IndependentAnswer, InlineCheck, LessonV2Draft, Quest
 from app.pipeline import verify
 from app.pipeline.lesson_v2 import clean_inline_check, validate_plan, validate_v2
 from app.pipeline.lessons import InvalidLesson
-from app.pipeline.prompts import VERIFY_STATEMENTS_RECHECK
+from app.prompts.openai import VERIFY_STATEMENTS_RECHECK
 from app.pipeline.questions import answers_in_any_order, clean_question
 from app.pipeline.regenerate import regenerate
 from app.pipeline.replan import replan
@@ -198,7 +198,7 @@ def test_a_reflect_faded_example_is_revised_with_the_validation_problem(tmp_path
 
 
 def test_v2_prompts_carry_the_content_rules():
-    from app.pipeline.prompts_v2 import PLANNER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
+    from app.prompts.openai import PLANNER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS, WRITER_INSTRUCTIONS
 
     planner, writer, reviewer = (" ".join(t.split()) for t in (PLANNER_INSTRUCTIONS, WRITER_INSTRUCTIONS, REVIEWER_INSTRUCTIONS))
     # faded examples: graded, never reflect

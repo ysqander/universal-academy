@@ -14,7 +14,7 @@ from .. import db, llm
 from ..learning import state
 from ..llm_schemas import Foundation, KnowledgeGraphDraft, SkillDraft
 from .context import BuildContext, BuildError, chapter_text, course_figures, figure_db_id, key_number
-from .prompts import GRAPH_INSTRUCTIONS
+from .. import prompts
 
 log = logging.getLogger("ua.pipeline.graph")
 
@@ -224,7 +224,7 @@ async def run_graph_stage(ctx: BuildContext) -> None:
         try:
             draft = await llm.structured(
                 role="graph",
-                instructions=GRAPH_INSTRUCTIONS,
+                instructions=prompts.for_role("graph").GRAPH_INSTRUCTIONS,
                 text=text,
                 schema=KnowledgeGraphDraft,
                 max_output_tokens=64000,

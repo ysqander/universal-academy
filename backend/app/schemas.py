@@ -541,6 +541,10 @@ class FoundationKnownRequest(BaseModel):
 
 class Health(BaseModel):
     openai: bool
+    anthropic: bool = False
+    provider: str = "openai"  # UA_LLM_PROVIDER (a role may override it: see models)
+    llm_ready: bool = False  # every provider the roles use has its key, or the fake LLM answers
+    missing_keys: list[str] = []  # e.g. ["ANTHROPIC_API_KEY"]
     nvidia: bool
     fake_llm: bool
     parse_engine: str

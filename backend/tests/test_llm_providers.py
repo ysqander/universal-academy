@@ -63,8 +63,13 @@ def test_the_anthropic_client_uses_only_the_apps_key_and_base_url(monkeypatch):
         client = llm_anthropic._get_client()
         assert str(client.base_url).rstrip("/") == "https://api.anthropic.com"
         assert client.api_key == "sk-ant-test" and client.auth_token is None
+        assert "anthropic-workspace-id" not in client.default_headers
+        monkeypatch.setattr(llm_anthropic, "_client", None)
+        object.__setattr__(settings, "anthropic_workspace_id", "wrkspc_test")
+        assert llm_anthropic._get_client().default_headers["anthropic-workspace-id"] == "wrkspc_test"
     finally:
         object.__setattr__(settings, "anthropic_api_key", "")
+        object.__setattr__(settings, "anthropic_workspace_id", "")
         monkeypatch.setattr(llm_anthropic, "_client", None)
 
 

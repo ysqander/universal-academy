@@ -54,8 +54,10 @@ def _get_client() -> AsyncAnthropic:
         if not settings.anthropic_api_key:
             raise LLMError("ANTHROPIC_API_KEY is not set — add it to the .env file in the project root.")
         # explicit key and base URL: the SDK then consults no environment variable, profile or federation config
+        headers = {"anthropic-workspace-id": settings.anthropic_workspace_id} if settings.anthropic_workspace_id else None
         _client = AsyncAnthropic(
-            api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url, max_retries=5, timeout=900.0
+            api_key=settings.anthropic_api_key, base_url=settings.anthropic_base_url, max_retries=5, timeout=900.0,
+            default_headers=headers,
         )
     return _client
 
@@ -285,6 +287,11 @@ async def structured(
         except anthropic.NotFoundError as e:
             raise LLMError(f"Anthropic does not know the model {model!r}: {e.message}") from e
         except anthropic.BadRequestError as e:  # bad schema / parameter / image: retrying cannot help
+            if "workspace" in str(e.message).lower():
+                raise LLMError(
+                    "The Anthropic key is not tied to a workspace: add ANTHROPIC_WORKSPACE_ID=<workspace id> to .env "
+                    "(Claude Console → Settings → Workspaces), or use a key created inside a workspace."
+                ) from e
             raise LLMError(f"Anthropic rejected the request ({model}): {e.message}") from e
         except anthropic.RateLimitError as e:  # the SDK already honoured retry-after; a spend cap does not clear
             last_error = e

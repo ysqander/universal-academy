@@ -23,7 +23,7 @@ def default_data_dir() -> Path:
 
 # Credentials a pytest run blanks, and Anthropic SDK settings it removes: a bare Anthropic client reads them from the
 # environment (Claude Code exports ANTHROPIC_BASE_URL to the shells it starts), and the app never relies on them.
-_SECRET_ENV = ("OPENAI_API_KEY", "NVIDIA_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+_SECRET_ENV = ("OPENAI_API_KEY", "NVIDIA_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_WORKSPACE_ID")
 _AMBIENT_ANTHROPIC_ENV = (
     "ANTHROPIC_BASE_URL", "ANTHROPIC_PROFILE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
     "ANTHROPIC_SERVICE_ACCOUNT_ID", "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE",
@@ -91,6 +91,8 @@ class Settings:
     provider_verify: str = field(default_factory=lambda: _env("UA_PROVIDER_VERIFY", "").lower())
     # Anthropic: Opus 5.5 where OpenAI uses Sol, Haiku 5.5 where it uses Luna. Efforts: low/medium/high/xhigh/max.
     anthropic_api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "").strip())
+    # An organisation-level key (not created inside a workspace) must name the workspace on every request.
+    anthropic_workspace_id: str = field(default_factory=lambda: os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip())
     # Never the ambient ANTHROPIC_BASE_URL (Claude Code sets it for its own shells): only this app setting.
     anthropic_base_url: str = field(default_factory=lambda: _env("UA_ANTHROPIC_BASE_URL", "https://api.anthropic.com"))
     anthropic_cache_ttl: str = field(default_factory=lambda: _env("UA_ANTHROPIC_CACHE_TTL", "1h"))

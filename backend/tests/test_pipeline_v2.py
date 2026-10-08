@@ -871,3 +871,56 @@ def test_replan_cli_refuses_while_the_app_server_runs_and_applies_otherwise(tmp_
     assert "Using the saved plan" in applied.stdout and f"SPLIT: {key} → {key}a, {key}b, {key}c" in applied.stdout
     assert db.query_one("SELECT 1 FROM skills WHERE course_id = ? AND key = ?", (cid, key)) is None
     assert list((settings.data_dir / "replans").glob("*-report.txt"))
+
+
+def test_proof_skills_reason_one_notch_higher_on_the_same_model():
+    """The learner, 2026-10-08: proofs need more care — "use sol at one higher reasoning notch" (not a bigger model)."""
+    from app.llm import raise_effort
+    from app.pipeline.lesson_v2 import effort_notches
+
+    assert [raise_effort(e, 1) for e in ("low", "medium", "high", "xhigh")] == ["medium", "high", "xhigh", "xhigh"]
+    assert raise_effort("high", 0) == "high"
+    assert effort_notches("proof", "Prove the laws of 1.3") == 1
+    assert effort_notches("computation", "Compute a quotient") == 0
+
+
+def test_import_lesson_copies_a_sandbox_lesson_with_its_verdicts(tmp_path):
+    """A lesson generated and reviewed in a sandbox copy is imported as it is (not generated again)."""
+    import shutil
+    import sqlite3
+
+    from app.config import settings
+
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Distinguish lists")["key"]
+    asyncio.run(replan(cid, key))  # a v2 lesson in the target
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    src = sqlite3.connect(settings.db_path)
+    dst = sqlite3.connect(sandbox / "academy.sqlite3")
+    src.backup(dst)
+    dst.close()
+    src.close()
+    shutil.copytree(settings.data_dir / "courses", sandbox / "courses", dirs_exist_ok=True)
+    # the sandbox's version differs: another title, another first question, a verdict
+    conn = sqlite3.connect(sandbox / "academy.sqlite3")
+    sid = conn.execute("SELECT id, lesson_json FROM skills WHERE course_id = ? AND key = ?", (cid, key)).fetchone()
+    lesson = json.loads(sid[1])
+    lesson["title"] = "Sandbox title"
+    conn.execute("UPDATE skills SET lesson_json = ? WHERE id = ?", (json.dumps(lesson), sid[0]))
+    qid = conn.execute("SELECT id FROM questions WHERE skill_id = ? AND kp_index = 0 AND key NOT LIKE 'old-%' ORDER BY rowid", (sid[0],)).fetchone()[0]
+    conn.execute("UPDATE questions SET prompt = 'Sandbox prompt', verify_json = '{\"status\": \"agree\"}' WHERE id = ?", (qid,))
+    conn.commit()
+    conn.close()
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "import_lesson.py"
+    run = subprocess.run(
+        [sys.executable, str(script), "--from-data-dir", str(sandbox), "--data-dir", str(settings.data_dir), "--course", cid,
+         "--skill", key, "--yes", "--no-backup", "--server-url", f"http://127.0.0.1:{_free_port()}/api/health"],
+        capture_output=True, text=True, timeout=300, env={**os.environ, "UA_FAKE_LLM": "1"},
+    )
+    assert run.returncode == 0 and "Imported." in run.stdout, run.stdout + run.stderr
+    stored = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (sid[0],))["lesson_json"])
+    assert stored["title"] == "Sandbox title"
+    first = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND kp_index = 0 AND key NOT LIKE 'old-%' ORDER BY rowid", (sid[0],))
+    assert first["prompt"] == "Sandbox prompt" and db.loads(first["verify_json"])["status"] == "agree"

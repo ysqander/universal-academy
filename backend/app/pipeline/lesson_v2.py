@@ -28,6 +28,7 @@ from typing import Any
 import networkx as nx
 
 from .. import db, llm
+from ..config import settings
 from ..llm_schemas import (
     BridgeIssue,
     CapstoneRepair,
@@ -383,6 +384,7 @@ async def plan_skill(
                 schema=TeachingPlan,
                 max_output_tokens=32000,
                 label=f"plan {skill['key']}",
+                effort_notches=effort_notches(skill["kind"], skill["objective"]),
                 stream=True,
             )
             return validate_plan(plan, context, allow_split=allow_split)
@@ -390,6 +392,12 @@ async def plan_skill(
             error = e
             log.warning("plan %s attempt %d failed: %s", skill["key"], attempt + 1, e)
     raise InvalidPlan(f"planning {skill['key']} failed: {error}")
+
+
+def effort_notches(kind: str, objective: str) -> int:
+    """Extra reasoning levels for a skill's generator calls: proof skills reason settings.proof_effort_notches levels
+    above their role's effort (same model)."""
+    return settings.proof_effort_notches if is_proof_skill({"kind": kind, "objective": objective}) else 0
 
 
 def _weight(value: float) -> float:
@@ -670,6 +678,7 @@ async def write_lesson(
         schema=LessonV2Draft,
         max_output_tokens=48000,
         label=f"lesson-v2 {skill['key']}{' revision' if revision else ''}",
+        effort_notches=effort_notches(spec.kind, spec.objective),
         stream=True,
     )
 
@@ -863,6 +872,7 @@ async def review_lesson(
         schema=LessonReview,
         max_output_tokens=32000,
         label=f"review {key or spec.local_id}{' (revised)' if revised else ''}",
+        effort_notches=effort_notches(spec.kind, spec.objective),
         stream=True,
     )
 
@@ -1589,6 +1599,7 @@ async def rewrite_question(
             schema=QuestionRepair,
             max_output_tokens=16000,
             label=f"question {skill['key']} {question.key}{' (retry)' if attempt else ''}",
+            effort_notches=effort_notches(spec.kind, spec.objective),
             stream=True,
         )
         issues = []
@@ -1864,6 +1875,7 @@ async def rewrite_capstone(
             schema=CapstoneRepair,
             max_output_tokens=16000,
             label=f"capstone {skill['key']}{' (retry)' if attempt else ''}",
+            effort_notches=effort_notches(spec.kind, spec.objective),
             stream=True,
         )
         issues = capstone_problems(out.capstone)
@@ -1950,6 +1962,7 @@ def is_v2(lesson_json: str | None) -> bool:
 __all__ = [
     "BridgeIssue",
     "IDEA_BUDGET",
+    "effort_notches",
     "is_typed",
     "blocked_locations",
     "blocking_count",

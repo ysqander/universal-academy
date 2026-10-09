@@ -382,3 +382,50 @@ def test_the_proof_prompts_drop_the_old_capstone_and_block_limits():
         assert "more than 11 blocks" in texts.PROOF_REVIEWER_INSTRUCTIONS
         assert "no earlier skill doing real work" not in texts.PROOF_REVIEWER_INSTRUCTIONS
         assert "It CHAINS this lesson's idea" in texts.WRITER_INSTRUCTIONS  # the general texts keep theirs
+
+
+def test_a_proof_lesson_revises_once_and_its_final_review_runs_lighter(tmp_path, monkeypatch):
+    """2026-10-09 (time per lesson): one revision round for a proof lesson, its final review at the base effort,
+    and the teaching blocks the final review still blocks go to a block repair."""
+    from app.llm_schemas import BlockRepair, BridgeIssue, LessonReview
+    from app.pipeline import lesson_v2
+
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Justify commutativity")["key"]
+    from app import llm
+
+    calls: list[tuple[str, int, str]] = []
+    original = fake_llm.respond
+    structured = llm.structured
+
+    async def spy(**kwargs):  # the effort each call asks for (the fake LLM itself ignores it)
+        calls.append((kwargs["schema"].__name__, kwargs.get("effort_notches", 0), kwargs.get("label", "")))
+        return await structured(**kwargs)
+
+    monkeypatch.setattr(llm, "structured", spy)
+
+    def blocking_review(**kwargs):
+        name = kwargs["schema"].__name__
+        out = original(**kwargs)
+        if name == "LessonReview":  # every review blocks block 3: one revision, then a block repair
+            issue = BridgeIssue(location="Block 3 — Finish route B", inference_required="x", why_insufficient="y",
+                                repair="z", severity="blocking")
+            out = out.model_copy(update={"issues": [issue]})
+        return out
+
+    monkeypatch.setattr(fake_llm, "respond", blocking_review)
+    report = asyncio.run(replan(cid, key, no_split=True))
+    assert report.results[0].ok, report.results[0].error
+    reviews = [(n, e) for n, e, label in calls if n == "LessonReview"]
+    assert len(reviews) == 2 and reviews[0][1] == 1 and reviews[1][1] == 0  # first at the proof notch, final without
+    assert sum(1 for n, *_ in calls if n == "LessonV2Draft") == 2  # the draft and ONE revision
+    assert sum(1 for n, *_ in calls if n == "BlockRepair") == 1
+    assert lesson_v2.blocked_blocks(LessonReview.model_validate({
+        "issues": [{"location": "Blocks 9–10 — the general case", "inference_required": "", "why_insufficient": "",
+                                     "repair": "", "severity": "blocking"},
+                                    {"location": "k1q2", "inference_required": "", "why_insufficient": "", "repair": "",
+                                     "severity": "blocking"}],
+        "density_issues": [], "untaught_method_exercises": [], "math_errors": [], "out_of_scope_violations": [],
+        "optional_content_needed": [], "split_recommended": False, "split_reason": "",
+    })).keys() == {9, 10}
+    assert BlockRepair(blocks=[]).blocks == []

@@ -15,7 +15,10 @@ a step that still disagrees (or reports a defect) flags the whole question. veri
 records]}.
 
 Before any model call, a question whose answer key contradicts its own displayed answer is flagged (status
-'key_mismatch'; questions.display_mismatch). The solver gets the course's notation (course_setting, e.g. "F: R or C")
+'key_mismatch'; questions.display_mismatch), and so is one whose answer the learner can read instead of work out —
+printed in its prompt, typed back from it, or (v2) a line of the lesson (status 'readable';
+questions.answer_known_problems: the review of 2026-10-09 found "compute −7+5i as the sum of −7 and 5i" in a review).
+A readable question is never released by keep_kps_servable. The solver gets the course's notation (course_setting, e.g. "F: R or C")
 as a cached prefix and is told to work inside it, so it does not object about cases the textbook excludes.
 
 Flags are shared with the learner: a question the learner reported (any flag whose reason does not start with
@@ -41,7 +44,7 @@ from ..learning.grading import check_answer
 from ..llm_schemas import IndependentAnswer
 from .lessons import LEGACY_TARGET, kp_targets
 from .. import prompts
-from .questions import display_mismatch, is_machine_checkable
+from .questions import answer_known_problems, display_mismatch, is_machine_checkable
 
 log = logging.getLogger("ua.pipeline.verify")
 
@@ -124,6 +127,23 @@ def key_mismatch(row: dict[str, Any]) -> str | None:
         correct_choice=row.get("correct_choice"),
         tolerance=row.get("tolerance"),
     )
+
+
+def readable_answer(row: dict[str, Any]) -> str | None:
+    """Why the learner can read this question's answer instead of working it out (None: they can't): the mechanical
+    answer_known_problems of generation, with the lesson's text as context for a v2 lesson."""
+    from .lesson_v2 import lesson_context, question_draft  # lesson_v2 imports this module
+    from .lessons import is_proof_skill
+
+    skill = db.query_one("SELECT kind, objective, lesson_json FROM skills WHERE id = ?", (row.get("skill_id"),)) or {}
+    lesson = db.loads(skill.get("lesson_json"), {}) or {}
+    context = lesson_context(lesson) if isinstance(lesson, dict) and lesson.get("format") == "v2" else []
+    try:
+        draft = question_draft(row)
+    except Exception:  # noqa: BLE001 — an unreadable row is the validation's business
+        return None
+    problems = answer_known_problems(draft, context, proof=is_proof_skill({**skill, "kind": skill.get("kind") or ""}))
+    return problems[0] if problems else None
 
 
 def verify_request(row: dict[str, Any]) -> str:
@@ -357,9 +377,13 @@ async def verify_question(row: dict[str, Any]) -> Verdict | None:
     """Independent solve (retried once; a true_false_set disagreement is re-checked once; a multistep question is
     verified step by step). None when the call failed — the question stays unverified."""
     mismatch = key_mismatch(row)
+    readable = None if mismatch else readable_answer(row)
     if mismatch:
         reason = f"{VERIFICATION_PREFIX} answer key and displayed answer disagree — {mismatch}"
         verdict: Verdict | None = Verdict(True, reason, {"status": "key_mismatch"})
+    elif readable:
+        reason = f"{VERIFICATION_PREFIX} the answer can be read — {readable}"
+        verdict = Verdict(True, reason, {"status": "readable"})
     else:
         verdict = await (verify_multistep(row) if row["kind"] == "multistep" else _verify_single(row))
     if verdict is None:
@@ -421,7 +445,11 @@ def keep_kps_servable(skill_id: str) -> list[str]:
         missing = need - sum(1 for r in pool if not r["flagged"])
         if missing <= 0:
             continue
-        candidates = [r for r in pool if r["flagged"] and r["flag_reason"].startswith(VERIFICATION_PREFIX)]
+        candidates = [
+            r for r in pool
+            if r["flagged"] and r["flag_reason"].startswith(VERIFICATION_PREFIX)
+            and db.loads(r["verify_json"], {}).get("status") != "readable"  # better no question than a readable one
+        ]
         candidates.sort(key=_keep_rank)
         for r in candidates[:missing]:
             record = db.loads(r["verify_json"], {})

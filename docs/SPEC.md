@@ -67,7 +67,7 @@ Per page, in PDF points:
 | graph | one high-reasoning call over the whole chapter markdown (`<<page N · p.L>>` markers, figure list) → `KnowledgeGraphDraft`; then validation | `skills`, `edges`, `foundations`, course.big_picture/excluded |
 | lessons | per skill (concurrent): `LessonDraft` from skill spec + its source pages (±1 page) + prerequisite/dependent skills + book exercises on those pages | skills.lesson_json, `questions` |
 | visuals | per skill: separate **visualization planner** call → `VisualizationPlan`; function plots are pre-sampled with SymPy (≤ 21 parameter values × 200 points) | skills.viz_json |
-| verify | per machine-checkable question: first a no-model check that the answer key agrees with the question's own displayed answer (else `key_mismatch` → flagged); then an independent solve (`IndependentAnswer`, model `gpt-6-luna`, given the course's notation such as "F: R or C" and told to work inside it); compare with the grader (§6.1). Disagreement or reported problem → `flagged=1` (kept out of scoring). A guided proof lesson's scored steps are verified the same way before the lesson is stored (`verify_guided_lesson`; a rejected step gets `check.withheld` and is not scored); a stored one is re-verified by `regenerate --only verify` or the build's resume, carrying running attempts over | questions.verify_json/flagged, skills.lesson_json |
+| verify | per machine-checkable question: first a no-model check that the answer key agrees with the question's own displayed answer (else `key_mismatch` → flagged); then an independent solve (`IndependentAnswer`, model `gpt-6-luna`, given the course's notation such as "F: R or C" and told to work inside it); compare with the grader (§6.1). Disagreement or reported problem → `flagged=1` (kept out of scoring); so is, before any model call, a question whose answer the learner can read (printed in its prompt, typed back, or a line of a v2 lesson — status `readable`, never released to keep a KP servable). A guided proof lesson's scored steps are verified the same way before the lesson is stored (`verify_guided_lesson`; a rejected step gets `check.withheld` and is not scored); a stored one is re-verified by `regenerate --only verify` or the build's resume, carrying running attempts over | questions.verify_json/flagged, skills.lesson_json |
 | finalize | initialize `progress` rows (available if no in-chapter prerequisites, else locked), course.status=ready | progress |
 
 Rules:
@@ -95,7 +95,9 @@ Planner (`TeachingPlan`, may split a node into separate outcomes; sees block fee
 wrong, and the learner's missed or assisted answers on the skill — guided proof steps included) → writer (`LessonV2Draft`: ordered teaching blocks, each declaring its one `new_idea`,
 with inline checks and faded examples, then practice knowledge points) → reviewer (`LessonReview`: missing-bridge pass
 `issues` + density/outcome pass `density_issues`) → one revision when either pass reports anything, a second one
-only for blocking issues or validation problems left (`MAX_REVISIONS`). Validation sends a draft back when the
+only for blocking issues or validation problems left (`MAX_REVISIONS`). A proof lesson revises once
+(`PROOF_MAX_REVISIONS`), its final review runs without the proof effort notch, and the teaching blocks that review
+still blocks get one block repair (`patch_blocks`). Validation sends a draft back when the
 teaching sequence has more than 10 blocks or 420 words of prose, or when the questions served first hold more than one
 choice question or no typed answer. Questions the final review still blocks — or whose answer can be read
 (`answer_known_problems`) — are left out while each knowledge point keeps a spare; such a question served first is

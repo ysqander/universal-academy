@@ -585,6 +585,17 @@ CAPSTONE REPAIR: the lesson below is final except its capstone (the final multis
 """
 
 
+BLOCK_REPAIR_NOTE = """\
+BLOCK REPAIR: the lesson below is final except the teaching blocks named under "Blocking issues". Return ONLY
+replacements for those blocks (`blocks`: each block's number and the new block), fixing every issue listed for it:
+- keep each block's job, kind and place in the sequence unless an issue needs another kind; never add or drop a block;
+- keep the lesson's letters, numbers and notation, and everything the other blocks rely on (a later block may use this
+  block's results; this block may use only what earlier blocks established);
+- a graded check keeps its rules — in a proof skill it is a scored step (THE PROOF TRACK): it has a hint, and its
+  answer is printed nowhere before it (never move it into an earlier block or into this block's text).
+"""
+
+
 REVISION_NOTE = """\
 REVISION: below are your previous draft of this lesson and a review of it. Write the complete revised lesson:
 - fix every blocking issue with the smallest adequate repair the review suggests (or a better one), and the minor

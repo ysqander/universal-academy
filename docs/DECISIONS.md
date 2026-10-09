@@ -59,8 +59,11 @@ round fixed what was left in 3 and changed nothing, was discarded as worse or fa
 repair** (one writer call that returns only those blocks, kept only if the mechanical checks do not get worse —
 `lesson_v2.patch_blocks`); the four-judge audit is no longer the default — only for the first lesson of a proof
 pattern on this format, or when a blocking issue survives the repairs; lessons are generated ahead and in parallel.
-Expected ~25–28 minutes per proof lesson, unattended. Being measured on S10 (next on the learner's path): this setting
-against the same with the planner and reviews one level lower (`UA_ANTHROPIC_EFFORT_GRAPH=medium`).
+Measured on S10 (next on the learner's path), both run in parallel: **21.5 minutes and $3.94** (plan 7.1, write 4.2,
+review 5.9, revision 2.9, final review 1.3 min), final review 0 blocking — against 39 minutes and $6.53 for S4b.
+The same with the planner and reviews one level lower (`UA_ANTHROPIC_EFFORT_GRAPH=medium`) saved nothing: its planner
+produced two invalid plans before a usable one (9.2 minutes of planning), it cost $4.52, and its final review kept 3
+blocking issues and a proof-track rule broken. Decision: keep the planner and the first review at xhigh.
 
 ## 2. Lessons
 

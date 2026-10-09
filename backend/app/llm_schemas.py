@@ -555,6 +555,15 @@ class CapstoneRepair(BaseModel):
     )
 
 
+class PatchedBlock(BaseModel):
+    number: int = Field(description="The 1-based number of the block this replaces (one named under the blocking issues).")
+    block: TeachingBlock
+
+
+class BlockRepair(BaseModel):
+    blocks: list[PatchedBlock] = Field(description="Replacements for exactly the blocks named in the blocking issues — no other block.")
+
+
 class BridgeIssue(BaseModel):
     location: str = Field(
         description=(

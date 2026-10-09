@@ -32,6 +32,7 @@ from ..learning import guided
 from ..prompts.rules import MISCONCEPTIONS_HEADER, PROOF_MISCONCEPTIONS_HEADER
 from ..config import settings
 from ..llm_schemas import (
+    BlockRepair,
     BridgeIssue,
     CapstoneRepair,
     DependentLink,
@@ -106,11 +107,15 @@ IDEA_BUDGET = 4  # about this many new ideas per lesson (the learner's S3b revie
 TARGET_BLOCKS, MAX_TEACHING_BLOCKS = 9, 10
 TARGET_PROSE_WORDS, MAX_PROSE_WORDS = 350, 420
 MAX_REVISIONS = 2  # the second revision runs only for blocking issues or validation problems the first one left
+# A proof lesson revises once (2026-10-09: a second round fixed what was left in 3 of 10 proof runs and cost ~10 minutes
+# of Opus each time); blocking issues left in its teaching blocks get a targeted block repair instead.
+PROOF_MAX_REVISIONS = 1
 _MATH_SPAN = re.compile(r"\$\$.+?\$\$|\$.+?\$", re.DOTALL)
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
 _QUESTION_KEY = re.compile(r"\bk\d+q\d+\b")
 _CAPSTONE_LOCATION = re.compile(r"\bcap\b|capstone", re.IGNORECASE)
+_BLOCK_LOCATION = re.compile(r"\bblocks?\s+(\d+)(?:\s*(?:[-–—]|to|and|,)\s*(\d+))?", re.IGNORECASE)
 MAX_SHOWN_MISSES = 10  # learner misses on this skill (any lesson version) shown to the planner
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
 V2_VIZ = {"format": "none"}  # skills.viz_json of a v2 lesson: its visuals live in the blocks
@@ -965,9 +970,12 @@ def idea_lines(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
 
 
 async def review_lesson(
-    spec: TeachingSpec, draft: LessonV2Draft, *, key: str = "", revised: bool = False, prereqs: list[str] | None = None
+    spec: TeachingSpec, draft: LessonV2Draft, *, key: str = "", revised: bool = False, prereqs: list[str] | None = None,
+    final: bool = False,
 ) -> LessonReview:
-    """Missing-bridge and density review (role "graph", high effort) of a draft as a first explanation."""
+    """Missing-bridge and density review (role "graph", high effort) of a draft as a first explanation. `final`: the
+    review of a proof lesson's last revision only checks what is left — it runs at the role's base effort, without the
+    proof notch (about 2.5 instead of 5–7 minutes on Opus)."""
     return await llm.structured(
         role="graph",
         instructions=reviewer_instructions(spec),
@@ -975,7 +983,7 @@ async def review_lesson(
         schema=LessonReview,
         max_output_tokens=32000,
         label=f"review {key or spec.local_id}{' (revised)' if revised else ''}",
-        effort_notches=effort_notches(spec.kind, spec.objective),
+        effort_notches=0 if final and is_proof_track(spec) else effort_notches(spec.kind, spec.objective),
         stream=True,
     )
 
@@ -1341,6 +1349,60 @@ def blocked_locations(review: LessonReview) -> tuple[dict[str, str], list[str]]:
     return keys, capstone
 
 
+def blocked_blocks(review: LessonReview) -> dict[int, list[str]]:
+    """Blocking issues the review locates in teaching blocks (block number → the issues), the ones a question or
+    capstone repair does not reach."""
+    out: dict[int, list[str]] = {}
+    for issue in [*review.issues, *review.density_issues]:
+        if issue.severity != "blocking" or _QUESTION_KEY.search(issue.location) or _CAPSTONE_LOCATION.search(issue.location):
+            continue
+        numbers: set[int] = set()
+        for first, last in _BLOCK_LOCATION.findall(issue.location):
+            lo, hi = int(first), int(last or first)
+            numbers |= set(range(lo, hi + 1)) if 0 < hi - lo < 4 else {lo, hi}
+        text = f"{issue.location}: {issue.inference_required} — {issue.why_insufficient} → repair: {issue.repair}"
+        for n in numbers:
+            out.setdefault(n, []).append(text)
+    return out
+
+
+async def patch_blocks(
+    course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec, draft: LessonV2Draft, issues: dict[int, list[str]],
+    prefix: str,
+) -> LessonV2Draft:
+    """Writer call (role "lesson") for the named teaching blocks only (a minute or two, where a full revision and its
+    review take ten). The caller keeps the patched draft only if its mechanical checks do not get worse."""
+    texts = prompts.for_role("lesson")
+    request = "\n".join(
+        [
+            write_request(course, skill, spec, spec_figures(course, skill, spec)),
+            "",
+            texts.BLOCK_REPAIR_NOTE,
+            "## The lesson (final except the blocks named below)",
+            render_lesson(draft),
+            "",
+            "## Blocking issues to fix",
+            *[f"- block {n}: {t}" for n, found in sorted(issues.items()) for t in found],
+        ]
+    )
+    out = await llm.structured(
+        role="lesson",
+        instructions=writer_instructions(spec),
+        shared_prefix=prefix,
+        text=request,
+        schema=BlockRepair,
+        max_output_tokens=24000,
+        label=f"blocks {skill['key']}",
+        effort_notches=effort_notches(spec.kind, spec.objective),
+        stream=True,
+    )
+    blocks = list(draft.blocks)
+    for patched in out.blocks:
+        if patched.number in issues and 1 <= patched.number <= len(blocks):
+            blocks[patched.number - 1] = patched.block
+    return draft.model_copy(update={"blocks": blocks})
+
+
 def _usable(q: QuestionDraft) -> bool:
     """A question the lenient validation will keep (it drops free_response and invalid questions)."""
     if q.kind == "free_response":
@@ -1506,7 +1568,8 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         review = await review_lesson(spec, draft, key=key, prereqs=prereq_lines)
         result.initial_review = final_review = review
         final = draft
-        for round_ in range(MAX_REVISIONS):
+        rounds = PROOF_MAX_REVISIONS if is_proof_track(spec) else MAX_REVISIONS
+        for round_ in range(rounds):
             if round_ == 0:
                 wanted = bool(hard or soft or needs_revision(final_review))
             else:  # the second round only for what is still blocking (a capstone-only blocker goes to the rewrite)
@@ -1526,7 +1589,9 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
                 if r_hard and not hard:
                     result.notes.append(f"revision {round_ + 1} has validation problems ({'; '.join(r_hard)}); kept the previous draft")
                     continue
-                revised_review = await review_lesson(spec, revised, key=key, revised=True, prereqs=prereq_lines)
+                revised_review = await review_lesson(
+                    spec, revised, key=key, revised=True, prereqs=prereq_lines, final=round_ == rounds - 1
+                )
             except Exception as e:  # noqa: BLE001 — an optional improvement never costs the draft we have
                 log.warning("revision %d of %s failed: %s", round_ + 1, key, e)
                 result.notes.append(f"revision {round_ + 1} failed ({e}); kept the previous draft")
@@ -1542,6 +1607,19 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
             final, final_review, hard, soft = revised, revised_review, r_hard, r_soft
             result.revised, result.revisions = True, result.revisions + 1
         result.final_review = final_review
+        named = blocked_blocks(final_review) if is_proof_track(spec) else {}
+        if named:  # what the revision left in the teaching: rewrite just those blocks, kept only if no worse
+            try:
+                patched = await patch_blocks(course, skill, spec, final, named, prefix)
+                p_hard, p_soft = await draft_problems(patched, spec, figures, proof=proof)
+                if len(p_hard) <= len(hard) and proof_debt(patched, spec) <= proof_debt(final, spec):
+                    final, hard, soft = patched, p_hard, p_soft
+                    result.notes.append(f"block(s) {', '.join(map(str, sorted(named)))} repaired for the final review's blocking issues")
+                else:
+                    result.notes.append(f"the repair of block(s) {', '.join(map(str, sorted(named)))} made the checks worse; kept the blocks")
+            except Exception as e:  # noqa: BLE001 — the repair is an improvement, never a requirement
+                log.warning("block repair of %s failed: %s", key, e)
+                result.notes.append(f"block repair failed ({e})")
         blocked, capstone_blockers = blocked_locations(final_review)
         context = lesson_context(final)
         counts = _point_keys(final)

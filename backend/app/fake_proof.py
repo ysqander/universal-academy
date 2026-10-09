@@ -338,8 +338,8 @@ def _proof_capstone() -> QuestionDraft:
                   "$(\\alpha\\mu)\\beta$, in this order.",
                   answer="(3*a-b, a+3*b, c, d)", display="$(3a-b,\\ a+3b,\\ c,\\ d)$",
                   hint="$\\alpha\\mu=(a+bi)(3+i)$ gives $x$ and $y$.",
-                  explanation="$\\alpha\\mu=(3a-b)+(a+3b)i$; then real $(3a-b)c-(a+3b)d$ and imaginary "
-                  "$(3a-b)d+(a+3b)c$ — route A's coordinates once real sums are reordered."),
+                  explanation="$\\alpha\\mu=(3a-b)+(a+3b)i$; then route B's real coordinate is $(3a-b)c-(a+3b)d$ and its "
+                  "imaginary coordinate $(3a-b)d+(a+3b)c$."),
             _step("true_false_set", "Mark each statement about this proof true or false.",
                   choices=["The coordinates agree once real sums are reordered",
                            "Comparing the real coordinates alone would prove the law",

@@ -311,7 +311,9 @@ statement:
   second typed step only when the change adds a real move).
 - other patterns: their walkthrough moves (below), at most 3.
 Never a forced value, a choice among proofs, a long expansion, the teaching's statement again with other numbers, a
-step that needs an earlier skill's computation, or a last step that only subtracts printed numbers.
+step that needs an earlier skill's computation, or a last step that only subtracts printed numbers. An explanation never
+answers a later step: the comparison and the law of the scalars that makes the routes meet go in the LAST step's
+explanation and the solution — the last step is where the learner decides them.
 
 EXCEPTIONS (proof skills only, on purpose): 10 blocks with 5 scored steps; the faded example continues the running
 statement; the generalize block holds a scored '?' cell; the block after a scored step may show its answer (the app

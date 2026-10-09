@@ -464,16 +464,30 @@ def question_problems(q: QuestionDraft, plan: ProofPlan, *, served: bool) -> tup
     return hard, soft
 
 
+def _mentions_law(text: str) -> bool:
+    return any(w in (text or "").lower() for w in _LAW_WORDS)
+
+
 def _explanation_problems(q: QuestionDraft) -> list[str]:
-    """A step explanation that prints the route comparison before a later step asks about it (the judges of the first
-    proof-track S4a: the true/false step was answered by the explanation just shown)."""
+    """A step explanation that answers a later step before it is asked: the route comparison printed before a later
+    step asks about it (the judges of the first proof-track S4a), or a law named before a later choice or statement
+    set asks which law matches (the judges of the guided S10, 2026-10-09: "(a+b)c = c(a+b) = ac+bc by commutativity and
+    distributivity" in step 2's explanation, then step 3 asked what the change does)."""
     problems = []
     for i, st in enumerate(q.steps[:-1], start=1):
-        later = [j for j, x in enumerate(q.steps[i:], start=i + 1) if x.kind in ("true_false_set", "multiple_choice", "true_false")]
-        if later and _COMPARISON_TABLE.search(st.explanation or ""):
+        later = [(j, x) for j, x in enumerate(q.steps[i:], start=i + 1) if x.kind in ("true_false_set", "multiple_choice", "true_false")]
+        if not later:
+            continue
+        if _COMPARISON_TABLE.search(st.explanation or ""):
             problems.append(
-                f"{q.key} step {i}: its explanation prints the route comparison before step {later[0]} asks about it — "
+                f"{q.key} step {i}: its explanation prints the route comparison before step {later[0][0]} asks about it — "
                 "move the comparison table to the last step's explanation and the solution"
+            )
+        elif _mentions_law(st.explanation) and any(_mentions_law(" ".join([x.prompt, *x.choices])) for _, x in later):
+            j = next(j for j, x in later if _mentions_law(" ".join([x.prompt, *x.choices])))
+            problems.append(
+                f"{q.key} step {i}: its explanation names the law before step {j} asks about it — keep the law of the "
+                "comparison for the last step's explanation and the solution"
             )
     return problems
 
@@ -481,7 +495,7 @@ def _explanation_problems(q: QuestionDraft) -> list[str]:
 def capstone_proof_problems(cap: QuestionDraft, plan: ProofPlan) -> list[str]:
     """The capstone slot of a proof lesson holds the variant: 2–3 steps, typed where the pattern computes, no scaffold
     in its prompts, short options."""
-    problems = _walkthrough_problems(cap, plan, capstone=True)
+    problems = _walkthrough_problems(cap, plan, capstone=True) + _explanation_problems(cap)
     for i, step in enumerate(cap.steps, start=1):
         problems += _option_problems(step, f"cap step {i}")
     return problems
@@ -601,8 +615,7 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
         if not single:
             soft.append(f"knowledge point {kp_index} has no single-answer question (typed, or a true_false_set of 3+) — quizzes never serve multistep questions")
     cap = draft.capstone
-    hard += capstone_proof_problems(cap, plan)
-    soft += _explanation_problems(cap)
+    hard += capstone_proof_problems(cap, plan)  # (its explanations included: the variant scores double)
     for name in sorted(_plan_greek(plan)):
         char = next(k for k, v in _GREEK_TO_NAME.items() if v == name)
         assigned = rf"\s*=\s*\(?\s*[-−\d(]"  # λ = (2−i)(1+i), λ = 3+i — not αβ = 2−5i

@@ -49,6 +49,21 @@ weaker — blind learner judges preferred the current setting in 3 of 4 judgment
 setting, and the best lesson (1 blocking issue) was at the current setting. Decision: keep the notch for proof skills.
 All four S4b lessons called cancelling α circular in the uniqueness proof (it is not: the inverse exists by
 hypothesis); CIRCULARITY_RULE in app/prompts/rules.py now goes to both providers' planner, writer and reviewer.
+**Time per lesson (2026-10-09, the learner: "we can't have as default 1h40 per lesson").** Measured on the guided S4b:
+39 minutes of generation (plan 6.7, write 6.3, three reviews 18.9, two revisions 6.4 min — all Opus, all in sequence;
+time follows output tokens, 30–50K per call at about 115 per second) and about 16 more of Claude Code's audit (four
+judges, a variant rewrite, re-verification). Sol is no faster (32–34 min). Across ten proof runs a second revision
+round fixed what was left in 3 and changed nothing, was discarded as worse or failed validation in the others, at
+~10 minutes each. Decided: a proof lesson **revises once**; the review of that revision runs at the role's base effort
+(high, not xhigh: it checks, it does not write); blocking issues it still locates in teaching blocks get a **block
+repair** (one writer call that returns only those blocks, kept only if the mechanical checks do not get worse —
+`lesson_v2.patch_blocks`); the four-judge audit is no longer the default — only for the first lesson of a proof
+pattern on this format, or when a blocking issue survives the repairs; lessons are generated ahead and in parallel.
+Measured on S10 (next on the learner's path), both run in parallel: **21.5 minutes and $3.94** (plan 7.1, write 4.2,
+review 5.9, revision 2.9, final review 1.3 min), final review 0 blocking — against 39 minutes and $6.53 for S4b.
+The same with the planner and reviews one level lower (`UA_ANTHROPIC_EFFORT_GRAPH=medium`) saved nothing: its planner
+produced two invalid plans before a usable one (9.2 minutes of planning), it cost $4.52, and its final review kept 3
+blocking issues and a proof-track rule broken. Decision: keep the planner and the first review at xhigh.
 
 ## 2. Lessons
 
@@ -263,6 +278,12 @@ Details: [SPEC.md §6.7](SPEC.md).
   not to object about cases the book excludes (characteristic-2 fields). Re-checking the real course with this
   reduced verification flags from 11 to 3.
 - Verification never clears a learner's own flag.
+- **Readable answers are caught at verification too** (2026-10-09: a review served "Compute −7+5i as the sum of the
+  real number −7 and the purely imaginary number 5i", written on 2026-10-05, before generation checked for it). Before
+  any model call, verification runs generation's `answer_known_problems` on the question (with the lesson's text for a
+  v2 lesson) and flags a hit (status `readable`; `keep_kps_servable` never releases it — better no question than one
+  that gives its answer). `scripts/audit_questions.py` runs the same check over a stored course (no model call) and
+  flags what it finds; the real course had 10 of 336 servable questions (S1, S6, S11, S16 ×3, S17, S24, S26 ×2).
 - **Scored proof steps are verified too** (2026-10-09): they cost points now, so each is solved like a multistep step
   from the lesson text up to it, with the earlier steps' results; a step that still disagrees after the stronger
   model's re-check is withheld from scoring (`check.withheld`, records in `lesson_json.guided_verify`) and stays in the

@@ -95,6 +95,33 @@ def test_verification_flags_a_key_mismatch_without_calling_a_model(tmp_path, mon
     assert db.loads(stored["verify_json"])["status"] == "key_mismatch"
 
 
+def test_verification_flags_a_readable_answer_and_never_releases_it(tmp_path, monkeypatch):
+    """The review of 2026-10-09 served "Compute −7+5i as the sum of −7 and 5i" (written before the generation check)."""
+    cid = tiny_course(tmp_path)
+    build(cid)
+    row = _verifiable_row(cid)
+    db.execute(
+        "UPDATE questions SET kind = 'expression', prompt = ?, answer = '-7+5*i', answer_display = '$-7+5i$', correct_choice = NULL,"
+        " choices_json = '[]' WHERE id = ?",
+        ("Compute $-7+5i$ as the sum of the real number $-7$ and the purely imaginary number $5i$.", row["id"]),
+    )
+    row = db.query_one("SELECT * FROM questions WHERE id = ?", (row["id"],))
+    monkeypatch.setattr(fake_llm, "respond", lambda **kw: pytest.fail("no model call expected"))
+    verdict = asyncio.run(verify.verify_question(row))
+    assert verdict is not None and verdict.flagged
+    stored = db.query_one("SELECT * FROM questions WHERE id = ?", (row["id"],))
+    assert stored["flag_reason"].startswith("verification: the answer can be read") and "own prompt" in stored["flag_reason"]
+    assert db.loads(stored["verify_json"])["status"] == "readable"
+    # every other question of its knowledge point flagged too: keep_kps_servable releases those, never this one
+    db.execute(
+        "UPDATE questions SET flagged = 1, flag_reason = 'verification: independent solver answered 5', verify_json = '{}' "
+        "WHERE skill_id = ? AND kp_index = ? AND id != ? AND role != 'capstone'",
+        (row["skill_id"], row["kp_index"], row["id"]),
+    )
+    verify.keep_kps_servable(row["skill_id"])
+    assert db.query_one("SELECT flagged FROM questions WHERE id = ?", (row["id"],))["flagged"] == 1
+
+
 def test_the_solver_works_inside_the_course_setting(tmp_path, monkeypatch):
     cid = tiny_course(tmp_path)
     build(cid)

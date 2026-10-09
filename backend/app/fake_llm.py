@@ -27,6 +27,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 from pydantic import BaseModel
 
 from .llm_schemas import (
+    BlockRepair,
     BridgeIssue,
     CapstoneRepair,
     DependentLink,
@@ -1077,6 +1078,7 @@ _HANDLERS = {
     "LessonV2Draft": _lesson_v2,
     "LessonReview": _review,
     "CapstoneRepair": lambda _text, _prefix: CapstoneRepair(capstone=_capstone()),
+    "BlockRepair": lambda _text, _prefix: BlockRepair(blocks=[]),  # offline: the blocks stay as they are
     "QuestionRepair": lambda text, prefix: QuestionRepair(question=_repaired_question(text, prefix)),
     "VisualizationPlan": _viz,
     "IndependentAnswer": _independent,

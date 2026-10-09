@@ -8,6 +8,10 @@ an unsimplified but correct value gets the same "now simplify it" request as a p
 recorded: no attempt, no XP, no effect on the lesson's practice, streaks or the FSRS card. The answer and its
 explanation are returned only after a readable response; every error message is free of the answer key.
 
+The exception is a guided proof lesson (learning/guided.py): its scored checks count toward the lesson and are
+answered inside the task (engine.check_guided). Here they are refused (409) until the skill is learned — otherwise
+this endpoint would hand out their answers before the lesson asks for them.
+
 Blocks are named by position, so both endpoints take the Lesson.version the learner is looking at (views.lesson_version
 of the stored lesson_json, the value views.lesson_view sends). When the lesson was regenerated since the page loaded,
 the request is refused with 409 STALE_LESSON instead of grading (or recording feedback on) a different block. A request
@@ -22,7 +26,7 @@ from typing import Any
 
 from .. import db, views
 from ..schemas import BlockCheckRequest, BlockCheckResult, BlockFeedbackRequest
-from . import engine, grading, scheduler
+from . import engine, grading, guided, scheduler
 
 log = logging.getLogger("ua.learning.blocks")
 
@@ -30,8 +34,8 @@ GRADED_KINDS = ("numeric", "expression", "multiple_choice", "true_false", "true_
 CHECK_KINDS = (*GRADED_KINDS, "reflect")
 REFLECT_FEEDBACK = "Compare with the explanation."
 MAX_NOTE_CHARS = 2000
-STALE_LESSON = "This lesson was updated — reload to see the new version."
-MIN_VERSION_CHARS = 8  # a shorter prefix of the hash is too likely to match a different version
+STALE_LESSON = guided.STALE_LESSON
+MIN_VERSION_CHARS = views.MIN_VERSION_CHARS
 
 
 def _lesson(skill_id: str) -> tuple[dict[str, Any], list[Any]]:
@@ -50,10 +54,7 @@ def lesson_hash(lesson_json: str | None) -> str:
     return views.lesson_version(lesson_json)
 
 
-def same_version(version: str, lesson_json: str | None) -> bool:
-    """Does a client's Lesson.version name this stored lesson? The full hash or a prefix of it (MIN_VERSION_CHARS+)."""
-    sent = version.strip().lower()
-    return len(sent) >= MIN_VERSION_CHARS and lesson_hash(lesson_json).startswith(sent)
+same_version = views.same_version
 
 
 def _block(skill_id: str, index: int, version: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -75,62 +76,23 @@ def _check_of(block: dict[str, Any]) -> dict[str, Any]:
     return check
 
 
-def _choices(check: dict[str, Any]) -> list[str]:
-    choices = [str(c) for c in check.get("choices") or []]
-    if check["kind"] == "true_false" and not choices:
-        return ["True", "False"]
-    return choices
-
-
-def _correct_choice(check: dict[str, Any]) -> int | None:
-    value = check.get("correct_choice")
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
-
-
-def answer_display(check: dict[str, Any]) -> str:
-    """The check's answer as shown after a response: for a choice check the correct option's own text (the client
-    marks the right option by matching it — a paraphrase would mark none after a wrong pick), otherwise the writer's
-    answer_display when given."""
-    kind, answer = check["kind"], str(check.get("answer") or "")
-    choices = _choices(check)
-    correct = _correct_choice(check)
-    if kind in ("multiple_choice", "true_false") and correct is not None and 0 <= correct < len(choices):
-        return choices[correct]
-    if str(check.get("answer_display") or "").strip():
-        return str(check["answer_display"])
-    if kind == "true_false_set":
-        return grading.true_false_set_display(answer)
-    return answer
+answer_display = guided.answer_display
 
 
 def _grade(check: dict[str, Any], body: BlockCheckRequest) -> grading.GradeResult:
-    kind, answer = check["kind"], str(check.get("answer") or "")
-    if kind in ("multiple_choice", "true_false"):
-        n = len(_choices(check))
-        if body.choice is None or (n and not 0 <= body.choice < n):
-            return grading.GradeResult(False, "Choose one of the options.", invalid=True)
-    elif not (body.response or "").strip():
-        message = grading.true_false_set_request(answer) if kind == "true_false_set" else "Enter an answer first."
-        return grading.GradeResult(False, message, invalid=True)
-    if kind == "true_false_set":
-        key = grading.parse_true_false_set(answer)
+    if check["kind"] == "true_false_set":
+        key = grading.parse_true_false_set(str(check.get("answer") or ""))
         if key and check.get("choices") and len(key) != len(check["choices"]):
             log.warning("inline check: %d statements but a %d-mark answer key", len(check["choices"]), len(key))
-    return grading.check_answer(
-        kind,
-        answer=answer,
-        correct_choice=_correct_choice(check),
-        tolerance=None,
-        response=body.response,
-        choice=body.choice,
-        require_simplified=True,
-    )
+    return guided.grade_check(check, body)
 
 
 def check_block(skill_id: str, index: int, body: BlockCheckRequest) -> BlockCheckResult:
     """Grade a response to a block's inline check. Called WITHOUT engine.lock (grading has its own time budget)."""
     skill, block = _block(skill_id, index, body.version)
     check = _check_of(block)
+    if index in guided.scored_indices(db.loads(skill["lesson_json"], {})) and views.skill_status(skill_id) not in scheduler.LEARNED:
+        raise engine.Conflict(guided.SCORED_IN_LESSON)
     explanation = str(check.get("explanation") or "")
     if check["kind"] == "reflect":
         return BlockCheckResult(correct=None, feedback=REFLECT_FEEDBACK, answer_display=answer_display(check), explanation=explanation)

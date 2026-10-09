@@ -921,6 +921,7 @@ def _question_public(row: dict[str, Any]) -> QuestionPublic:
     """The current quiz question: no hints, checklist or book reference."""
     question = views.question_public(row)
     question.hints = []
+    question.hint_count = 0
     question.checklist = []
     question.source_exercise = None
     question.hints_used = 0

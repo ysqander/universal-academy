@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Collection
 from typing import Any
 
 from . import db
+from .learning import guided
 from .pipeline.textutil import (
     bare_latex,
     clean_source_refs,
@@ -70,8 +72,11 @@ LEGACY_TARGET_QUESTIONS = 2  # knowledge points stored before target_questions e
 
 
 def question_public(row: dict[str, Any]) -> QuestionPublic:
-    """A question as the learner sees it. Multistep: the steps without their answers or explanations (step_index and
-    step_results of the current attempt are filled in by the learning engine)."""
+    """A question as the learner sees it. No hint text (the learning engine adds the hints the current attempt has
+    used; the next one comes from POST /hint, which records it). Multistep: the steps without their answers or
+    explanations, and only the first step's prompt (the engine fills in step_index, step_results and the steps
+    reached so far)."""
+    hints = db.loads(row["hints_json"], [])
     return QuestionPublic(
         id=row["id"],
         skill_id=row["skill_id"],
@@ -81,7 +86,8 @@ def question_public(row: dict[str, Any]) -> QuestionPublic:
         kind=row["kind"],
         prompt=row["prompt"],
         choices=db.loads(row["choices_json"], []),
-        hints=db.loads(row["hints_json"], []),
+        hints=[],
+        hint_count=sum(1 for h in hints if isinstance(h, str)),
         checklist=db.loads(row["checklist_json"], []),
         source_exercise=row["source_exercise"],
         flagged=bool(row["flagged"]),
@@ -90,19 +96,27 @@ def question_public(row: dict[str, Any]) -> QuestionPublic:
     )
 
 
-def public_steps(row: dict[str, Any]) -> list[MultistepStepPublic]:
+def public_steps(row: dict[str, Any], reached: int = 0, hinted: Collection[int] = ()) -> list[MultistepStepPublic]:
+    """A multistep question's steps as the learner may see them: the prompts of the steps reached so far (0 ..
+    `reached`) — a later step's prompt can state an earlier step's result, so it is sent blank until then — and the
+    hint text only of the steps in `hinted` (using a hint halves the step's point; POST /hint records it)."""
     if row.get("kind") != "multistep":
         return []
-    return [
-        MultistepStepPublic(
-            index=i,
-            prompt=step.get("prompt", ""),
-            kind=step.get("kind", "expression"),
-            choices=list(step.get("choices") or []),
-            hint=step.get("hint", ""),
+    out = []
+    for i, step in enumerate(db.loads(row.get("steps_json"), []) or []):
+        text = str(step.get("hint") or "")
+        shown = i <= reached
+        out.append(
+            MultistepStepPublic(
+                index=i,
+                prompt=step.get("prompt", "") if shown else "",
+                kind=step.get("kind", "expression"),
+                choices=list(step.get("choices") or []) if shown else [],
+                hint=text if shown and i in hinted else "",
+                has_hint=bool(text.strip()),
+            )
         )
-        for i, step in enumerate(db.loads(row.get("steps_json"), []) or [])
-    ]
+    return out
 
 
 def skill_status(skill_id: str) -> str:
@@ -161,13 +175,32 @@ def lesson_version(lesson_json: str | None) -> str:
     return hashlib.sha1((lesson_json or "").encode("utf-8")).hexdigest()
 
 
-def lesson_view(skill_id: str) -> Lesson | None:
+def same_version(version: str, lesson_json: str | None) -> bool:
+    """Does a client's Lesson.version name this stored lesson? The full hash or a prefix of it (MIN_VERSION_CHARS+)."""
+    sent = version.strip().lower()
+    return len(sent) >= MIN_VERSION_CHARS and lesson_version(lesson_json).startswith(sent)
+
+
+MIN_VERSION_CHARS = 8  # a shorter prefix of the hash is too likely to match a different version
+
+
+def lesson_view(
+    skill_id: str, guided_state: dict[str, Any] | None = None, *, learned: bool = False, kp_content: bool = True
+) -> Lesson | None:
+    """The lesson as the learner sees it. A guided proof lesson (learning/guided.py) of a skill not yet `learned`
+    is gated by `guided_state` (the attempt's record; None = an attempt not started): in a scored attempt the blocks
+    after the first open scored check, and "Go deeper", are not sent until it is answered; each scored check carries
+    its record. `kp_content` False blanks the knowledge points' explanations and worked examples (a scored attempt
+    never serves them). Once the skill is learned, every block is sent and the checks are formative again."""
     skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
     if not skill or skill["lesson_status"] != "ready" or not skill["lesson_json"]:
         return None
     course_id = skill["course_id"]
     labels = course_page_labels(course_id)
     data = db.loads(skill["lesson_json"], {})
+    gstate = None
+    if guided.is_guided(data) and not learned:
+        gstate = guided_state if isinstance(guided_state, dict) else guided.new_state(data, lesson_version(skill["lesson_json"]))
     questions = db.query("SELECT kp_index, flagged FROM questions WHERE skill_id = ?", (skill_id,))
     kps = []
     for i, kp in enumerate(data.get("knowledge_points", [])):
@@ -176,8 +209,8 @@ def lesson_view(skill_id: str) -> Lesson | None:
                 index=i,
                 target_questions=_target(kp.get("target_questions")),
                 title=kp.get("title", f"Step {i + 1}"),
-                explanation=kp.get("explanation", ""),
-                worked_example=WorkedExample(**kp["worked_example"]),
+                explanation=kp.get("explanation", "") if kp_content else "",
+                worked_example=WorkedExample(**kp["worked_example"]) if kp_content else WorkedExample(problem="", steps=[], takeaway=""),
                 question_count=sum(1 for q in questions if q["kp_index"] == i and not q["flagged"]),
             )
         )
@@ -196,13 +229,21 @@ def lesson_view(skill_id: str) -> Lesson | None:
         # plans stored before validation rewrote the planner's sibling ids show "a (S2a): …" → "S2a: …"
         course_keys = [r["key"] for r in db.query("SELECT key FROM skills WHERE course_id = ?", (course_id,))]
         assumed = normalize_sibling_refs(plan.get("assumed_prerequisites") or [], sibling_keys(skill["key"], course_keys))
+        all_blocks = data.get("blocks") or []
+        shown = guided.visible_blocks(gstate, len(all_blocks))
+        scored = set(gstate.get("order") or []) if gstate else set()
         v2_fields = {
             "format": "v2",
             "goal_line": data.get("goal_line", ""),
-            "blocks": [block_view(i, b, course_id, labels) for i, b in enumerate(data.get("blocks") or [])],
+            "blocks": [
+                block_view(i, b, course_id, labels, guided_state=gstate if i in scored else None)
+                for i, b in enumerate(all_blocks[:shown])
+            ],
             "assumed": assumed,
             "out_of_scope": list(plan.get("out_of_scope") or []),
-            "deeper": data.get("deeper", ""),
+            "deeper": data.get("deeper", "") if shown == len(all_blocks) else "",
+            "guided": gstate.get("mode") if gstate else None,
+            "blocks_total": len(all_blocks),
         }
     return Lesson(
         skill_id=skill_id,
@@ -238,19 +279,28 @@ def _target(value: Any) -> int:
         return LEGACY_TARGET_QUESTIONS
 
 
-def block_view(index: int, block: dict[str, Any], course_id: str, labels: list[str]) -> TeachingBlockView:
+def block_view(
+    index: int, block: dict[str, Any], course_id: str, labels: list[str], guided_state: dict[str, Any] | None = None
+) -> TeachingBlockView:
     """A stored v2 teaching block as the learner sees it: the inline check without its answer or explanation (they
-    come back from POST /api/skills/{sid}/blocks/{i}/check)."""
+    come back from POST /api/skills/{sid}/blocks/{i}/check — or, for a scored guided step (`guided_state` = the
+    attempt's record), from POST /api/tasks/{tid}/blocks/{i}/check once the check is done)."""
     check = block.get("check")
+    public = None
+    if check:
+        public = InlineCheckPublic(kind=check["kind"], prompt=check["prompt"], choices=list(check.get("choices") or []))
+        if guided_state is not None:
+            public.scored = True
+            public.second_try = guided.second_try(check)
+            rec = guided.record(guided_state, index)
+            public.state = guided.public_state(check, rec, scored=guided_state.get("mode") == "scored")
     return TeachingBlockView(
         index=index,
         kind=block.get("kind", "explain"),
         heading=block.get("heading") or None,
         body=block.get("body", ""),
         visualization=visualization_view(block.get("visual"), course_id, labels) if block.get("visual") else None,
-        check=InlineCheckPublic(kind=check["kind"], prompt=check["prompt"], choices=list(check.get("choices") or []))
-        if check
-        else None,
+        check=public,
     )
 
 

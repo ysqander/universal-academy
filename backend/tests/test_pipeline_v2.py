@@ -361,7 +361,9 @@ def test_v2_lesson_view_never_leaks_check_answers(tmp_path):
     dumped = view.model_dump_json()
     for secret in ('"answer"', "1+7*i", "TFT", "$1+7i$", "two factors of $i$, and", "correct_choice", "answer_display"):
         assert secret not in dumped, secret
-    assert all(set(b.check.model_dump()) == {"kind", "prompt", "choices"} for b in view.blocks if b.check)
+    assert all(set(b.check.model_dump()) == {"kind", "prompt", "choices", "scored", "second_try", "state"} for b in view.blocks if b.check)
+    assert all(not b.check.scored and b.check.state is None for b in view.blocks if b.check)  # not a guided proof lesson
+    assert view.guided is None and view.blocks_total == len(view.blocks)
     assert view.knowledge_points and all(kp.question_count >= 2 for kp in view.knowledge_points)
     assert {p.key for p in view.unlocks} or {p.key for p in view.prerequisites} is not None
     # the learning agent's check endpoint reads the stored block (answers stay server side)

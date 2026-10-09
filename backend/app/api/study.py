@@ -21,6 +21,8 @@ from ..schemas import (
     BlockCheckResult,
     BlockFeedbackRequest,
     FlagRequest,
+    GuidedCheckResult,
+    GuidedRevealRequest,
     HintResponse,
     NextTaskResponse,
     RevealRequest,
@@ -127,10 +129,30 @@ def flag_question(qid: str, body: FlagRequest) -> Task:
     return _run(lambda: engine.flag(qid, body.reason, _now()))
 
 
+@router.post("/api/tasks/{tid}/blocks/{index}/check", response_model=GuidedCheckResult)
+def check_guided_step(tid: str, index: int, body: BlockCheckRequest) -> GuidedCheckResult:
+    """Answer a guided proof lesson's scored step inside the lesson task (SPEC §6.3b): 1 / ½ on a second try / 0.
+    body.version is required (409 when missing or stale); 422 for an unreadable answer (not a try)."""
+    return _run(lambda: engine.check_guided(tid, index, body, _now()))
+
+
+@router.post("/api/tasks/{tid}/blocks/{index}/reveal", response_model=GuidedCheckResult)
+def reveal_guided_step(tid: str, index: int, body: GuidedRevealRequest | None = None) -> GuidedCheckResult:
+    """Show a guided step's answer: the step is done with 0 points."""
+    return _run(lambda: engine.reveal_guided(tid, index, body.version if body else None, _now()))
+
+
+@router.post("/api/tasks/{tid}/blocks/{index}/flag", response_model=Task)
+def flag_guided_step(tid: str, index: int, body: FlagRequest) -> Task:
+    """Report a done guided step's answer key as wrong: its points no longer count."""
+    return _run(lambda: engine.flag_guided(tid, index, body.reason, _now()))
+
+
 @router.post("/api/skills/{sid}/blocks/{index}/check", response_model=BlockCheckResult)
 def check_block(sid: str, index: int, body: BlockCheckRequest) -> BlockCheckResult:
     """Answer a v2 lesson's inline check (formative: graded, never recorded). 409 when body.version is not the
-    stored lesson's version (the lesson was regenerated since the page loaded)."""
+    stored lesson's version (the lesson was regenerated since the page loaded), and for a guided proof lesson's
+    scored step before the skill is learned (it is answered in the lesson task)."""
     return _run(lambda: blocks.check_block(sid, index, body))
 
 

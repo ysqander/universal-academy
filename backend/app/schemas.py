@@ -230,7 +230,11 @@ class MultistepStepPublic(BaseModel):
     prompt: str
     kind: Literal["multiple_choice", "true_false", "true_false_set", "numeric", "expression"]
     choices: list[str]
-    hint: str  # one hint per step; using it (POST /api/questions/{qid}/hint?step=i) halves the step's point
+    # One hint per step; using it (POST /api/questions/{qid}/hint?step=i) halves the step's point. Its text is sent
+    # only once it was used (has_hint says whether there is one); a step after the current one is sent without its
+    # prompt, choices or hint (only its index and kind), so a later step can never give an earlier answer away.
+    hint: str
+    has_hint: bool = False
 
 
 class StepResult(BaseModel):
@@ -255,7 +259,8 @@ class QuestionPublic(BaseModel):
     kind: QuestionKindT
     prompt: str
     choices: list[str]
-    hints: list[str]  # revealed progressively client-side; usage is reported with the answer
+    hints: list[str]  # the hints already shown for the current attempt (hints_used of them); the next comes from POST /hint
+    hint_count: int = 0  # how many hints the question has
     checklist: list[str]  # free_response self-assessment criteria (shown after submission)
     source_exercise: str | None = None
     flagged: bool = False
@@ -277,12 +282,36 @@ class KnowledgePoint(BaseModel):
     question_count: int
 
 
+class GuidedCheckState(BaseModel):
+    """The server's record of a scored inline check (a proof lesson's guided steps, SPEC §6.3b). The answer, its
+    explanation and the hint are sent only when the learner may see them."""
+
+    status: Literal["open", "retry", "done"]  # retry: the first answer was wrong; one more try for ½ point
+    tries: int = 0  # answers given (an unreadable answer is not a try)
+    first_response: str | None = None  # the wrong first answer (retry / done), as typed (choice: the option index)
+    response: str | None = None  # done: the answer that ended the check (None: the answer was shown instead)
+    correct: bool | None = None  # done: whether that answer was right (None: shown without an answer)
+    points: float | None = None  # done: 1 first try / 0.5 second try / 0 (wrong twice, or "Show answer")
+    revealed: bool = False  # done through "Show answer"
+    feedback: str = ""  # the grader's message for the last answer (a "not yet" never names the wrong statements)
+    hint: str = ""  # sent once the first answer was wrong
+    answer_display: str = ""  # done only
+    explanation: str = ""  # done only
+    voided: bool = False  # reported as wrong by the learner: not counted
+    scored: bool = True  # False on a retry of the lesson (the check is shown with its answer, not scored again)
+
+
 class InlineCheckPublic(BaseModel):
-    """An inline check inside a v2 teaching sequence (formative: answered via POST .../blocks/{i}/check, never scored)."""
+    """An inline check inside a v2 teaching sequence. Formative (answered via POST /api/skills/{sid}/blocks/{i}/check,
+    never scored) unless `scored`: a proof lesson's guided step, answered via POST /api/tasks/{tid}/blocks/{i}/check
+    and counted toward the lesson's score (SPEC §6.3b)."""
 
     kind: Literal["numeric", "expression", "multiple_choice", "true_false", "true_false_set", "reflect"]
     prompt: str
     choices: list[str]
+    scored: bool = False
+    second_try: bool = False  # scored: a wrong first answer gets one more try for ½ point (typed answers, statement sets)
+    state: GuidedCheckState | None = None  # scored: the server's record (None in a preview of a skill never started)
 
 
 class TeachingBlockView(BaseModel):
@@ -301,6 +330,10 @@ class Lesson(BaseModel):
     objective: str
     format: Literal["v1", "v2"] = "v1"  # v2 = planned teaching sequence (blocks) instead of the fixed sections
     version: str = ""  # hash of the stored lesson; sent back with inline checks / block feedback (409 when stale)
+    # v2 proof lessons: "scored" = the inline checks are scored guided steps; the blocks after the first open one are
+    # not sent yet (blocks_total counts them). "retry" = a later attempt: the checks are shown answered, not scored.
+    guided: Literal["scored", "retry"] | None = None
+    blocks_total: int = 0  # v2: every block of the lesson, including those not sent yet
     goal_line: str = ""  # v2
     blocks: list[TeachingBlockView] = Field(default_factory=list)  # v2
     assumed: list[str] = Field(default_factory=list)  # v2: prerequisites the lesson treats as learned
@@ -373,6 +406,13 @@ class TaskProgress(BaseModel):
     in_capstone: bool = False  # the lesson's final multistep problem is being answered
     has_capstone: bool = False  # the task ends with (or includes) a capstone
     halted: bool = False  # the lesson stopped early (80 % became unreachable with planned questions left)
+    # Proof lessons with scored guided steps (SPEC §6.3b): the steps count like questions (points, answered, planned),
+    # then one variant problem (the capstone slot, weight 2) ends the lesson.
+    guided_total: int = 0  # scored guided steps in this attempt (0: none, or a retry where they are not scored)
+    guided_done: int = 0  # of them, answered (or shown)
+    in_guided: bool = False  # guided steps are still open: the practice can't start yet
+    variant: bool = False  # the final problem is the proof lesson's variant (same idea, something changes)
+    best_possible: float = 0.0  # the score if everything still planned is answered right (lessons; else = score)
 
 
 class QuizQuestionResult(BaseModel):
@@ -525,6 +565,20 @@ class BlockCheckResult(BaseModel):
     feedback: str
     answer_display: str
     explanation: str
+
+
+class GuidedRevealRequest(BaseModel):
+    """POST /api/tasks/{tid}/blocks/{index}/reveal — show a scored check's answer (the check then earns 0)."""
+
+    version: str | None = None  # Lesson.version (required: 409 when missing or stale)
+
+
+class GuidedCheckResult(BaseModel):
+    """POST /api/tasks/{tid}/blocks/{index}/check (body: BlockCheckRequest, version required) and .../reveal."""
+
+    check: GuidedCheckState
+    final: bool  # the check is done (its points are decided)
+    task: Task  # updated task: progress, and the lesson with the next blocks once the check is done
 
 
 class BlockFeedbackRequest(BaseModel):

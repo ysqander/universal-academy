@@ -169,7 +169,9 @@ def test_capstone_is_stored_after_the_last_knowledge_point_and_shown_without_ans
 
     public = question_public(cap)
     assert public.role == "capstone" and [s.index for s in public.steps] == [0, 1, 2]
-    assert public.steps[1].choices == ["$1-i$", "$1+i$", "$5+5i$", "$i$"] and public.steps[0].hint
+    # only the first step's prompt and choices before it is reached, and no hint text before it is used
+    assert public.steps[1].choices == [] and public.steps[1].prompt == "" and public.steps[0].prompt
+    assert public.steps[0].hint == "" and public.steps[0].has_hint
     shown = public.model_dump()  # without the fake verifier's invisible markers
     shown["steps"] = [{**st, "prompt": fake_llm._MARKER_RE.sub("", st["prompt"])} for st in shown["steps"]]
     dumped = json.dumps(shown)

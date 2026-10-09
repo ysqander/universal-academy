@@ -16,7 +16,7 @@ Percentages in messages follow score_percent (round half up, never up onto the p
 
 A task's mutable state lives in tasks.state_json:
 
-lesson  {"kp_total", "kp", "playable": [kp...], "targets": {"<kp>": t}, "stage": "kp" | "capstone" | "done",
+lesson  {"kp_total", "kp", "playable": [kp...], "targets": {"<kp>": t}, "stage": "guided" | "kp" | "capstone" | "done",
          "current", "served": [qid...],
          "revealed", "hints", "compared", "compared_raw",           # per current question: see _set_current
          "step", "step_results", "step_hint", "step_revealed", "step_seconds",  # per current multistep question
@@ -27,7 +27,9 @@ lesson  {"kp_total", "kp", "playable": [kp...], "targets": {"<kp>": t}, "stage":
                   "unfinished", "steps"}],    # a capstone the lesson stopped in: w = its answered steps' share
          "wrong_run", "self_grades": {qid: grade}, "proof_waived": [kp...],
          "fail": {"kp", "key", "stage", "counted", "prev_cooldown", "cooldown_until", "remediated", "score",
-                  "early", "planned"} | None, "result": {...}}
+                  "early", "planned"} | None, "result": {...},
+         "guided": {...},                      # guided proof lessons only (see learning/guided.py)
+         "fresh_capstone_only": bool}          # a retry: only a capstone never answered before is served
 review  {"set": [qid...], "pos", "current", ...per-question records as above..., "served",
          "log": [{"q", "kp", "res", "credit", "pts", "w", "ok", "void", "cap"}], "self_grades",
          "result": {..., "fire": [implicit events]}}
@@ -48,6 +50,16 @@ Multistep questions are answered one step at a time (AnswerSubmit.step = the cur
 graded with the checker of its kind; its point is 1 / 0.5 (its hint used) / 0 (wrong, or its answer revealed). A
 non-final step returns status 'step' (question_done false); the final step records one attempt for the question
 (response = JSON of the step results; correct = every step independent and correct) and the task moves on.
+
+Guided proof lessons (learning/guided.py, SPEC §6.3b): a proof lesson written with scored checks starts in stage
+"guided" — the checks of its teaching sequence are answered inside the task (check_guided / reveal_guided: 1, ½ on a
+second try, 0; logged like questions with q = "block:<i>", weight 1) and the blocks after the first open one are not
+sent. begin_practice is refused while one is open; then, if 80 % is out of reach even with the variant right, the
+attempt ends there (failure key "guided"), otherwise the variant (the capstone slot, weight 2) is served — no
+knowledge-point questions. Leaving such an attempt pauses it: the next start of the lesson continues the abandoned
+task's state. After a finished attempt (passed or failed) of the same lesson version, a new one is a retry: the checks
+are shown with their answers, not scored, and the knowledge points' questions (and a capstone never answered before)
+are scored instead.
 
 Written proofs (legacy lessons only — new lessons have no free_response questions): a KP whose pool has a
 free-response question also needs one independent, self-graded "correct" written answer. It is served no later than
@@ -81,6 +93,8 @@ from .. import db, views
 from ..schemas import (
     AnswerResult,
     AnswerSubmit,
+    BlockCheckRequest,
+    GuidedCheckResult,
     HintResponse,
     MultistepStepPublic,
     QuestionPublic,
@@ -89,7 +103,7 @@ from ..schemas import (
     Task,
     TaskProgress,
 )
-from . import grading, scheduler, xp
+from . import grading, guided, scheduler, xp
 from . import state as skill_state
 
 log = logging.getLogger("ua.learning.engine")
@@ -109,6 +123,8 @@ REREAD_AFTER_WRONG = 2
 TOPUP_DEDUPE_SECONDS = 600.0
 COMPARE_MIN_CHARS = 15  # a committed free-response answer this long makes a reveal a comparison, not assistance
 CAPSTONE_FAIL_KEY = "cap"  # progress.kp_failures_json key of a lesson that halted in its capstone
+GUIDED_FAIL_KEY = "guided"  # ... of a guided proof lesson whose guided steps left 80 % out of reach
+GUIDED_OPEN = "Answer the steps of the proof first — they count toward your score."
 STEP_KINDS = ("multiple_choice", "true_false", "true_false_set", "numeric", "expression")
 EPS = 1e-9
 
@@ -615,13 +631,23 @@ def _kp_remaining(st: dict[str, Any], pool: _Pool, kp: int) -> int:
     return remaining
 
 
+def _capstone_candidates(st: dict[str, Any], pool: _Pool) -> list[dict[str, Any]]:
+    """The capstones this lesson may serve. A guided proof lesson's retry serves only one never answered before (the
+    variant answered in an earlier attempt is not asked again right away — reviews bring it back)."""
+    caps = pool.capstones()
+    if st.get("fresh_capstone_only"):
+        served = set(st["served"])
+        caps = [q for q in caps if q["id"] not in pool.answered or q["id"] in served]
+    return caps
+
+
 def _capstone_pending(st: dict[str, Any], pool: _Pool) -> bool:
     if st.get("stage") == "done" or any(e.get("cap") for e in _live(st)):
         return False
     if pool.is_capstone(st.get("current")):
         return True
     served = set(st["served"])
-    return any(q["id"] not in served for q in pool.capstones())
+    return any(q["id"] not in served for q in _capstone_candidates(st, pool))
 
 
 def _remaining_weight(st: dict[str, Any], pool: _Pool) -> float:
@@ -631,6 +657,9 @@ def _remaining_weight(st: dict[str, Any], pool: _Pool) -> float:
     if st.get("stage") == "done":
         return unfinished
     total = unfinished
+    if st.get("stage") == "guided":  # the guided steps still open, 1 each
+        scored, done = guided.counts(st.get("guided"))
+        total += scored - done
     if st.get("stage") != "capstone":
         total += sum(_kp_remaining(st, pool, k) for k in st["playable"] if k >= st["kp"])
     if _capstone_pending(st, pool):
@@ -664,8 +693,9 @@ def _answered_count(st: dict[str, Any]) -> int:
 
 def _planned_count(st: dict[str, Any], pool: _Pool, *, answering_capstone: bool = False) -> int:
     """Questions in the plan of an ongoing lesson: answered + still to answer (the capstone once).
-    `answering_capstone`: the capstone is being committed right now (no longer current, not yet logged)."""
-    planned = 0
+    `answering_capstone`: the capstone is being committed right now (no longer current, not yet logged).
+    A guided proof lesson's scored steps count as questions (voided ones don't)."""
+    planned, _ = guided.counts(st.get("guided"))
     for k in st["playable"]:
         n = len(_kp_done(st, k))
         if st.get("stage") not in ("capstone", "done") and k >= st["kp"]:
@@ -706,7 +736,7 @@ def _serve_next(st: dict[str, Any], pool: _Pool) -> bool:
             if _kp_remaining(st, pool, kp) > 0 and _serve_lesson_question(st, pool):
                 return True
     if _capstone_pending(st, pool):
-        cap = _pick(pool, pool.capstones(), set(st["served"]))
+        cap = _pick(pool, _capstone_candidates(st, pool), set(st["served"]))
         if cap is not None:
             st["stage"] = "capstone"
             st["wrong_run"] = 0
@@ -750,10 +780,11 @@ def _lesson_progress_view(task: dict[str, Any], st: dict[str, Any], skill_id: st
         capacity = used + sum(1 for q in pool.practice(kp) if q["id"] not in served)
         available = max(kp_target, min(_target(st, kp) + MAX_EXTRA, capacity))
     has_capstone = any(e.get("cap") for e in live) or (active and _capstone_pending(st, pool))
+    guided_total, guided_done = guided.counts(st.get("guided"))
     if active:
         planned = _planned_count(st, pool)
     else:
-        planned = sum(len(_kp_done(st, k)) for k in st["playable"]) + (1 if has_capstone else 0)
+        planned = sum(len(_kp_done(st, k)) for k in st["playable"]) + (1 if has_capstone else 0) + guided_total
         fail = st.get("fail")
         if task["outcome"] == "failed" and isinstance(fail, dict):
             # a lesson that stopped early keeps the plan it stopped in ("2 of 4 answered", never "2 of 2")
@@ -769,6 +800,9 @@ def _lesson_progress_view(task: dict[str, Any], st: dict[str, Any], skill_id: st
         easier_available=ongoing and _easier_blocker(st, pool) is None,
         kp_target=kp_target, points=points, max_points=max_points, score=_ratio(points, max_points),
         planned=planned, pass_mark=PASS_MARK, in_capstone=in_capstone, has_capstone=has_capstone,
+        guided_total=guided_total, guided_done=guided_done, in_guided=active and st.get("stage") == "guided" and
+        guided_done < guided_total, variant=guided_total > 0,
+        best_possible=_best_possible(st, pool) if active else _ratio(points, max_points),
     )  # fmt: skip
 
 
@@ -824,22 +858,31 @@ def _question_view(qrow: dict[str, Any], st: dict[str, Any]) -> QuestionPublic:
     question.role = _role(qrow)  # type: ignore[assignment]
     if qrow["kind"] == "multistep":
         steps = _steps(qrow)
+        index = max(0, min(int(st.get("step") or 0), len(steps) - 1))
+        # the steps reached so far, and hint texts only of the steps whose hint was used (it halves their point)
+        hinted = {int(r.get("index", -1)) for r in st.get("step_results") or [] if isinstance(r, dict) and r.get("hinted")}
+        if st.get("step_hint"):
+            hinted.add(index)
         question.steps = [
             MultistepStepPublic(
                 index=i,
-                prompt=str(s["prompt"]),
+                prompt=str(s["prompt"]) if i <= index else "",
                 kind=s["kind"],
-                choices=[str(c) for c in s.get("choices") or []],
-                hint=str(s.get("hint") or ""),
+                choices=[str(c) for c in s.get("choices") or []] if i <= index else [],
+                hint=str(s.get("hint") or "") if i in hinted else "",
+                has_hint=bool(str(s.get("hint") or "").strip()),
             )
             for i, s in enumerate(steps)
         ]
-        question.step_index = max(0, min(int(st.get("step") or 0), len(steps) - 1))
+        question.step_index = index
         question.step_results = [_step_result_public(r) for r in st.get("step_results") or []]
         question.hints_used = 1 if st.get("step_hint") else 0  # the current step's hint
         question.revealed = bool(st.get("step_revealed"))  # the current step's answer
         return question
-    question.hints_used = min(len(question.hints), int(st.get("hints") or 0))
+    hints = [h for h in _safe_loads(qrow["hints_json"], []) if isinstance(h, str)]
+    question.hints_used = min(len(hints), int(st.get("hints") or 0))
+    question.hints = hints[: question.hints_used]  # the next one comes from POST /hint, which records it
+    question.hint_count = len(hints)
     question.revealed = bool(st.get("revealed"))
     if question.kind == "free_response" and st.get("compared") is not None:
         question.committed_response = st.get("compared_raw") or st["compared"]
@@ -873,12 +916,36 @@ def build_task(task: dict[str, Any], now: datetime | None = None) -> Task:
         skill=views.skill_ref(skill),
         reason=task["reason"],
         xp_value=xp_value,
-        lesson=views.lesson_view(skill["id"]) if task["type"] == "lesson" else None,
+        lesson=_task_lesson_view(task, st, skill) if task["type"] == "lesson" else None,
         question=question,
         progress=progress,
         outcome=task["outcome"],
         cooldown_until=_cooldown_for(task),
     )
+
+
+def _task_lesson_view(task: dict[str, Any], st: dict[str, Any], skill: dict[str, Any]):
+    """The lesson inside a lesson task: a guided proof lesson gated by the attempt's record (an active scored attempt
+    never shows the knowledge points' material — it serves none of their questions)."""
+    g = st.get("guided") if isinstance(st.get("guided"), dict) else None
+    learned = g is None and _progress_row(skill)["status"] in scheduler.LEARNED
+    scored_active = g is not None and g.get("mode") == "scored" and task["status"] == "active"
+    return views.lesson_view(skill["id"], g, learned=learned, kp_content=not scored_active)
+
+
+def lesson_preview(skill_id: str):
+    """GET /api/skills/{sid}/lesson. A guided proof lesson of a skill not yet learned is gated like the task (by the
+    latest attempt's record): a preview must not show what the lesson asks for before it asks."""
+    skill = _skill_row(skill_id)
+    lesson = _safe_loads(skill["lesson_json"], {})
+    if not guided.is_guided(lesson):
+        return views.lesson_view(skill_id)
+    if _progress_row(skill)["status"] in scheduler.LEARNED:
+        return views.lesson_view(skill_id, learned=True)
+    prev = _previous_attempt(skill_id, views.lesson_version(skill["lesson_json"]))
+    g = prev[1]["guided"] if prev else None
+    finished = prev is not None and prev[0]["status"] == "completed" and prev[0]["outcome"] in ("passed", "failed")
+    return views.lesson_view(skill_id, g, kp_content=finished or (g is not None and g.get("mode") == "retry"))
 
 
 def _cooldown_for(task: dict[str, Any]) -> str | None:
@@ -918,23 +985,60 @@ def _insert_task(course_id: str, skill_id: str, type_: str, phase: str, reason: 
     return task_id
 
 
+def _previous_attempt(skill_id: str, version: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """The latest lesson task of the skill that worked on this lesson version's guided steps, with its state."""
+    for row in db.query(
+        "SELECT * FROM tasks WHERE skill_id = ? AND type = 'lesson' ORDER BY created_at DESC, rowid DESC", (skill_id,)
+    ):
+        st = _load_state(row)
+        g = st.get("guided")
+        if isinstance(g, dict) and g.get("version") == version:
+            return row, st
+    return None
+
+
 def _lesson_initial_state(skill: dict[str, Any]) -> dict[str, Any]:
-    """Validate that a lesson can start (no side effects) and build its initial state."""
+    """Validate that a lesson can start (no side effects) and build its initial state. A guided proof lesson of a
+    skill not yet learned starts its scored guided steps — or continues an attempt that was left (the active task this
+    start replaces, or an abandoned one), or, after a finished attempt, runs as a retry (see the module doc)."""
     if skill["lesson_status"] == "failed":
         raise Conflict("This lesson could not be generated — resume the course build to retry it.")
     if skill["lesson_status"] != "ready" or not skill["lesson_json"]:
         raise Conflict("The lesson for this skill is still being generated.")
     lesson = _safe_loads(skill["lesson_json"], {})
     kp_total = len(lesson.get("knowledge_points") or [])
-    pools = {q["kp_index"] for q in _pool(skill["id"]).practice()}
+    pool = _pool(skill["id"])
+    pools = {q["kp_index"] for q in pool.practice()}
     playable = [k for k in range(kp_total) if k in pools]
-    if not playable:
+    retry = None
+    if guided.is_guided(lesson) and _progress_row(skill)["status"] not in scheduler.LEARNED:
+        version = views.lesson_version(skill["lesson_json"])
+        prev = _previous_attempt(skill["id"], version)
+        if prev is not None and prev[0]["status"] == "completed" and prev[0]["outcome"] in ("passed", "failed"):
+            retry = guided.retry_state(prev[1]["guided"], lesson)
+        elif prev is not None:  # left without finishing: continue where it stopped
+            st = json.loads(json.dumps(prev[1]))
+            st.update(fail=None, result={})
+            return st
+        else:
+            first = guided.new_state(lesson, version)
+            if first is not None:
+                st = {
+                    "kp_total": kp_total, "kp": 0, "playable": [], "targets": _targets_from_lesson(lesson),
+                    "stage": "guided", "served": [], "slots": {}, "easier": [], "log": [], "wrong_run": 0,
+                    "self_grades": {}, "proof_waived": [], "fail": None, "result": {}, "guided": first,
+                }  # fmt: skip
+                _set_current(st, None)
+                return st
+    if not playable and not (retry and any(q["id"] not in pool.answered for q in pool.capstones())):
         raise Conflict("This lesson has no practice questions yet.")
     st = {
-        "kp_total": kp_total, "kp": playable[0], "playable": playable, "targets": _targets_from_lesson(lesson),
-        "stage": "kp", "served": [], "slots": {}, "easier": [], "log": [], "wrong_run": 0, "self_grades": {},
-        "proof_waived": [], "fail": None, "result": {},
+        "kp_total": kp_total, "kp": playable[0] if playable else 0, "playable": playable,
+        "targets": _targets_from_lesson(lesson), "stage": "kp", "served": [], "slots": {}, "easier": [], "log": [],
+        "wrong_run": 0, "self_grades": {}, "proof_waived": [], "fail": None, "result": {},
     }  # fmt: skip
+    if retry is not None:
+        st.update(guided=retry, fresh_capstone_only=True)
     _set_current(st, None)
     return st
 
@@ -1096,11 +1200,31 @@ def begin_practice(task_id: str, now: datetime) -> Task:
             raise Conflict("This task is already finished.")
         if task["phase"] == "learn":
             st = _load_state(task)
+            if st.get("stage") == "guided":
+                return _end_guided_steps(task, st, now)
             if not st.get("current") and not _serve_next(st, _pool(task["skill_id"])):
                 raise Conflict("No practice questions are available for this lesson right now.")
             _save_state(task_id, st, phase="practice")
             task = _task_row(task_id)
         return build_task(task)
+
+
+def _end_guided_steps(task: dict[str, Any], st: dict[str, Any], now: datetime) -> Task:
+    """All guided steps answered: serve the variant — or end the attempt when 80 % is out of reach even with it
+    right (a failure of the lesson, key "guided"; it comes back after the cooldown as a retry)."""
+    if guided.open_index(st.get("guided")) is not None:
+        raise Conflict(GUIDED_OPEN)
+    skill = _skill_row(task["skill_id"])
+    pool = _pool(skill["id"])
+    planned = _planned_count(st, pool)
+    if _best_possible(st, pool) < PASS_MARK - EPS:
+        _finish_lesson_fail(task, st, skill, now, pool, counted=True, early=_remaining_weight(st, pool) > EPS, planned=planned)
+        return build_task(_task_row(task["id"]))
+    st["stage"] = "kp"  # no knowledge-point questions are planned: the capstone stage (the variant) comes next
+    _lesson_progress(task, st, skill, now, planned=planned)
+    if task["status"] == "active":
+        _save_state(task["id"], st, phase="practice")
+    return build_task(_task_row(task["id"]))
 
 
 def _lesson_progress(
@@ -1182,7 +1306,7 @@ def _finish_lesson_fail(
     `planned`: the plan to report (default: answered + still planned now). `cooldown`: pause the lesson for
     LESSON_COOLDOWN (False keeps the current cooldown — a flagged capstone is not the learner's failure)."""
     stage = st.get("stage", "kp")
-    key = CAPSTONE_FAIL_KEY if stage == "capstone" else str(st["kp"])
+    key = CAPSTONE_FAIL_KEY if stage == "capstone" else GUIDED_FAIL_KEY if stage == "guided" else str(st["kp"])
     progress = _progress_row(skill)
     learned = progress["status"] in scheduler.LEARNED
     failures = _lesson_failures(progress)
@@ -1208,7 +1332,7 @@ def _finish_lesson_fail(
         "planned": plan,
     }  # fmt: skip
     _complete(task, st, "failed", 0, now)
-    if stage != "capstone" and _unseen_count(skill["id"], kp=st["kp"]) < _target(st, st["kp"]) + 1:
+    if stage not in ("capstone", "guided") and _unseen_count(skill["id"], kp=st["kp"]) < _target(st, st["kp"]) + 1:
         request_top_up(skill["id"], st["kp"])
     back = (
         f"It comes back at {local_clock(until)} (in about 2 hours) with fresh questions — work on something else in "
@@ -1326,6 +1450,135 @@ def easier_step(task_id: str, now: datetime) -> Task:
         _save_state(task_id, st)
         log.info("task %s: easier step -> question %s (tier %s)%s", task_id, candidate["key"], candidate["tier"],
                  " (solution seen: 0 points)" if carry_revealed else " (hint used: ½ point)" if carry_hint else "")  # fmt: skip
+        return build_task(_task_row(task_id))
+
+
+# ---------------------------------------------------------------------------
+# Guided steps of proof lessons (learning/guided.py)
+# ---------------------------------------------------------------------------
+
+
+def _guided_target(task_id: str, index: int, version: str | None) -> tuple[dict, dict, dict, dict, dict]:
+    """(task, state, skill, check, record) of a guided step the learner may answer now, else Conflict / NotFound.
+    The lesson version is required: a step is never graded against a lesson other than the one on the page."""
+    task = _task_row(task_id)
+    if task["type"] != "lesson":
+        raise Conflict("Only a lesson has steps to answer.")
+    if task["status"] != "active":
+        raise Conflict("This task is already finished.")
+    st = _load_state(task)
+    g = st.get("guided")
+    if not isinstance(g, dict):
+        raise Conflict("This lesson's checks are not scored — reload the lesson.")
+    skill = _skill_row(task["skill_id"])
+    if not views.same_version(version or "", skill["lesson_json"]) or g.get("version") != views.lesson_version(skill["lesson_json"]):
+        raise Conflict(guided.STALE_LESSON)
+    blocks = guided.blocks_of(_safe_loads(skill["lesson_json"], {}))
+    check = guided.check_of(blocks[index]) if 0 <= index < len(blocks) else None
+    rec = guided.record(g, index)
+    if check is None or rec is None:
+        raise NotFound("This step has no scored check.")
+    if g.get("mode") == "scored" and rec.get("status") != "done" and guided.open_index(g) != index:
+        raise Conflict("Answer the earlier step first.")
+    return task, st, skill, check, rec
+
+
+def _guided_entry(index: int, rec: dict[str, Any]) -> dict[str, Any]:
+    """A done guided step in the lesson log: scored like a question of weight 1."""
+    pts = float(rec.get("pts") or 0.0)
+    res = "correct" if pts >= 1 - EPS else "assisted" if rec.get("correct") else "wrong"
+    return {
+        "q": f"block:{index}", "kp": -1, "res": res, "pts": pts, "w": 1, "ok": bool(rec.get("correct")),
+        "void": False, "scaffold": False, "cap": False, "guided": True,
+    }  # fmt: skip
+
+
+def _guided_result(task: dict[str, Any], st: dict[str, Any], check: dict[str, Any], rec: dict[str, Any]) -> GuidedCheckResult:
+    scored = st["guided"].get("mode") == "scored"
+    return GuidedCheckResult(
+        check=guided.public_state(check, rec, scored=scored), final=rec.get("status") == "done",
+        task=build_task(_task_row(task["id"])),
+    )  # fmt: skip
+
+
+def check_guided(task_id: str, index: int, body: BlockCheckRequest, now: datetime) -> GuidedCheckResult:
+    """Answer a guided step (POST /api/tasks/{tid}/blocks/{i}/check). Right first time 1; a wrong first answer to a
+    step with a second try gets "not yet" and the hint (no answer); right then ½, wrong 0. An unreadable answer is
+    422 and no try. A done step answers with its record (never graded again). On a retry nothing is scored."""
+    with lock:
+        task, st, skill, check, rec = _guided_target(task_id, index, body.version)
+        if rec.get("status") == "done":
+            return _guided_result(task, st, check, rec)
+        tries = int(rec.get("tries") or 0)
+    result = guided.grade_check(check, body)  # the slow part runs without the lock
+    if result.invalid:
+        raise Invalid(result.feedback)
+    with lock:
+        task, st, skill, check, rec = _guided_target(task_id, index, body.version)
+        if rec.get("status") == "done" or int(rec.get("tries") or 0) != tries:
+            raise Conflict("This step was answered in another window — reload the lesson.")
+        scored = st["guided"].get("mode") == "scored"
+        response = guided.response_of(check, body)
+        rec["tries"] = tries + 1
+        if not scored:
+            rec.update(status="done", response=response, correct=result.correct, pts=None, feedback=result.feedback)
+        elif result.correct:
+            pts = 1.0 if tries == 0 else HINT_POINTS
+            note = "" if tries == 0 else " On the second try, so ½ point."
+            rec.update(status="done", response=response, correct=True, pts=pts, feedback=result.feedback + note)
+        elif tries == 0 and guided.second_try(check):
+            rec.update(status="retry", first_response=response, feedback=guided.not_yet_feedback(check, result))
+        else:
+            rec.update(status="done", response=response, correct=False, pts=0.0, feedback=result.feedback)
+        if scored and rec["status"] == "done":
+            st["log"].append(_guided_entry(index, rec))
+        _save_state(task["id"], st)
+        log.info("task %s: guided step %d -> %s (try %d)", task["id"], index, rec["status"], rec["tries"])
+        return _guided_result(task, st, check, rec)
+
+
+def reveal_guided(task_id: str, index: int, version: str | None, now: datetime) -> GuidedCheckResult:
+    """Show a guided step's answer (POST .../reveal): the step is done with 0 points."""
+    with lock:
+        task, st, skill, check, rec = _guided_target(task_id, index, version)
+        if rec.get("status") != "done":
+            scored = st["guided"].get("mode") == "scored"
+            rec.update(status="done", revealed=True, response=None, correct=None, pts=0.0 if scored else None,
+                       feedback="Answer shown — this step earns 0 points." if scored else "")  # fmt: skip
+            if scored:
+                st["log"].append(_guided_entry(index, rec))
+            _save_state(task["id"], st)
+            log.info("task %s: guided step %d answer shown", task["id"], index)
+        return _guided_result(task, st, check, rec)
+
+
+def flag_guided(task_id: str, index: int, reason: str, now: datetime) -> Task:
+    """The learner reports a done guided step's answer key as wrong (POST .../flag): its points no longer count, and
+    the report is kept with the block feedback (kind 'wrong_key') for a later look at the lesson."""
+    with lock:
+        task = _task_row(task_id)
+        if task["type"] != "lesson" or task["status"] != "active":
+            raise Conflict("Steps can be reported while the lesson is open.")
+        st = _load_state(task)
+        g = st.get("guided")
+        rec = guided.record(g, index)
+        if not isinstance(g, dict) or g.get("mode") != "scored" or rec is None:
+            raise NotFound("This step has no scored check.")
+        if rec.get("status") != "done":
+            raise Conflict("Answer the step first — its answer is shown then.")
+        if not rec.get("voided"):
+            rec["voided"] = True
+            for entry in st["log"]:
+                if entry["q"] == f"block:{index}":
+                    entry["void"] = True
+            db.execute(
+                "INSERT INTO block_feedback(id, skill_id, block_index, kind, note, lesson_hash, created_at)"
+                " VALUES (?, ?, ?, 'wrong_key', ?, ?, ?)",
+                (db.new_id(), task["skill_id"], index, (reason or "").replace("\x00", "").strip()[:2000],
+                 g.get("version", ""), scheduler.iso(now)),
+            )  # fmt: skip
+            _save_state(task["id"], st)
+            log.info("task %s: guided step %d reported as wrong: %s", task["id"], index, reason)
         return build_task(_task_row(task_id))
 
 
@@ -2004,10 +2257,11 @@ def _reopen_failed_lesson(task: dict[str, Any], st: dict[str, Any], skill: dict[
         _set_current(st, unfinished["q"])
         st["step_results"] = [r for r in unfinished.get("steps") or [] if isinstance(r, dict)]
         st["step"] = len(st["step_results"])
+    phase = "learn" if st["stage"] == "guided" else "practice"
     db.execute(
-        "UPDATE tasks SET status = 'active', phase = 'practice', outcome = NULL, completed_at = NULL WHERE id = ?", (task["id"],)
+        "UPDATE tasks SET status = 'active', phase = ?, outcome = NULL, completed_at = NULL WHERE id = ?", (phase, task["id"])
     )
-    task.update(status="active", phase="practice", outcome=None)
+    task.update(status="active", phase=phase, outcome=None)
     log.info("task %s reopened after a flag", task["id"])
     return True
 

@@ -490,9 +490,9 @@ there — never a replay of the proof. So:
 - THE VARIANT (the capstone field; it counts double): the plan's variant statement — a statement the teaching did
   not prove, where the same strategy works but ONE thing changes (another right-hand side, an extra term, the other
   operation, a fixed input of another kind, a hypothesis dropped and why it is needed). 2–3 steps, at least one typed
-  (two when the pattern computes), at most 4 letters, no slot rows, no earlier-skill computation needed; never the
-  teaching's statement again with other numbers, never a step whose key the statement forces. Its last step may ask
-  what the change does (to the proof, or to the result).
+  (two in two_routes: route A's result and route B's slots or first leg), at most 4 letters, no slot rows, no earlier-skill computation needed; never the
+  teaching's statement again with other numbers, never a step whose key the statement forces. Its last step asks
+  what the change does (to the proof, or to the result) — a question the text just shown does not answer.
 - A misconception the lesson names, and a "Learner's miss", is tested by a scored step or a variant step whose key
   differs from the misconception's answer.
 - PRACTICE IS FOR LATER. The knowledge points (the transfer walkthrough, "what a proof establishes", their spares) are

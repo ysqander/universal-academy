@@ -381,7 +381,10 @@ def _walkthrough_problems(q: QuestionDraft, plan: ProofPlan, *, capstone: bool =
         )
     # an abstract derivation has no typed vector lines: a true_false_set of line justifications stands in for them
     stand_in = abstract and any(_tf_set_ok(s.choices, s.answer) for s in tf_steps)
-    if typed < 2 and not stand_in and not (capstone and abstract and typed >= 1):
+    # the variant types two moves in two_routes (route A, route B's slots or first leg); in the other patterns one
+    # typed move and a statement set about the change can be the whole variant
+    one_typed_ok = capstone and plan.pattern != "two_routes" and typed >= 1
+    if typed < 2 and not stand_in and not one_typed_ok:
         problems.append(f"{q.key}: {typed} typed steps; at least 2 (route A's result, route B's first leg or the slots of its last product)")
     if choices > 1:
         problems.append(f"{q.key}: {choices} multiple_choice steps; at most 1")
@@ -603,7 +606,8 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
     for name in sorted(_plan_greek(plan)):
         char = next(k for k, v in _GREEK_TO_NAME.items() if v == name)
         assigned = rf"\s*=\s*\(?\s*[-−\d(]"  # λ = (2−i)(1+i), λ = 3+i — not αβ = 2−5i
-        if re.search(rf"(?<![A-Za-z}}])\\{name}{assigned}", cap.prompt) or re.search(rf"(?<![\w}}])\\?{char}{assigned}", cap.prompt):
+        # a letter after + or − is a term of an equation (α+β = 0), not a name given to a number
+        if re.search(rf"(?<![A-Za-z}}+\-−])\\{name}{assigned}", cap.prompt) or re.search(rf"(?<![\w}}+\-−])\\?{char}{assigned}", cap.prompt):
             soft.append(f"cap: \\{name} names a computed number here but an arbitrary input elsewhere — give the fixed input a new letter (\\mu)")
     served_scope |= any(s.kind == "true_false_set" and _tf_set_ok(s.choices, s.answer) for s in cap.steps)
     served_scope |= any(_graded(b.check) and b.check.kind == "true_false_set" and _tf_set_ok(b.check.choices, b.check.answer)

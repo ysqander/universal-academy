@@ -307,8 +307,9 @@ strategy ("Strategy: <name>."); it never re-explains the method. 2–3 steps —
 statement:
 - two_routes: route A's result (typed); the slots of route B's last product, or its first leg (typed); optionally a
   true_false_set of 3 short claims about what the change does to the proof.
-- find_then_check: one unknown solved from the real equations (typed); the found object (typed); optionally a
-  true_false_set of 3 claims about the change (which hypothesis is now needed, what still holds).
+- find_then_check: the only candidate found from the real equations (typed); then a true_false_set of 3 claims about
+  what the change does — which stage proved what, which hypothesis is now needed or no longer needed, and why (a
+  second typed step only when the change adds a real move).
 - other patterns: their walkthrough moves (below), at most 3.
 Never a forced value, a choice among proofs, a long expansion, the teaching's statement again with other numbers, a
 step that needs an earlier skill's computation, or a last step that only subtracts printed numbers.

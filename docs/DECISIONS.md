@@ -323,8 +323,17 @@ Details: [SPEC.md §6.7](SPEC.md).
   given number is a computation, not a proof). Folding it into S2b/S2d would need a "merge" operation (not built).
 - Roll v2 out beyond S2/S3 skill by skill if the learner approves (§1).
 - The proof track's S4a (sample 3 of three live samples, judged blind "much better" than the old lesson) is in the real
-  course since 2026-10-08. Next: one proof skill per pattern (S4b find_then_check, S16 suppose_two, S17 law_chain, S18
-  two_halves, S20 conditions_or_counterexample), each run in a sandbox and judged before import.
+  course since 2026-10-08; the learner studied it and marked it passed on 2026-10-09 (`mark_passed.py`). It predates
+  scored steps and keeps the old flow.
+- S4b, the first guided proof lesson (scored steps + variant), is in the real course since 2026-10-09: Opus, $6.53 to
+  generate plus $0.55 to rewrite the variant. Four judges: every key recomputed correct; blind "much better" than the
+  best old-format S4b (own work 8 vs 4, repetition 8 vs 4). Their two blocking findings — the variant's last step
+  could be read off the explanation just shown, and the additive inverse (half the objective) was proved nowhere
+  served — were fixed by making the additive inverse the variant (`regenerate --only capstone --note`); five minor
+  wording fixes were made by hand in the sandbox before import. Still open there: the learner never does a check
+  themselves, and the numbers case's slot row is shown filled. Next: one proof skill per remaining pattern (S16
+  suppose_two, S17 law_chain, S18 two_halves, S20 conditions_or_counterexample), each run in a sandbox and judged
+  before import.
 - Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).
 - Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys):
   the patterns it found — recognition-heavy served questions, misses re-tested only on the same numbers, long

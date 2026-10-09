@@ -1501,3 +1501,45 @@ def test_old_review_state_in_progress_finishes_with_the_new_scoring() -> None:
     assert engine.get_task(task_id).progress.points == 2.0  # 1×0 + 2×1
     done = engine.submit_answer(task_id, right(kp1[3]), now)
     assert done.task.outcome == "passed" and done.xp_awarded == 4  # (0 + 2 + 3) / 6 = 0.83 → Good
+
+
+def test_mark_passed_script_records_the_weakest_pass() -> None:
+    """scripts/mark_passed.py: the learner's own decision that a lesson is passed — learned with a Hard card, the XP of
+    a pass at 80 %, the active lesson task closed as passed, dependents unlocked, no implicit credit."""
+    import os
+    import socket
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from app.config import settings
+    from app.learning import xp
+
+    fx = build_course(est_minutes=15)
+    learn(fx, "S2", T0)
+    task_id, task = start_practice(fx, "S1")
+    engine.submit_answer(task_id, wrong(task.question.id), T0)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    script = Path(__file__).resolve().parents[1] / "scripts" / "mark_passed.py"
+
+    def run():
+        return subprocess.run(
+            [sys.executable, str(script), "--data-dir", str(settings.data_dir), "--course", fx.course_id, "--skill", "S1",
+             "--yes", "--no-backup", "--server-url", f"http://127.0.0.1:{port}/api/health"],
+            capture_output=True, text=True, timeout=120, env={**os.environ, "UA_FAKE_LLM": "1"},
+        )  # fmt: skip
+
+    implicit_before = db.query_one("SELECT COUNT(*) AS n FROM review_log WHERE implicit = 1")["n"]
+    done = run()
+    assert done.returncode == 0 and "is learned" in done.stdout, done.stdout + done.stderr
+    assert status(fx.sid("S1")) == "learned" and status(fx.sid("S3")) == "available"
+    assert lesson_rating(fx.sid("S1")) == int(scheduler.Rating.Hard)
+    assert xp_total(fx.course_id) == xp.lesson_xp(15, 1.0) + xp.lesson_xp(15, engine.PASS_MARK)  # S2's pass + this one
+    row = db.query_one("SELECT status, outcome, xp_awarded FROM tasks WHERE id = ?", (task_id,))
+    assert (row["status"], row["outcome"], row["xp_awarded"]) == ("completed", "passed", xp.lesson_xp(15, engine.PASS_MARK))
+    assert task_state(task_id)["result"]["manual"] is True
+    assert db.query_one("SELECT COUNT(*) AS n FROM review_log WHERE implicit = 1")["n"] == implicit_before
+    again = run()
+    assert again.returncode == 1 and "already learned" in again.stdout

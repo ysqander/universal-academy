@@ -182,6 +182,10 @@ A step may refer only to earlier steps that exist. Stored lessons: `scripts/rege
   request). Legacy lessons have target 2 per KP, so two wrong answers there now fail the lesson.
 - Integrity: hints and reveals are recorded server-side; an answer equal in value but not simplified (e.g. the
   question's own expression retyped) gets a 422 "simplify" and is not counted.
+- **Marked passed by the learner** (`scripts/mark_passed.py`, app stopped): the weakest pass — Hard card (first
+  review the next day), the XP of a pass at 80 %, no implicit credit to prerequisites. First used for S4a on
+  2026-10-09: the learner had worked through the proof lesson twice and did not want to repeat practice that replayed
+  it.
 
 ## 5b. Quizzes (decided 2026-10-06)
 

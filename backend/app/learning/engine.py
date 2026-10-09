@@ -801,8 +801,9 @@ def _lesson_progress_view(task: dict[str, Any], st: dict[str, Any], skill_id: st
         kp_target=kp_target, points=points, max_points=max_points, score=_ratio(points, max_points),
         planned=planned, pass_mark=PASS_MARK, in_capstone=in_capstone, has_capstone=has_capstone,
         guided_total=guided_total, guided_done=guided_done, in_guided=active and st.get("stage") == "guided" and
-        guided_done < guided_total, variant=guided_total > 0,
+        guided_done < guided_total, variant=guided_total > 0 and has_capstone,
         best_possible=_best_possible(st, pool) if active else _ratio(points, max_points),
+        suggestion_text=str((st.get("fail") or {}).get("suggestion_text") or "") if task["outcome"] == "failed" else "",
     )  # fmt: skip
 
 
@@ -928,9 +929,12 @@ def _task_lesson_view(task: dict[str, Any], st: dict[str, Any], skill: dict[str,
     """The lesson inside a lesson task: a guided proof lesson gated by the attempt's record (an active scored attempt
     never shows the knowledge points' material — it serves none of their questions)."""
     g = st.get("guided") if isinstance(st.get("guided"), dict) else None
+    if g is not None and g.get("version") != views.lesson_version(skill["lesson_json"]):
+        g = None  # a record of another version of the lesson (regenerated since) says nothing about these blocks
     learned = g is None and _progress_row(skill)["status"] in scheduler.LEARNED
-    scored_active = g is not None and g.get("mode") == "scored" and task["status"] == "active"
-    return views.lesson_view(skill["id"], g, learned=learned, kp_content=not scored_active)
+    # a scored attempt — active, or left and to be continued — never shows the knowledge points' material
+    scored_open = g is not None and g.get("mode") == "scored" and task["outcome"] not in ("passed", "failed")
+    return views.lesson_view(skill["id"], g, learned=learned, kp_content=not scored_open)
 
 
 def lesson_preview(skill_id: str):
@@ -944,7 +948,7 @@ def lesson_preview(skill_id: str):
         return views.lesson_view(skill_id, learned=True)
     prev = _previous_attempt(skill_id, views.lesson_version(skill["lesson_json"]))
     g = prev[1]["guided"] if prev else None
-    finished = prev is not None and prev[0]["status"] == "completed" and prev[0]["outcome"] in ("passed", "failed")
+    finished = prev is not None and prev[0]["outcome"] in ("passed", "failed")
     return views.lesson_view(skill_id, g, kp_content=finished or (g is not None and g.get("mode") == "retry"))
 
 
@@ -997,6 +1001,47 @@ def _previous_attempt(skill_id: str, version: str) -> tuple[dict[str, Any], dict
     return None
 
 
+def _resume_open_question(st: dict[str, Any], pool: _Pool) -> None:
+    """The question a left attempt was on (the last one served, not answered) comes back as the current one, with the
+    help and the steps recorded on it — leaving clears only 'current'. One no longer servable (flagged meanwhile) is
+    dropped from the plan so that another can be served."""
+    served = st.get("served") or []
+    logged = {e["q"] for e in st.get("log") or []}
+    if not served or served[-1] in logged or st.get("current"):
+        return
+    qid = served[-1]
+    q = pool.by_id.get(qid)
+    if q is not None and _servable(q):
+        st["current"] = qid
+        return
+    served.remove(qid)
+    for slot in st["slots"].values():
+        if qid in slot:
+            slot.remove(qid)
+    _set_current(st, None)
+
+
+def left_attempt(skill: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """The guided attempt the next start of this lesson continues (left without finishing), with its state; None when
+    the skill is learned, the lesson is not guided, or no attempt was left."""
+    lesson = _safe_loads(skill.get("lesson_json"), {})
+    if not guided.is_guided(lesson) or _progress_row(skill)["status"] in scheduler.LEARNED:
+        return None
+    prev = _previous_attempt(skill["id"], views.lesson_version(skill["lesson_json"]))
+    return prev if prev is not None and prev[0]["outcome"] == "abandoned" else None
+
+
+def guided_gate_state(skill: dict[str, Any]) -> dict[str, Any] | None:
+    """The guided record that gates a guided lesson outside its task (preview, formative checks): the latest attempt's,
+    or a fresh one when none was started; None when the skill is learned or the lesson is not guided."""
+    lesson = _safe_loads(skill.get("lesson_json"), {})
+    if not guided.is_guided(lesson) or _progress_row(skill)["status"] in scheduler.LEARNED:
+        return None
+    version = views.lesson_version(skill["lesson_json"])
+    prev = _previous_attempt(skill["id"], version)
+    return prev[1]["guided"] if prev is not None else guided.new_state(lesson, version)
+
+
 def _lesson_initial_state(skill: dict[str, Any]) -> dict[str, Any]:
     """Validate that a lesson can start (no side effects) and build its initial state. A guided proof lesson of a
     skill not yet learned starts its scored guided steps — or continues an attempt that was left (the active task this
@@ -1019,6 +1064,7 @@ def _lesson_initial_state(skill: dict[str, Any]) -> dict[str, Any]:
         elif prev is not None:  # left without finishing: continue where it stopped
             st = json.loads(json.dumps(prev[1]))
             st.update(fail=None, result={})
+            _resume_open_question(st, pool)
             return st
         else:
             first = guided.new_state(lesson, version)
@@ -1364,6 +1410,8 @@ def _finish_lesson_fail(
                 "the lesson returns."
             )
     skill_state.recompute_unlocks(skill["course_id"])
+    st["fail"]["suggestion_text"] = finish.suggestion_text  # also shown where no answer carries it (guided steps)
+    _save_state(task["id"], st)
     log.info("lesson failed: skill %s at %s (failures of this lesson: %d)", skill["key"], key, total)
     return finish
 
@@ -1553,8 +1601,10 @@ def reveal_guided(task_id: str, index: int, version: str | None, now: datetime) 
 
 
 def flag_guided(task_id: str, index: int, reason: str, now: datetime) -> Task:
-    """The learner reports a done guided step's answer key as wrong (POST .../flag): its points no longer count, and
-    the report is kept with the block feedback (kind 'wrong_key') for a later look at the lesson."""
+    """The learner reports a done guided step's answer key as wrong (POST .../flag): the report is kept with the block
+    feedback (kind 'wrong_key') for a look at the lesson, and the step shows it was reported. The score does not change
+    — a report that voided the step would let a learner reveal every answer, report them all and pass on the variant
+    alone. A key found wrong on review is corrected there (its step then becomes 'voided')."""
     with lock:
         task = _task_row(task_id)
         if task["type"] != "lesson" or task["status"] != "active":
@@ -1566,11 +1616,8 @@ def flag_guided(task_id: str, index: int, reason: str, now: datetime) -> Task:
             raise NotFound("This step has no scored check.")
         if rec.get("status") != "done":
             raise Conflict("Answer the step first — its answer is shown then.")
-        if not rec.get("voided"):
-            rec["voided"] = True
-            for entry in st["log"]:
-                if entry["q"] == f"block:{index}":
-                    entry["void"] = True
+        if not rec.get("reported"):
+            rec["reported"] = True
             db.execute(
                 "INSERT INTO block_feedback(id, skill_id, block_index, kind, note, lesson_hash, created_at)"
                 " VALUES (?, ?, ?, 'wrong_key', ?, ?, ?)",
@@ -2147,6 +2194,8 @@ def reveal(question_id: str, now: datetime, response: str | None = None) -> Reve
         if _in_active_quiz(question_id):
             raise Conflict("Solutions are shown when the quiz is over.")
         current = _tasks_on_question(q)
+        if not current and _held_by_left_attempt(q):
+            raise Conflict(HELD_BY_LEFT_ATTEMPT)
         if q["kind"] == "multistep":
             steps = _steps(q)
             if current and steps:
@@ -2172,6 +2221,20 @@ def reveal(question_id: str, now: datetime, response: str | None = None) -> Reve
                 log.info("task %s: solution revealed for question %s", task["id"], q["key"])
             _save_state(task["id"], st)
         return RevealResponse(solution=q["solution"], correct_answer=_answer_display(q))
+
+
+HELD_BY_LEFT_ATTEMPT = "Continue the lesson to see this problem's help or answer — it counts in that lesson."
+
+
+def _held_by_left_attempt(q: dict[str, Any]) -> bool:
+    """A question a left guided attempt was on (served, not answered): the next start puts it back, so its solution
+    may not be handed out (unrecorded) in between."""
+    skill = db.query_one("SELECT * FROM skills WHERE id = ?", (q["skill_id"],))
+    left = left_attempt(skill) if skill else None
+    if left is None:
+        return False
+    served = left[1].get("served") or []
+    return bool(served) and served[-1] == q["id"] and q["id"] not in {e["q"] for e in left[1].get("log") or []}
 
 
 def _task_serving(question_id: str, skill_id: str) -> dict[str, Any] | None:

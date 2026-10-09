@@ -38,15 +38,17 @@ export const isScoredLesson = (lesson: Pick<Lesson, "guided"> | null | undefined
 /** A lesson task whose proof steps are scored (or its variant is being answered). */
 export const isGuidedProgress = (progress: Partial<TaskProgress>): boolean => num(progress.guided_total) > 0 || Boolean(progress.variant);
 
-/** Leaving the task keeps the answers of a scored proof lesson: starting it again picks up where it stopped. */
-export const keepsAnswersOnLeave = (task: Pick<Task, "type" | "lesson">): boolean => task.type === "lesson" && isScoredLesson(task.lesson);
+/** Leaving the task keeps the answers of a proof lesson with guided steps (scored, or a retry): starting it again
+ * picks up where it stopped. */
+export const keepsAnswersOnLeave = (task: Pick<Task, "type" | "lesson">): boolean =>
+  task.type === "lesson" && (task.lesson?.guided === "scored" || task.lesson?.guided === "retry");
 
 const RANK: Record<GuidedCheckState["status"], number> = { open: 0, retry: 1, done: 2 };
 
 /**
  * The newer of the server's record (the step as the task last sent it) and the record the last answer returned —
  * the latter shows straight away, before the replaced task catches up. On a tie the task's record wins (a report
- * marks it voided).
+ * marks it reported).
  */
 export function latestState(server: GuidedCheckState | null | undefined, local: GuidedCheckState | null | undefined): GuidedCheckState | null {
   if (!local) return server ?? null;
@@ -65,13 +67,20 @@ export function stepPoints(state: Pick<GuidedCheckState, "points" | "correct" | 
  * null for a step not scored this time (or not done yet). */
 export function guidedPointsLabel(state: GuidedCheckState | null): string | null {
   if (!state || state.status !== "done" || !state.scored) return null;
-  if (state.voided) return "Not counted — you reported the answer as wrong";
+  if (state.voided) return "Not counted — the answer key was wrong";
   if (state.revealed) return "0 points — answer shown";
   const points = stepPoints(state);
   if (points >= 1) return "1 point";
   if (points > 0) return "½ point — second try";
   return "0 points";
 }
+
+/** The tag next to a scored step's label: it counts, and how many tries it has. */
+export const scoredTag = (check: Pick<InlineCheckPublic, "second_try">): string =>
+  check.second_try ? "Counts toward your score · a second try for ½" : "Counts toward your score · one try";
+
+/** After the learner reported a step's answer key as wrong: the report is kept for review, the score is unchanged. */
+export const REPORTED_NOTE = "Reported — thank you. The key will be checked; your score doesn't change now.";
 
 export type GuidedTone = "open" | "retry" | "correct" | "partial" | "incorrect" | "neutral";
 
@@ -191,7 +200,7 @@ export function guidedThen(progress: Partial<TaskProgress>): string | null {
   return num(progress.guided_done) >= total ? "next: the variant problem (counts double)" : "then a variant problem (counts double)";
 }
 
-/** Even a right variant can't lift the score to the pass mark: starting it ends this attempt instead. */
+/** Even a right variant (when there is one) can't lift the score to the pass mark: going on ends this attempt. */
 export const variantOutOfReach = (progress: Partial<TaskProgress>): boolean =>
   num(progress.guided_total) > 0 && !progress.in_guided && typeof progress.best_possible === "number" && progress.best_possible < passMarkOf(progress) - EPS;
 
@@ -204,17 +213,21 @@ export interface GuidedStart {
 }
 
 /** The card after a scored proof lesson's steps: the variant problem next — or, when 80 % is out of reach even with
- * it right, the end of this attempt, said before the click. Null for other lessons. */
+ * it right, the end of this attempt, said before the click. Without a variant (none could be served) the steps
+ * decide the lesson: "Finish the lesson". Null for other lessons. */
 export function guidedStart(progress: Partial<TaskProgress>): GuidedStart | null {
   if (!isGuidedProgress(progress)) return null;
   const mark = percentLabel(passMarkOf(progress));
   if (variantOutOfReach(progress)) {
     return {
       title: "Proof steps done",
-      text: `${mark} is out of reach on this attempt, even with the variant right. The lesson comes back after a pause with fresh questions.`,
+      text: `${mark} is out of reach on this attempt${progress.variant ? ", even with the variant right" : ""}. The lesson comes back after a pause with fresh questions.`,
       button: "End this attempt",
       ends: true,
     };
+  }
+  if (!progress.variant) {
+    return { title: "Proof steps done", text: `Your steps decide this lesson: ${mark} passes.`, button: "Finish the lesson", ends: false };
   }
   return {
     title: "Proof steps done",

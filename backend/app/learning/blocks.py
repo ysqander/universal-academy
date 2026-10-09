@@ -10,7 +10,8 @@ explanation are returned only after a readable response; every error message is 
 
 The exception is a guided proof lesson (learning/guided.py): its scored checks count toward the lesson and are
 answered inside the task (engine.check_guided). Here they are refused (409) until the skill is learned — otherwise
-this endpoint would hand out their answers before the lesson asks for them.
+this endpoint would hand out their answers before the lesson asks for them — and so is every check in a block the
+lesson has not shown yet (past the open scored step).
 
 Blocks are named by position, so both endpoints take the Lesson.version the learner is looking at (views.lesson_version
 of the stored lesson_json, the value views.lesson_view sends). When the lesson was regenerated since the page loaded,
@@ -91,8 +92,12 @@ def check_block(skill_id: str, index: int, body: BlockCheckRequest) -> BlockChec
     """Grade a response to a block's inline check. Called WITHOUT engine.lock (grading has its own time budget)."""
     skill, block = _block(skill_id, index, body.version)
     check = _check_of(block)
-    if index in guided.scored_indices(db.loads(skill["lesson_json"], {})) and views.skill_status(skill_id) not in scheduler.LEARNED:
-        raise engine.Conflict(guided.SCORED_IN_LESSON)
+    gate = engine.guided_gate_state(engine._skill_row(skill_id))
+    if gate is not None:  # a guided proof lesson not yet learned: nothing past its open step, no scored step here
+        if index in guided.scored_indices(db.loads(skill["lesson_json"], {})):
+            raise engine.Conflict(guided.SCORED_IN_LESSON)
+        if index >= guided.visible_blocks(gate, len(_lesson(skill_id)[1])):
+            raise engine.Conflict(guided.NOT_SHOWN_YET)
     explanation = str(check.get("explanation") or "")
     if check["kind"] == "reflect":
         return BlockCheckResult(correct=None, feedback=REFLECT_FEEDBACK, answer_display=answer_display(check), explanation=explanation)

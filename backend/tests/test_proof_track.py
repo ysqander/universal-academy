@@ -353,3 +353,32 @@ def test_a_letter_the_plan_reserves_for_the_capstones_number_is_not_an_input():
     _, soft = proof_problems(lesson().model_copy(update={"capstone": lesson().capstone.model_copy(update={
         "prompt": lesson().capstone.prompt.replace("\\mu", "\\lambda")})}), plan)
     assert any("\\lambda names a computed number" in p for p in soft)
+
+
+def test_forced_and_tuple_answers_of_scored_steps_are_found():
+    """The branch review (2026-10-09): the 1 of a checked inverse, and a slot tuple printed in an earlier block."""
+    draft = lesson()
+    blocks = list(draft.blocks)
+    forced = blocks[3].model_copy(update={
+        "body": blocks[3].body + "\n\nRecall $\\frac{2}{5}-\\frac{1}{5}i$ and $2+i$.",
+        "check": blocks[3].check.model_copy(update={"answer": "1", "answer_display": "$1$"})})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:3], forced, *blocks[4:]]}))
+    assert any("block 4: the scored check's answer $1$ is forced" in p for p in hard), hard
+    tup = blocks[9].model_copy(update={"check": blocks[9].check.model_copy(update={
+        "answer": "(a, b, c*g-d*h, c*h+d*g)", "answer_display": "$(a,b,cg-dh,ch+dg)$"})})
+    printed = blocks[7].model_copy(update={"body": blocks[7].body + "\n\nThe outer slots will be $(a, b, cg-dh, ch+dg)$."})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:7], printed, blocks[8], tup]}))
+    assert any("block 10: the scored check's tuple" in p for p in hard), hard
+
+
+def test_the_proof_prompts_drop_the_old_capstone_and_block_limits():
+    from app.prompts import anthropic, openai
+
+    for texts in (openai, anthropic):
+        writer = texts.PROOF_WRITER_INSTRUCTIONS
+        assert "It CHAINS this lesson's idea" not in writer and "At most 9 blocks" not in writer
+        assert "earlier skill does real work" not in texts.PROOF_CAPSTONE_REPAIR_NOTE
+        assert "within the proof track's 10 blocks" in texts.PROOF_REVISION_NOTE
+        assert "more than 11 blocks" in texts.PROOF_REVIEWER_INSTRUCTIONS
+        assert "no earlier skill doing real work" not in texts.PROOF_REVIEWER_INSTRUCTIONS
+        assert "It CHAINS this lesson's idea" in texts.WRITER_INSTRUCTIONS  # the general texts keep theirs

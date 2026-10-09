@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  completionSuggestion,
   halves,
   hasCapstone,
   hintTotal,
@@ -300,4 +301,22 @@ test("hintTotal: the server's count, never fewer than are on screen; older serve
   assert.equal(hintTotal({ hints: ["First", "Second"] }), 2);
   assert.equal(hintTotal({ hints: [], hint_count: 1 }, 2), 2);
   assert.equal(hintTotal({ hints: [], hint_count: 0 }), 0);
+});
+
+test("scoreView of a proof lesson without a servable variant never announces one", () => {
+  const p = progress({ guided_total: 3, guided_done: 3, in_guided: false, variant: false, planned: 3, answered: 3, points: 3, max_points: 3, score: 1 });
+  assert.equal(scoreView(p).remainingLabel, "3 of 3 steps answered");
+  assert.equal(scoreView({ ...p, guided_done: 1, answered: 1 }).remainingLabel, "1 of 3 steps answered");
+});
+
+test("completionSuggestion: a failed lesson's next step, unless the last answer already said it", () => {
+  const text = "This lesson has stopped short of 80% twice. Refresh S3a and S2b first — they are now due as reviews.";
+  const p = progress({ suggestion_text: text });
+  assert.equal(completionSuggestion(p), text);
+  assert.equal(completionSuggestion(p, null), text);
+  assert.equal(completionSuggestion(p, text), null);
+  assert.equal(completionSuggestion(p, `  ${text.replace(/ /g, "  ")} `), null, "whitespace doesn't matter");
+  assert.equal(completionSuggestion(p, "Re-read the worked example."), text);
+  assert.equal(completionSuggestion(progress({})), null);
+  assert.equal(completionSuggestion(progress({ suggestion_text: "  " })), null);
 });

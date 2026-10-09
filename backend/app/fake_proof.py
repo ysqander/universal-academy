@@ -49,6 +49,7 @@ def proof_plan() -> ProofPlan:
             ScopeStatement(statement="$(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$", true=True),
             ScopeStatement(statement="$(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every $\\alpha,\\beta,\\lambda$", true=False),
             ScopeStatement(statement="the calculation with $\\alpha=1+i$, $\\beta=2+i$ proved it for every $\\alpha,\\beta$", true=False),
+            ScopeStatement(statement="expanding $(\\alpha\\beta)i$ term by term with $i^2=-1$ would also have been a valid proof", true=False),
         ],
         practice_statements=[
             PracticeStatement(statement="$(1+i)(\\alpha+\\beta)=(1+i)\\alpha+(1+i)\\beta$", knowledge_point=1, role="special_case"),
@@ -143,9 +144,11 @@ def _blocks() -> list:
             check=_scored(kind="true_false_set", prompt="What has been proved so far? Mark each statement true or false.",
                          choices=["$(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta\\in\\mathbf{C}$",
                                   "$(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every $\\alpha,\\beta,\\lambda\\in\\mathbf{C}$",
-                                  "The calculation with $\\alpha=1+i$, $\\beta=2+i$ proved $(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$"],
-                         answer="TFF", answer_display="True, false, false",
-                         explanation="The letters covered every $\\alpha,\\beta$ with $\\lambda=i$ fixed; the numbers covered one case.",
+                                  "The calculation with $\\alpha=1+i$, $\\beta=2+i$ proved $(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$",
+                                  "Expanding $(\\alpha\\beta)i$ term by term with $i^2=-1$ would also have been a valid proof"],
+                         answer="TFFF", answer_display="True, false, false, false",
+                         explanation="The letters covered every $\\alpha,\\beta$ with $\\lambda=i$ fixed; the numbers covered one "
+                         "case; expanding complex brackets uses complex distributivity, another law of 1.3.",
                          hint="Which inputs did the letters range over, and which stayed fixed?"),
         ),
         _block(

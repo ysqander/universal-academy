@@ -123,6 +123,7 @@ const record = (status: GuidedCheckState["status"], scored = true): GuidedCheckS
   answer_display: "",
   explanation: "",
   voided: false,
+  reported: false,
   scored,
 });
 const scoredBlock = (index: number, state: GuidedCheckState | null): TeachingBlockView => ({

@@ -106,11 +106,24 @@ hypothesis); CIRCULARITY_RULE in app/prompts/rules.py now goes to both providers
   proof walkthrough the second route's final value equals the first route's by the statement itself, so it is shown
   in the explanation, never scored; the learner types route A's result, route B's first leg and the inputs of route
   B's last product.
+- **Proof lessons: the proof is the scored exercise, then one variant** (decided 2026-10-09 by the learner after
+  studying the proof-track S4a: what they disliked was "going through the exercises where we basically repeat the same
+  thing again"; "whenever we're working out the proof, we are already scoring points, and then at the end … one
+  wrinkle or variant … not repeating the same as before"). A proof lesson's graded inline checks are its **scored
+  steps** — 4–6 of the proof's real moves: the concrete case's key computation(s), the guided case's key line, scope,
+  and one '?' entry of the general table; one reflect check stays unscored — each with a hint shown after a wrong first
+  answer. The lesson ends with **one variant** in the capstone slot: a statement the teaching did not prove where the
+  same strategy works but one thing changes, 2–3 steps, weight 2, no earlier-skill computation. The knowledge points'
+  walkthroughs and true/false sets are still written but not served in the lesson: they are the pool of a retry and of
+  the reviews. Teaching: 10 blocks. Rule text once, for both providers: `prompts/rules.py` `GUIDED_PROOF_RULE`; engine
+  `learning/guided.py`; points §5. **Replaced** "practice transfers the strategy" (the variant does it, once) and the
+  4-step proof capstone (an earlier skill computes μ → route A → route B → USE). Lessons written before keep their
+  old flow (S4a; lesson_json has no `"scoring": "guided"`).
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
 - **Checks inside the teaching sequence.** 1–2 graded inline checks plus one ungraded "why" reflect check, all within
   the 9 blocks; a faded example's missing step is always machine-checked and is the lesson's key move, not printed
-  arithmetic.
+  arithmetic. Proof lessons: 4–6 scored steps plus the reflect, in 10 blocks (above).
 - **No "Common mistakes" sections** (the learner found them useless). Known misconceptions still feed distractors.
 - **Visuals must earn their place**: "this helps the learner notice ___"; "none" is valid; never 3D or decorative.
 
@@ -135,7 +148,8 @@ hypothesis); CIRCULARITY_RULE in app/prompts/rules.py now goes to both providers
   skills — in a proof skill each knowledge point's first question walks through a statement the teaching did not
   prove). A spare may repeat a served demand once on new numbers: it is the recovery question after a miss. Every question must need this
   lesson's idea (no bare prerequisite facts). Graded means served: inline checks are formative and spare questions
-  may never be served, so neither counts as testing a misconception.
+  may never be served, so neither counts as testing a misconception. In a proof lesson the scored steps and the
+  variant are what is served (its knowledge points only in a retry and in reviews).
 - **An answer the learner can read is not a question** (2026-10-07, round-2 evaluation). A question whose answer is
   printed in its prompt, a step, a bank of lines, the teaching text or a worked example (for expressions with letters),
   forced by a definition, an earlier step's result again, or one of a step's options, is found mechanically
@@ -160,6 +174,10 @@ an earlier step, or forced by a definition such as "multiply back and get 1"). V
 Why: the learner wanted guided, verifiable multi-step problems instead of "show your working", ending a series of
 simpler questions so it proves they can chain concepts.
 
+**Proof lessons** (2026-10-09, §2): the capstone slot holds the variant — the same strategy on a statement with one
+thing changed, 2–3 steps, no earlier skill required (`proof_track.capstone_proof_problems` checks its shape; a variant
+that breaks it, or whose answer the lesson prints, is rewritten like a capstone).
+
 A broken capstone is **rewritten, not cut** (2026-10-07): when the capstone still breaks a rule after the lesson's
 revision, or verification withholds it, the writer rewrites only the capstone (strictly validated, verified again).
 Dropping a step left dangling "the root from Step 2" references in S2d, and a withheld capstone left S4a without one.
@@ -182,6 +200,25 @@ A step may refer only to earlier steps that exist. Stored lessons: `scripts/rege
   request). Legacy lessons have target 2 per KP, so two wrong answers there now fail the lesson.
 - Integrity: hints and reveals are recorded server-side; an answer equal in value but not simplified (e.g. the
   question's own expression retyped) gets a 422 "simplify" and is not counted.
+- **Guided proof lessons** (2026-10-09, §2): the scored steps count like questions (weight 1): right first time 1; a
+  wrong first answer to a typed step or a statement set gets "not yet" and the step's hint — never the grader's
+  diagnosis or which statements were wrong, which come once the step is done — then ½ if right; wrong twice or "Show
+  answer" 0. A choice step has one try (a second would be won by elimination). An unreadable answer is not a try. The
+  variant weighs 2. No early stop inside the teaching: when the steps leave 80 % out of reach even with the variant
+  right, the attempt ends at "Start the variant" (failure key `guided`; 2-hour pause; counts toward remediation).
+  Leaving an attempt keeps its answers — the next start continues it. After a finished attempt (passed or failed) the
+  next one of the same lesson version is a retry: the steps are shown answered and not scored; the knowledge points'
+  questions (and a capstone never answered before) are scored. Integrity: the server sends the lesson only up to the
+  next open scored step (task and preview alike, "Go deeper" and the knowledge points' material withheld while the
+  attempt is scored), the skill-scoped check endpoint refuses scored steps until the skill is learned, a step's answer
+  and explanation reach the client only once it is done, and a done step is never graded again. A learner who
+  believes a step's key is wrong reports it: the report is kept for review and shown to the planner
+  (`block_feedback` kind `wrong_key`), but the score does not change — the branch review found that voiding on a
+  report let a learner reveal every answer, report them all and pass on the variant alone. Leaving puts the open
+  question back on the next start (the variant at its step), and its solution is not handed out in between.
+- **Hint texts are sent only once used** (2026-10-09, no-bypass, every lesson and review): a question's hints and a
+  multistep step's hint come from POST /hint, which records them (`QuestionPublic.hint_count`,
+  `MultistepStepPublic.has_hint`); a later step's prompt and options are sent only when it is reached.
 - **Marked passed by the learner** (`scripts/mark_passed.py`, app stopped): the weakest pass — Hard card (first
   review the next day), the XP of a pass at 80 %, no implicit credit to prerequisites. First used for S4a on
   2026-10-09: the learner had worked through the proof lesson twice and did not want to repeat practice that replayed
@@ -226,6 +263,13 @@ Details: [SPEC.md §6.7](SPEC.md).
   not to object about cases the book excludes (characteristic-2 fields). Re-checking the real course with this
   reduced verification flags from 11 to 3.
 - Verification never clears a learner's own flag.
+- **Scored proof steps are verified too** (2026-10-09): they cost points now, so each is solved like a multistep step
+  from the lesson text up to it, with the earlier steps' results; a step that still disagrees after the stronger
+  model's re-check is withheld from scoring (`check.withheld`, records in `lesson_json.guided_verify`) and stays in the
+  lesson as an unscored check. It runs before the lesson is stored (`verify_guided_lesson`) — rewriting a stored
+  lesson changes its version under a running attempt. Re-verifying a stored lesson (`regenerate --only verify`, the
+  build's resume when records are missing) carries running attempts over to the new version
+  (`migrate_guided_attempts`); a step already withheld stays so while attempts exist.
 
 ## 7. Grader conventions
 

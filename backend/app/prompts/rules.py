@@ -415,15 +415,16 @@ Teaching (S = a scored step: it counts toward the lesson, and the next block com
 8. demonstrate: route A, αi with slots (a, b, 0, 1) gives −b + ai; its conjugate is −b − ai. Comparison table: real
    −b | −b; imaginary −a | −a. Proved for β = i and every α.
 9. check (S, true_false_set) "We have proved:" conj(αi) = conj(α)·conj(i) for every α (T); conj(αβ) = conj(α)·conj(β)
-   for every α, β (F, not yet); the calculation with α = 2+i proved it for every α (F).
+   for every α, β (F, not yet); the calculation with α = 2+i proved it for every α (F); "starting from
+   conj(αi) = conj(α)·conj(i) and simplifying both sides would also have been a proof" (F — it assumes the statement).
 10. generalize (S): β = c+di; route A | route B in one table — inner result, then the slots of route B's outer product
    as '?' (check: "enter the four slots (x, y, u, v) of conj(α)·conj(β)", key (a, -b, c, -d)); the coordinate rows in
    the check's explanation; the real laws named once; "the letters were arbitrary, so … for all α, β"; the method in
    one line.
-Variant (the capstone slot, weight 2): conj(α + β) = conj(α) + conj(β) — a sum where the teaching had a product: s1
-route A, key a+c-(b+d)*i; s2 the real law that makes the imaginary coordinates −(b+d) and (−b)+(−d) equal
-(multiple_choice, 4 short law names); s3 a true_false_set of 3 claims about what the change does (no slot table is
-needed for a sum; both coordinates are still compared; one example sum would still prove nothing).
+Variant (the capstone slot, weight 2): conj(α·conj(β)) = conj(α)·β — one factor is conjugated before the product: s1
+route A, α·conj(β) then its conjugate, key a*c+b*d+(a*d-b*c)*i; s2 the four slots of route B's product conj(α)·β, key
+(a, -b, c, d); s3 a true_false_set of 3 claims about what the change does (both coordinates are still compared; the
+same two-routes strategy works; a check on α = 2+i alone would prove nothing).
 Practice (not served in the lesson — a retry and the reviews ask it): KP1 Transfer — walkthrough of
 conj((1+i)α) = (1−i)·conj(α): s1 route A, key a-b-(a+b)*i; s2 the slots of route B's product, key (1, -1, a, -b); s3
 the real law for one shown pair (choice). KP2 What a proof establishes — worked example conj(conj(α)) = α; a true_false_set
@@ -438,6 +439,17 @@ MISCONCEPTIONS_HEADER = (
     "knowledge point or a capstone step — the missed problem itself with the wrong answer as an option is not a test; "
     "a line starting \"Prerequisite slip\" needs no bridge: a one-line recall where it is first needed and one typed "
     "question served first that includes the case):"
+)
+
+
+# The same header for a proof lesson (rules.GUIDED_PROOF_RULE): its knowledge points are not served in the lesson, so a
+# miss is re-tested by a scored step or the variant.
+PROOF_MISCONCEPTIONS_HEADER = (
+    "Known misconceptions (a line starting \"Learner's miss\" is what this learner actually got wrong: re-test it with "
+    "NEW numbers that set the same trap, in a format at least as demanding as the one it was missed in, as a scored "
+    "step of the teaching or a variant step whose key differs from the misconception's answer — a knowledge-point "
+    "question does not count, it is served only in a retry and in reviews; a line starting \"Prerequisite slip\" "
+    "needs no bridge: a one-line recall where it is first needed and a typed scored step that includes the case):"
 )
 
 
@@ -465,8 +477,9 @@ there — never a replay of the proof. So:
   the check's hint, and a right second answer earns ½ (a choice check has one try); "Show answer" earns 0. The app
   sends the lesson only up to the next unanswered scored step, so the block AFTER a scored step may show its answer.
 - 4–6 SCORED STEPS, and they are the proof's real moves, never tidy-ups: the key computation(s) of the concrete case
-  (1–2 steps), the guided case's key line (the faded example), scope (the true_false_set of the plan's three claims),
-  and one entry of the general case's worked table (a '?' cell: a short slot tuple, a solved coordinate, or a
+  (1–2 steps), the guided case's key line (the faded example), scope (the true_false_set of the plan's scope claims:
+  three about what has been proved, and a fourth that shows a move the proof may not make — false), and one entry of
+  the general case's worked table (a '?' cell: a short slot tuple, a solved coordinate, or a
   coordinate of at most 4 terms). One 'reflect' check (never scored) still asks why agreement on numbers is not a proof.
 - EACH SCORED STEP: its answer is printed nowhere before the learner answers — not in its own block or prompt, not in
   an earlier block, nor in an earlier check's prompt, explanation or answer (an earlier skill's result recalled in the

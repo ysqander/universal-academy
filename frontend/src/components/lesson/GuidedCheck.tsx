@@ -7,7 +7,9 @@ import {
   guidedVerdict,
   isStaleLessonMessage,
   latestState,
+  REPORTED_NOTE,
   restoredAnswer,
+  scoredTag,
   type GuidedHandlers,
 } from "../../lib/guided";
 import { decodeTfResponse, emptyTfMarks, encodeTfMarks, parseTfKey, resolveTfKey, tfRowResults, type TfMark } from "../../lib/trueFalseSet";
@@ -208,7 +210,7 @@ export function GuidedCheck({ version, blockIndex, check, label, guided }: Guide
     >
       <div className="inline-check__label">
         <Icon name="target" size={14} /> {label}
-        {scoredNow && guided && <span className="inline-check__tag">Counts toward your score</span>}
+        {scoredNow && guided && <span className="inline-check__tag">{scoredTag(check)}</span>}
       </div>
       <div id={promptId} className="inline-check__prompt">
         <Markdown>{check.prompt}</Markdown>
@@ -345,10 +347,19 @@ export function GuidedCheck({ version, blockIndex, check, label, guided }: Guide
               </div>
             )}
             {state.explanation.trim() && <Markdown className="inline-check__explanation">{state.explanation}</Markdown>}
-            {guided && scoredNow && !state.voided && (
-              <button type="button" className="btn btn--quiet btn--sm inline-check__flag" onClick={() => guided.onFlag(blockIndex)}>
-                <Icon name="flag" size={14} /> Report a wrong answer
-              </button>
+            {/* A report is kept for review; it never changes the score (else every shown answer could be reported). */}
+            {state.reported ? (
+              <p className="inline-check__note">
+                <Icon name="flag" size={15} /> {REPORTED_NOTE}
+              </p>
+            ) : (
+              guided &&
+              scoredNow &&
+              !state.voided && (
+                <button type="button" className="btn btn--quiet btn--sm inline-check__flag" onClick={() => guided.onFlag(blockIndex)}>
+                  <Icon name="flag" size={14} /> Report a wrong answer
+                </button>
+              )
             )}
           </div>
         )}

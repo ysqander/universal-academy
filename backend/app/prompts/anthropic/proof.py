@@ -67,9 +67,13 @@ read once, as a worked solution.
    (guided_key ''); two_halves: the key line of the easier half; conditions_or_counterexample: the condition value at
    u+w in named values.
 8. general_case — the full statement (one more pair of letters), shown as a worked table.
-9. scope_statements — exactly three "We have proved …" claims: the guided case for all its inputs (true); the general
-   statement (false, not yet); the numeric case for all inputs (false). two_halves: the half proved (true) and both
-   halves (false); law_chain: every vector space (true) and only F² (false).
+9. scope_statements — four claims for the scored scope check. Three "We have proved …" claims: the guided case for all
+   its inputs (true); the general statement (false, not yet); the numeric case for all inputs (false). two_halves: the
+   half proved (true) and both halves (false); law_chain: every vector space (true) and only F² (false);
+   find_then_check: solving the equations proved that no other number works (true), solving alone proved that the
+   candidate works (false — the check did), the guided case's result for every input including the one the
+   hypothesis excludes (false). The fourth shows a move the proof may not make, as a move (false): "starting from the
+   law and simplifying both sides would also prove it", "writing β = 1/α and simplifying is a valid first step".
 10. practice_statements — 3–6 statements, each with its knowledge point and role (special_case, general, repair,
    decide, scope). Each differs from the statement, its guided case and every worked example, and is a real member of
    the family or a natural special case (one input fixed at i, 1, 1+i, 2−i, a real t or a specific vector). Never
@@ -93,7 +97,7 @@ read once, as a worked solution.
    computation is needed. It is short — 2–3 steps — and its last step may ask what the change does. (S4a, which
    proved (αβ)λ = α(βλ): the variant (1+i)(α+β) = (1+i)α + (1+i)β — a sum where the teaching had a product; for
    "every nonzero α has exactly one β with αβ = 1": for every λ exactly one β has (1+i)β = λ — the right-hand side
-   changes, with α fixed at 1+i to keep 4 letters.)
+   changes, and the factor is the number 1+i, so the letters stay at 4.)
 13. reasoning_sequence — at most 7 bridges and 4 new ideas: the picture; the slots (identify a definition's inputs
    before applying it); letters standing for every input; scope. The bridges: (1) the statement read as the pattern,
    and what may not be used; (2) the slots, on the first leg of the numbers; (3) the learner finishes route B on the
@@ -173,9 +177,9 @@ RULES
    route, table or line that holds it comes in a LATER block (or in the step's explanation). A scored step is never a
    regrouping by a real law, a sign tidy-up, arithmetic printed in the block, or a value the statement forces.
 8. MEANING IS TAUGHT AND TESTED. One reflect check (never scored) asks why agreement on numbers is not a proof, before
-   any text says it. The scored scope check (a true_false_set of the plan's three "We have proved …" claims) follows
-   the guided case. "An example or special case proves the law" and "the law being proved may be used" are tested by a
-   scored step or a variant step (the scope check counts for the first).
+   any text says it. The scored scope check (a true_false_set of the plan's four scope claims: three "We have proved …"
+   claims and a move the proof may not make) follows the guided case. It tests both "an example or special case proves
+   the law" and "the law being proved may be used"; other misconceptions are tested by a scored step or a variant step.
 
 THE TEACHING SEQUENCE — 10 blocks, about 350 words of prose, 5 scored steps (S) and one reflect. New ideas: the
 picture, the slots, letters for every input, scope.
@@ -198,7 +202,7 @@ picture, the slots, letters for every input, scope.
    value.
 8. demonstrate — route A in slot rows, then the comparison table, then the conclusion: "for every a, b, c, d — so
    (αβ)i = α(βi) for all α, β".
-9. check (S; true_false_set, the plan's 3 scope statements) — "What has been proved so far?" new_idea: scope.
+9. check (S; true_false_set, the plan's 4 scope statements) — "What has been proved so far?" new_idea: scope.
 10. generalize (S) — the general case as ONE two-column worked table (not a slot table with a row per product):
    columns route A | route B; rows inner result, slots of the outer product, real coordinate expanded, imaginary
    coordinate expanded (equal terms in the same order on both routes). ONE cell is '?' and the block's check asks for
@@ -237,7 +241,7 @@ lesson's letters everywhere.
   statement (name the routes; compute each from the definition, filling the slots; compare every coordinate, naming
   the real law; the letters were arbitrary, so it holds for all inputs). worked_example = a DIFFERENT short statement
   of the family, proved in full (S4a: αβ = βα, Example 1.4) — not the walkthrough's statement with another fixed
-  input. First question (the one every learner is served): a walkthrough of the next statement with one input fixed
+  input. First question (the one a retry serves): a walkthrough of the next statement with one input fixed
   at a simple value (at most 4 letters). Never a slot-error or repair question first: re-testing the learner's
   report or miss is the job of a scored step, the variant and a spare. Spares: a recovery walkthrough of another practice statement
   with the same demand; a single-answer typed question (spot the slot error in a shown route leg, the error not named

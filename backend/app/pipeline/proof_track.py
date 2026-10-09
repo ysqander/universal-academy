@@ -24,7 +24,7 @@ from ..learning.grading import parse_answer, parse_true_false_set
 from ..llm_schemas import InlineCheck, LessonV2Draft, MultistepStep, ProofPlan, QuestionDraft
 from .lessons import clamp_target
 from ..prompts.rules import PROOF_PATTERN_NAMES
-from .questions import _printed_in, typed_back, visible_length
+from .questions import _forced, _literal_value, _math_pieces, _printed_in, _value, typed_back, visible_length
 
 RESERVED_LETTERS = {"e", "E", "i", "I", "j", "p"}  # grader constants; p next to i reads as π
 SLOT_NAMES = {"x", "y", "u", "v"}
@@ -133,8 +133,9 @@ def plan_problems(plan: ProofPlan, n_practice_steps: int) -> list[str]:
     elif variant in taken | {_norm_statement(s.statement) for s in plan.practice_statements}:
         problems.append("proof.capstone_statement (the variant) repeats the teaching's statement, its guided case or a practice statement")
     marks = {s.true for s in plan.scope_statements}
-    if len(plan.scope_statements) != 3 or marks != {True, False}:
-        problems.append("proof.scope_statements needs exactly 3 claims, both true and false ones")
+    if not 3 <= len(plan.scope_statements) <= 4 or marks != {True, False}:
+        problems.append("proof.scope_statements needs 3 'We have proved …' claims, both true and false ones, and a 4th "
+                        "that shows a move the proof may not make")
     if plan.guided_key.strip():
         names = _symbol_names(plan.guided_key)
         if names is None:
@@ -527,13 +528,26 @@ def scored_check_problems(draft: LessonV2Draft) -> tuple[list[str], list[str]]:
         shown = [x.body for x in blocks[: n + 1]] + [x.check.prompt for x in blocks[: n + 1] if x.check is not None]
         shown += [t for x in blocks[:n] if x.check is not None for t in (x.check.explanation, x.check.answer_display)]
         letters = bool(_symbol_names(c.answer))  # a short letter key ("-b") is printed for other reasons too often
+        value = _value(c.answer)
+        known = [v for t in shown for piece in _math_pieces(t) if (v := _literal_value(piece)) is not None]
+        tuple_key = value is None and len(_scalars(c.answer) or []) > 1
         if _printed_in(c.answer, shown, small_integers=False, letters_only=letters):
             hard.append(
                 f"{where}: the scored check's answer {c.answer_display or c.answer} is printed before the learner answers "
                 "it — move the line or table that holds it to a later block (or into the check's explanation)"
             )
+        elif value is not None and len(value) == 1 and _forced(value[0], known):
+            hard.append(
+                f"{where}: the scored check's answer {c.answer_display or c.answer} is forced (a number times its inverse "
+                "is 1, a number plus its negative is 0) — ask for a value the learner computes"
+            )
         elif (back := typed_back(c.kind, c.answer, [c.prompt, block.body])) is not None:
             hard.append(f"{where}: typing ${back}$ from the block back is accepted as the answer — ask for a result the learner works out")
+        elif tuple_key and any(typed_back(c.kind, c.answer, [f"${piece}$"]) is not None  # tuple-like pieces only: a
+                               for t in shown for piece in _math_pieces(t) if "," in piece):  # long table would use up the probes
+            hard.append(f"{where}: the scored check's tuple {c.answer_display or c.answer} is printed before the learner answers it")
+        elif value is not None and _printed_in(c.answer, [block.body, c.prompt], small_integers=True):
+            soft.append(f"{where}: the scored check's answer {c.answer_display or c.answer} appears in its own block — make sure it is not readable there")
         if c.hint.strip() and _printed_in(c.answer, [c.hint], small_integers=True, letters_only=letters):
             hard.append(f"{where}: the hint gives the answer away — point to the move or the inputs instead")
     return hard, soft

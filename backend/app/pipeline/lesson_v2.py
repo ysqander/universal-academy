@@ -29,7 +29,7 @@ import networkx as nx
 
 from .. import db, llm, prompts
 from ..learning import guided
-from ..prompts.rules import MISCONCEPTIONS_HEADER
+from ..prompts.rules import MISCONCEPTIONS_HEADER, PROOF_MISCONCEPTIONS_HEADER
 from ..config import settings
 from ..llm_schemas import (
     BridgeIssue,
@@ -90,7 +90,7 @@ from .questions import (
     is_choice_based,
 )
 from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
-from .verify import VERIFICATION_PREFIX, verify_guided_checks, verify_skill
+from .verify import VERIFICATION_PREFIX, verify_guided_lesson, verify_skill
 from .visuals import FINALIZE_TIMEOUT, finalize_plan
 
 log = logging.getLogger("ua.pipeline.lesson_v2")
@@ -234,13 +234,19 @@ def plan_request(course: CourseInfo, skill: dict[str, Any], *, allow_split: bool
                   "missed or needed help with:"]
         lines += misses
     feedback = db.query(
-        "SELECT block_index, note, lesson_hash FROM block_feedback WHERE skill_id = ? AND note != '' "
-        "ORDER BY created_at, rowid",
+        "SELECT block_index, kind, note, lesson_hash FROM block_feedback WHERE skill_id = ? "
+        "AND (note != '' OR kind = 'wrong_key') ORDER BY created_at, rowid",
         (skill["id"],),
     )
     version = lesson_version(skill["lesson_json"])
+    reports = [f for f in feedback if f["kind"] == "wrong_key"]
+    feedback = [f for f in feedback if f["kind"] != "wrong_key"]
     current = [f for f in feedback if f["lesson_hash"] == version]
     earlier = [f for f in feedback if f["lesson_hash"] != version]  # block numbers of another version mean nothing
+    if reports:
+        lines += ["", "The learner reported the answer key of these scored proof steps as wrong (check each key):"]
+        lines += [f"- block {f['block_index'] + 1}{'' if f['lesson_hash'] == version else ' (an earlier version)'}"
+                  + (f": {f['note']}" if f["note"] else "") for f in reports]
     if current:
         lines += ["", "Learner feedback on the current lesson (\"This step isn't clear\"):"]
         lines += [f"- block {f['block_index'] + 1}: {f['note']}" for f in current]
@@ -358,7 +364,45 @@ def learner_misses(skill_id: str, limit: int = MAX_SHOWN_MISSES) -> list[str]:
         "ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?",
         (skill_id, RETIRED_REASON, limit),
     )
-    return [_miss_line(r) for r in reversed(rows)]
+    return [_miss_line(r) for r in reversed(rows)] + guided_misses(skill_id)
+
+
+def guided_misses(skill_id: str) -> list[str]:
+    """A guided proof lesson's scored steps the learner missed, needed a second try for, or had shown (current lesson
+    version; an earlier version's are only counted — its blocks are gone), for the planner."""
+    skill = db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (skill_id,))
+    if skill is None or not skill["lesson_json"]:
+        return []
+    lesson = db.loads(skill["lesson_json"], {}) or {}
+    version = lesson_version(skill["lesson_json"])
+    blocks = guided.blocks_of(lesson)
+    lines: list[str] = []
+    earlier = 0
+    for row in db.query("SELECT state_json FROM tasks WHERE skill_id = ? AND type = 'lesson' ORDER BY created_at, rowid", (skill_id,)):
+        g = (db.loads(row["state_json"], {}) or {}).get("guided")
+        if not isinstance(g, dict) or g.get("mode") != "scored":
+            continue
+        for index, rec in (g.get("checks") or {}).items():
+            if rec.get("status") != "done" or (rec.get("pts") is not None and rec["pts"] >= 1 and not rec.get("revealed")):
+                continue
+            if g.get("version") != version:
+                earlier += 1
+                continue
+            i = int(index)
+            check = guided.check_of(blocks[i]) if 0 <= i < len(blocks) else None
+            if check is None:
+                continue
+            how = ("answer shown first" if rec.get("revealed") else "right on the second try" if rec.get("correct")
+                   else "wrong twice" if rec.get("first_response") is not None else "wrong")
+            answers = [a for a in (rec.get("first_response"), rec.get("response")) if a]
+            lines.append(
+                f"- scored step, block {i + 1} ({check['kind']}): {' '.join(check['prompt'].split())[:300]} — {how}"
+                + (f"; answered {' then '.join(repr(a) for a in answers)}" if answers else "")
+                + f"; key {guided.answer_display(check)}"
+            )
+    if earlier:
+        lines.append(f"- [earlier lesson version] {earlier} scored proof step(s) missed or shown")
+    return lines
 
 
 async def plan_skill(
@@ -392,6 +436,20 @@ async def plan_skill(
 
 def is_proof_spec(spec: TeachingSpec) -> bool:
     return is_proof_skill({"kind": spec.kind, "objective": spec.objective})
+
+
+def is_proof_track(spec: TeachingSpec) -> bool:
+    return spec.proof is not None and is_proof_spec(spec)
+
+
+def misconceptions_header(spec: TeachingSpec) -> str:
+    """A proof lesson re-tests a miss in a scored step or the variant (its knowledge points are not served)."""
+    return PROOF_MISCONCEPTIONS_HEADER if is_proof_track(spec) else MISCONCEPTIONS_HEADER
+
+
+def final_problem(spec: TeachingSpec) -> tuple[str, str]:
+    """(the lesson's final problem, the rules it follows): a proof lesson ends with its variant."""
+    return ("variant", "THE VARIANT rules of THE PROOF TRACK") if is_proof_track(spec) else ("capstone", "the CAPSTONE rules")
 
 
 def writer_instructions(spec: TeachingSpec) -> str:
@@ -620,9 +678,9 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
         f"Starting point: {spec.starting_point}",
         "Reasoning sequence (the bridges, in order — each one belongs in the main path):",
         *[f"{i}. {step}" for i, step in enumerate(spec.reasoning_sequence, start=1)],
-        f"Success check — the planner's idea for the capstone (where it conflicts with the CAPSTONE rules, the rules "
-        f"win: no step whose answer is known in advance, no practice question split into steps, complex results in "
-        f"the form $a+bi$): {spec.success_check}",
+        f"Success check — the planner's idea for the {final_problem(spec)[0]} (where it conflicts with "
+        f"{final_problem(spec)[1]}, the rules win: no step whose answer is known in advance, no practice question split "
+        f"into steps, complex results in the form $a+bi$): {spec.success_check}",
         "Planned representations:",
         *(
             [f"- {r.format}: helps the learner notice {r.helps_notice} — read it as: {r.how_to_read}" for r in spec.representations]
@@ -632,7 +690,7 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
         *[f"{i}. {step}" for i, step in enumerate(spec.practice_steps, start=1)],
     ]
     if spec.misconceptions:
-        lines += [MISCONCEPTIONS_HEADER] + [f"- {m}" for m in spec.misconceptions]
+        lines += [misconceptions_header(spec)] + [f"- {m}" for m in spec.misconceptions]
     if spec.source_refs:
         lines.append("Book items: " + ", ".join(spec.source_refs))
     if spec.source_pages:
@@ -677,10 +735,11 @@ def write_request(course: CourseInfo, skill: dict[str, Any], spec: TeachingSpec,
 
 
 def revision_request(
-    request: str, draft: LessonV2Draft, review: LessonReview, problems: list[str], round_: int = 0
+    request: str, draft: LessonV2Draft, review: LessonReview, problems: list[str], round_: int = 0, *, proof: bool = False
 ) -> str:
     texts = prompts.for_role("lesson")  # read by the writer: its provider's wording
-    note = [texts.REVISION_NOTE] if round_ == 0 else [texts.REVISION_NOTE, "", texts.SECOND_REVISION_NOTE]
+    first = texts.PROOF_REVISION_NOTE if proof else texts.REVISION_NOTE  # the proof track: its own block limit
+    note = [first] if round_ == 0 else [first, "", texts.SECOND_REVISION_NOTE]
     lines = [request, "", *note, "", "## Your previous draft (JSON)", draft.model_dump_json(), "", "## Review"]
     lines += review_lines(review) or ["(no issues reported)"]
     if problems:
@@ -703,7 +762,7 @@ async def write_lesson(
     figures = spec_figures(course, skill, spec) if figures is None else figures
     text = write_request(course, skill, spec, figures)
     if revision is not None:
-        text = revision_request(text, *revision, round_=round_)
+        text = revision_request(text, *revision, round_=round_, proof=is_proof_track(spec))
     return await llm.structured(
         role="lesson",
         instructions=writer_instructions(spec),
@@ -871,13 +930,14 @@ def review_request(
         *([f"- {o}" for o in spec.out_of_scope] or ["- (none)"]),
         "Planned reasoning sequence:",
         *[f"{i}. {s}" for i, s in enumerate(spec.reasoning_sequence, start=1)],
-        f"Success check (the planner's idea for the capstone; the capstone rules take precedence): {spec.success_check}",
+        f"Success check (the planner's idea for the {final_problem(spec)[0]}; {final_problem(spec)[1]} take precedence): "
+        f"{spec.success_check}",
         f"Starting point (the outcome problem the lesson should pose and solve): {spec.starting_point}",
-        *([MISCONCEPTIONS_HEADER] + [f"- {m}" for m in spec.misconceptions] if spec.misconceptions else []),
+        *([misconceptions_header(spec)] + [f"- {m}" for m in spec.misconceptions] if spec.misconceptions else []),
         *(["", *plan_lines(spec.proof)] if spec.proof is not None and is_proof_spec(spec) else []),
         "",
         "COUNTS FOR THE DENSITY PASS (from the writer's own labels — judge the content too)",
-        *idea_lines(draft),
+        *idea_lines(draft, proof=is_proof_track(spec)),
         "",
         "LESSON DRAFT",
         render_lesson(draft),
@@ -885,14 +945,20 @@ def review_request(
     return "\n".join(lines)
 
 
-def idea_lines(draft: LessonV2Draft) -> list[str]:
+def block_limits(proof: bool) -> tuple[int, int]:
+    """(target, maximum) blocks of a teaching sequence: the proof track has 10 (11 with a planned miss)."""
+    return (TARGET_BLOCKS + 1, MAX_TEACHING_BLOCKS + 1) if proof else (TARGET_BLOCKS, MAX_TEACHING_BLOCKS)
+
+
+def idea_lines(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
     """The blocks' declared new ideas, counted against the lesson budget (the reviewer's density pass)."""
+    target, maximum = block_limits(proof)
     ideas = [(i, b.new_idea.strip()) for i, b in enumerate(draft.blocks, start=1) if b.new_idea.strip()]
     lines = [f"{len(draft.blocks)} blocks; {len(ideas)} declare a new idea (budget: about {IDEA_BUDGET} per lesson)."]
     lines += [f"- block {i}: {idea}" for i, idea in ideas]
     words = sum(prose_words(b.body) for b in draft.blocks)
     lines.append(
-        f"Length: {len(draft.blocks)} blocks (at most {TARGET_BLOCKS}; {MAX_TEACHING_BLOCKS} when the spec plans a "
+        f"Length: {len(draft.blocks)} blocks (at most {target}; {maximum} when the spec plans a "
         f"case the learner missed), about {words} words of prose outside the math (about {TARGET_PROSE_WORDS})."
     )
     return lines
@@ -1209,11 +1275,12 @@ def quality_problems(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
     of prose, and questions served first that make the learner produce answers — at most one choice question among
     them and at least one typed answer."""
     problems = []
+    target, maximum = block_limits(proof)
     n, words = len(draft.blocks), sum(prose_words(b.body) for b in draft.blocks)
-    if n > MAX_TEACHING_BLOCKS or words > MAX_PROSE_WORDS:
+    if n > maximum or words > MAX_PROSE_WORDS:
         problems.append(
-            f"the teaching sequence is too long ({n} blocks, about {words} words of prose; at most {TARGET_BLOCKS} "
-            f"blocks — {MAX_TEACHING_BLOCKS} when the spec plans a case the learner missed — and about "
+            f"the teaching sequence is too long ({n} blocks, about {words} words of prose; at most {target} "
+            f"blocks — {maximum} when the spec plans a case the learner missed — and about "
             f"{TARGET_PROSE_WORDS} words): merge or cut blocks that repeat a move on another case, duplicate a worked "
             "example or restate the generalize block, and keep every case the spec marks as a Learner's miss"
         )
@@ -1506,6 +1573,8 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         result.notes += notes
         if proof and spec.proof is not None:  # the checks are scored steps, then the variant (learning/guided.py)
             lesson["scoring"] = guided.GUIDED
+            # verified before the lesson is stored: a stored lesson rewritten later would leave an attempt stale
+            result.verify_notes += await verify_guided_lesson(skill, lesson)
     except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
         log.exception("v2 lesson %s failed", key)
         result.error = str(e)
@@ -1537,8 +1606,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         + (f"a {len(capstone.steps)}-step capstone" if capstone else "no capstone")
         + f" · final review: {review_summary(final_review)}"
     )
-    result.verify_notes = await verify_skill(skill_id)
-    result.verify_notes += await verify_guided_checks(skill_id)
+    result.verify_notes += await verify_skill(skill_id)
     if capstone_defects(skill_id):  # e.g. withheld by verification: one capstone-only repair, verified again
         result.verify_notes.append(await repair_stored_capstone(ctx, skill_id, prefix))
     for note in result.verify_notes:

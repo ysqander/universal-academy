@@ -27,7 +27,7 @@ export function LearnView({ task, lesson, onStart, starting, onTask }: LearnView
   const kps = lesson.knowledge_points.length;
   const capstone = hasCapstone(task.progress);
   const scored = isScoredLesson(lesson);
-  // The step whose answer is being reported as wrong (its points stop counting).
+  // The step whose answer key is being reported as wrong (kept for review; the score doesn't change).
   const [flagIndex, setFlagIndex] = useState<number | null>(null);
   const guided = useMemo<GuidedHandlers | null>(() => (scored ? { taskId: task.id, onTask, onFlag: setFlagIndex } : null), [scored, task.id, onTask]);
   const variant = scored ? guidedStart(task.progress) : null;
@@ -82,11 +82,11 @@ export function LearnView({ task, lesson, onStart, starting, onTask }: LearnView
           send={(reason) => flagGuided(task.id, flagIndex ?? -1, reason)}
           onClose={() => setFlagIndex(null)}
           onFlagged={onTask}
-          title="Report this step"
-          description="The step stops counting toward your score, whatever you answered, and the report is kept for a look at the lesson."
+          title="Report this step's answer key"
+          description="The report is kept and the key will be checked. Your score doesn't change now."
           reasons={STEP_REASONS}
-          confirmLabel="Don't count it"
-          sentMessage="Thanks — that step won't count toward your score."
+          confirmLabel="Send report"
+          sentMessage="Thanks — the report is in. The key will be checked."
         />
       )}
     </div>

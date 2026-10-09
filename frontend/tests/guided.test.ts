@@ -19,13 +19,16 @@ import {
   latestState,
   moreSteps,
   NOT_YET_TITLE,
+  REPORTED_NOTE,
   restoredAnswer,
+  scoredTag,
   stepPoints,
   variantOutOfReach,
 } from "../src/lib/guided.ts";
 import type { GuidedCheckState, InlineCheckPublic, Lesson, TaskProgress } from "../src/types.ts";
 
 const record = (over: Partial<GuidedCheckState> = {}): GuidedCheckState => ({
+  reported: false,
   status: "open",
   tries: 0,
   first_response: null,
@@ -105,8 +108,8 @@ test("the newer record wins: the last answer's until the replaced task catches u
   assert.equal(latestState(open, retry), retry);
   assert.equal(latestState(retry, finished), finished);
   assert.equal(latestState(finished, retry), finished, "an older answer never undoes a done step");
-  const reported = done({ voided: true });
-  assert.equal(latestState(reported, finished), reported, "on a tie the task's record wins (a report voids it)");
+  const reported = done({ reported: true });
+  assert.equal(latestState(reported, finished), reported, "on a tie the task's record wins (a report marks it)");
   assert.equal(latestState(null, retry), retry);
   assert.equal(latestState(open, null), open);
   assert.equal(latestState(undefined, undefined), null);
@@ -130,8 +133,11 @@ test("points and verdicts: 1 first time, ½ on the second try, 0 wrong or shown"
   assert.deepEqual(guidedVerdict(null), { tone: "open", title: null, points: null });
   // A retry of the lesson: shown answered, not scored again.
   assert.deepEqual(guidedVerdict(done({ scored: false, points: null })), { tone: "neutral", title: "Not scored this time", points: null });
-  // Reported as wrong: its points no longer count.
-  assert.equal(guidedPointsLabel(done({ voided: true })), "Not counted — you reported the answer as wrong");
+  // A learner's report never changes the score; only a key found wrong on review takes the step out.
+  assert.deepEqual(guidedVerdict(done({ reported: true })), { tone: "correct", title: "Right", points: "1 point" });
+  assert.equal(guidedPointsLabel(done({ revealed: true, correct: null, response: null, points: 0, reported: true })), "0 points — answer shown");
+  assert.equal(guidedPointsLabel(done({ voided: true })), "Not counted — the answer key was wrong");
+  assert.match(REPORTED_NOTE, /your score doesn't change/);
   assert.equal(guidedPointsLabel(record()), null);
   // No points from the server: from the verdict.
   assert.equal(stepPoints({ points: null, correct: true, tries: 2, revealed: false }), 0.5);
@@ -231,10 +237,10 @@ test("the card after the steps says before the click whether the variant can sti
   assert.equal(isGuidedProgress(progress({ guided_total: 0, variant: true, in_capstone: true })), true);
 });
 
-test("leaving keeps the answers of a scored proof lesson only", () => {
+test("leaving keeps the answers of a proof lesson with guided steps (a first attempt or a retry)", () => {
   const lesson = (guided: Lesson["guided"]) => ({ guided }) as Lesson;
   assert.equal(keepsAnswersOnLeave({ type: "lesson", lesson: lesson("scored") }), true);
-  assert.equal(keepsAnswersOnLeave({ type: "lesson", lesson: lesson("retry") }), false);
+  assert.equal(keepsAnswersOnLeave({ type: "lesson", lesson: lesson("retry") }), true);
   assert.equal(keepsAnswersOnLeave({ type: "lesson", lesson: lesson(null) }), false);
   assert.equal(keepsAnswersOnLeave({ type: "review", lesson: null }), false);
 });
@@ -244,4 +250,30 @@ test("a 409 that only a reload fixes is told apart from the others", () => {
   assert.equal(isStaleLessonMessage("This step was answered in another window — reload the lesson."), true);
   assert.equal(isStaleLessonMessage("Answer the earlier step first."), false);
   assert.equal(isStaleLessonMessage("This task is already finished."), false);
+});
+
+test("the step's tag says how many tries it has", () => {
+  assert.equal(scoredTag({ second_try: true }), "Counts toward your score · a second try for ½");
+  assert.equal(scoredTag({ second_try: false }), "Counts toward your score · one try");
+});
+
+test("no servable variant: no variant in the stepper, the card finishes the lesson", () => {
+  const noVariant = progress({ guided_total: 3, guided_done: 1, variant: false, planned: 3, has_capstone: false });
+  assert.equal(isGuidedProgress(noVariant), true);
+  assert.deepEqual(guidedStages(noVariant).map((s) => `${s.capstone ? "V" : "S"}:${s.state}`), ["S:done", "S:current", "S:todo"]);
+  assert.equal(guidedThen(noVariant), null);
+  assert.equal(guidedStepLabel(noVariant), "Proof step 2 of 3");
+
+  const finished = progress({ guided_total: 3, guided_done: 3, in_guided: false, variant: false, answered: 3, points: 3, max_points: 3, score: 1, best_possible: 1 });
+  assert.deepEqual(guidedStart(finished), {
+    title: "Proof steps done",
+    text: "Your steps decide this lesson: 80% passes.",
+    button: "Finish the lesson",
+    ends: false,
+  });
+  const lost = progress({ guided_total: 3, guided_done: 3, in_guided: false, variant: false, answered: 3, points: 1, max_points: 3, score: 1 / 3, best_possible: 1 / 3 });
+  const end = guidedStart(lost);
+  assert.equal(end?.ends, true);
+  assert.equal(end?.text, "80% is out of reach on this attempt. The lesson comes back after a pause with fresh questions.");
+  assert.doesNotMatch(end?.text ?? "", /variant/);
 });

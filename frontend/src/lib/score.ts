@@ -102,7 +102,8 @@ export function scoreView(progress: Partial<TaskProgress>, end?: TaskEnd | null)
         ? `Stopped after ${answered} proof ${answered === 1 ? "step" : "steps"}`
         : `Stopped after ${answered} ${answered === 1 ? "question" : "questions"}`;
   } else if (guidedTotal > 0 && !end) {
-    remainingLabel = progress.in_capstone ? "Last problem" : guidedDone < guidedTotal ? `${guidedDone} of ${guidedTotal} steps answered` : "Variant problem next";
+    remainingLabel =
+      progress.in_capstone ? "Last problem" : guidedDone < guidedTotal || !progress.variant ? `${guidedDone} of ${guidedTotal} steps answered` : "Variant problem next";
   } else if (planned > 0) {
     const left = Math.max(0, planned - answered);
     remainingLabel = left === 1 && answered > 0 && !end ? "Last question" : `${Math.min(answered, planned)} of ${planned} answered`;
@@ -227,6 +228,19 @@ export function lessonEndNote(
   if (halted) return { halted, text: `${percentLabel(view.passMark)} is no longer reachable in this attempt — ${back}.` };
   const score = view.hasScore ? `Your score, ${percentLabel(view.fraction, view.passMark)}, is` : "Your score is";
   return { halted, text: `${score} below the ${percentLabel(view.passMark)} pass mark — ${back}.` };
+}
+
+/**
+ * What a failed lesson suggests next (TaskProgress.suggestion_text: e.g. prerequisites made due), for the completion
+ * screen — unless the last answer's feedback already said it (`shown`: that AnswerResult's suggestion_text). A guided
+ * attempt that ended at the start of its variant has no such answer, so this is where it is said.
+ */
+export function completionSuggestion(progress: Partial<TaskProgress>, shown?: string | null): string | null {
+  const text = (progress.suggestion_text ?? "").trim();
+  if (!text) return null;
+  const squash = (t: string): string => t.replace(/\s+/g, " ").trim().toLowerCase();
+  const said = squash(shown ?? "");
+  return said && (said === squash(text) || said.includes(squash(text))) ? null : text;
 }
 
 const PAUSE_SAID = /\bpauses? here\b|\bout of reach\b|\bno longer reachable\b|\bstopped short\b/i;

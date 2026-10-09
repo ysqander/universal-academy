@@ -297,7 +297,8 @@ class GuidedCheckState(BaseModel):
     hint: str = ""  # sent once the first answer was wrong
     answer_display: str = ""  # done only
     explanation: str = ""  # done only
-    voided: bool = False  # reported as wrong by the learner: not counted
+    voided: bool = False  # taken out of the score (a key found wrong on review); a learner's report alone never does it
+    reported: bool = False  # the learner reported the key as wrong: kept for review, the score is unchanged
     scored: bool = True  # False on a retry of the lesson (the check is shown with its answer, not scored again)
 
 
@@ -311,7 +312,7 @@ class InlineCheckPublic(BaseModel):
     choices: list[str]
     scored: bool = False
     second_try: bool = False  # scored: a wrong first answer gets one more try for ½ point (typed answers, statement sets)
-    state: GuidedCheckState | None = None  # scored: the server's record (None in a preview of a skill never started)
+    state: GuidedCheckState | None = None  # the server's record (None when the check is not scored)
 
 
 class TeachingBlockView(BaseModel):
@@ -412,7 +413,8 @@ class TaskProgress(BaseModel):
     guided_done: int = 0  # of them, answered (or shown)
     in_guided: bool = False  # guided steps are still open: the practice can't start yet
     variant: bool = False  # the final problem is the proof lesson's variant (same idea, something changes)
-    best_possible: float = 0.0  # the score if everything still planned is answered right (lessons; else = score)
+    best_possible: float = 0.0  # the score if everything still planned is answered right (lessons only; 0 otherwise)
+    suggestion_text: str = ""  # a finished lesson that failed: what to do next (e.g. prerequisites made due)
 
 
 class QuizQuestionResult(BaseModel):

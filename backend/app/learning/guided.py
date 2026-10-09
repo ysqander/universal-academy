@@ -34,6 +34,7 @@ MIN_SET_STATEMENTS = 3  # a statement set with fewer has no meaningful second tr
 STALE_LESSON = "This lesson was updated — reload to see the new version."
 NOT_YET = "Not yet — one more try for ½ point. The hint below may help."
 SCORED_IN_LESSON = "This step counts toward the lesson's score — answer it in the lesson."
+NOT_SHOWN_YET = "The lesson hasn't reached this step yet — answer the step before it first."
 
 
 def is_guided(lesson: dict[str, Any] | None) -> bool:
@@ -223,5 +224,6 @@ def public_state(check: dict[str, Any], rec: dict[str, Any] | None, *, scored: b
         answer_display=answer_display(check) if done else "",
         explanation=str(check.get("explanation") or "") if done else "",
         voided=bool(rec.get("voided")),
+        reported=bool(rec.get("reported")),
         scored=scored,
     )

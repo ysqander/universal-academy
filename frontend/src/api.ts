@@ -207,7 +207,7 @@ export const checkGuided = (taskId: string, blockIndex: number, body: BlockCheck
 /** "Show answer" on a scored step: it is done with 0 points. */
 export const revealGuided = (taskId: string, blockIndex: number, version: string) =>
   post<GuidedCheckResult>(`/api/tasks/${seg(taskId)}/blocks/${blockIndex}/reveal`, { version } satisfies GuidedRevealRequest);
-/** Report a done scored step's answer key as wrong: its points stop counting (the step's state.voided). */
+/** Report a done scored step's answer key as wrong: kept for review (state.reported); the score doesn't change. */
 export const flagGuided = (taskId: string, blockIndex: number, reason: string) =>
   post<Task>(`/api/tasks/${seg(taskId)}/blocks/${blockIndex}/flag`, { reason });
 /** "This step isn't clear" on one teaching block (204). */

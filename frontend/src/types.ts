@@ -342,7 +342,8 @@ export interface GuidedCheckState {
   hint: string; // sent once the first answer was wrong
   answer_display: string; // done only
   explanation: string; // done only
-  voided: boolean; // reported as wrong by the learner: not counted
+  voided: boolean; // taken out of the score (a key found wrong on review); a learner's report alone never does it
+  reported: boolean; // the learner reported the key as wrong: kept for review, the score is unchanged
   scored: boolean; // false on a retry of the lesson (shown with its answer, not scored again)
 }
 
@@ -353,7 +354,7 @@ export interface InlineCheckPublic {
   /** A proof lesson's guided step: answered via POST /api/tasks/{tid}/blocks/{i}/check and counted in the score. */
   scored: boolean;
   second_try: boolean; // scored: a wrong first answer gets one more try for ½ point
-  state: GuidedCheckState | null; // scored: the server's record (null in a preview of a skill never started)
+  state: GuidedCheckState | null; // the server's record (null when the check is not scored)
 }
 
 export type TeachingBlockKind = "setup" | "explain" | "demonstrate" | "check" | "faded_example" | "generalize" | "summary";
@@ -500,7 +501,8 @@ export interface TaskProgress {
   guided_done: number; // of them, answered (or shown)
   in_guided: boolean; // guided steps are still open: the practice can't start yet
   variant: boolean; // the final problem is the proof lesson's variant (same idea, something changes)
-  best_possible: number; // the score if everything still planned is answered right
+  best_possible: number; // the score if everything still planned is answered right (lessons only; 0 otherwise)
+  suggestion_text?: string; // a finished lesson that failed: what to do next (e.g. prerequisites made due)
 }
 
 export interface Task {

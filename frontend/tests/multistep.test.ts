@@ -205,3 +205,14 @@ test("a step's hint is offered when the server says it has one (its text comes f
   // Older servers: the text, no flag.
   assert.equal(stepHasHint({ hint: "Use i^2 = -1." }), true);
 });
+
+test("a variant resumed after leaving restores its trail at the step it stopped at, with that step's prompt", () => {
+  const blank = (index: number): MultistepStepPublic => ({ index, prompt: "", kind: "expression", choices: [], hint: "", has_hint: true });
+  // Steps 1–2 answered (the second with its hint), step 3 current; step 4 not reached yet.
+  const served = [step(0), step(1), { ...step(2), hint: "" }, blank(3)];
+  const trail = initialTrail({ steps: served, step_index: 2, step_results: [result(0, 1), result(1, 0.5)] });
+  assert.equal(activeStep(trail), 2);
+  assert.equal(stepReached(served[activeStep(trail) ?? -1]), true);
+  assert.equal(stepReached(served[3]), false);
+  assert.deepEqual(stepPips(trail), ["full", "half", "current", "todo"]);
+});

@@ -9,7 +9,7 @@ import { TaskMenu } from "../../components/TaskMenu";
 import { useCountUp } from "../../hooks/useCountUp";
 import { useResource } from "../../hooks/useResource";
 import { plural } from "../../lib/format";
-import { lessonEndNote, percentLabel, scoreView } from "../../lib/score";
+import { completionSuggestion, lessonEndNote, percentLabel, scoreView } from "../../lib/score";
 import { prettyTitle } from "../../lib/markdown";
 import { isRetakeOption, optionMinutes, taskTitle } from "../../lib/quiz";
 import type { NextTaskResponse, Task, TaskOption } from "../../types";
@@ -19,6 +19,8 @@ interface CompletionScreenProps {
   task: Task;
   /** Questions planned just before the last answer (a halted lesson reports only what was answered). */
   plannedBefore?: number;
+  /** The suggestion the last answer's feedback already showed (not said twice). */
+  shownSuggestion?: string | null;
   xpEarned: number;
   onSession: (next: NextTaskResponse) => void;
   onContinue: () => void;
@@ -36,7 +38,7 @@ function headline(task: Task): { icon: IconName; title: string; tone: "success" 
   return { icon: "arrowRight", title: "Task set aside", tone: "neutral" };
 }
 
-export function CompletionScreen({ task, plannedBefore = 0, xpEarned, onSession, onContinue, onStart, pendingKey }: CompletionScreenProps) {
+export function CompletionScreen({ task, plannedBefore = 0, shownSuggestion = null, xpEarned, onSession, onContinue, onStart, pendingKey }: CompletionScreenProps) {
   const next = useResource(`after:${task.id}`, (signal) => getNext(task.course_id, signal));
   const xp = useCountUp(xpEarned);
   const head = headline(task);
@@ -50,6 +52,8 @@ export function CompletionScreen({ task, plannedBefore = 0, xpEarned, onSession,
   const score = scoreView(progress, task.type === "lesson" ? { outcome: task.outcome, plannedBefore } : null);
   const end = task.type === "lesson" && task.outcome === "failed" ? lessonEndNote(progress, plannedBefore, task.cooldown_until) : null;
   const showScore = task.type === "lesson" && score.hasScore && (task.outcome === "passed" || task.outcome === "failed");
+  // A failed lesson's next step (e.g. prerequisites made due): its only place when no answer ended the attempt.
+  const suggestion = task.outcome === "failed" ? completionSuggestion(progress, shownSuggestion) : null;
   // A quiz became due (SPEC §6.7): it is the only option now, and "Next task" starts it. The optional retake is first
   // only when nothing else is left: offered, not forced.
   const quizOption = !next.data?.task && options[0]?.type === "quiz" ? options[0] : null;
@@ -109,6 +113,13 @@ export function CompletionScreen({ task, plannedBefore = 0, xpEarned, onSession,
         </section>
       )}
       {!showScore && end && <p className="completion__note completion__score-note">{end.text}</p>}
+
+      {suggestion && (
+        <div className="completion__suggestion callout">
+          <Icon name="bulb" size={20} />
+          <div>{suggestion}</div>
+        </div>
+      )}
 
       {unlocked.length > 0 && task.outcome === "passed" && (
         <section className="completion__section">

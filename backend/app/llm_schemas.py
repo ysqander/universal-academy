@@ -408,7 +408,9 @@ class ProofPlan(BaseModel):
     guided_case: str = Field(description="The statement with ONE input fixed at a simple value (at most 4 letters) and the key line the learner builds.")
     guided_key: str = Field(description="SymPy key of that key line, e.g. '-a*d-b*c+(a*c-b*d)*i' (or '' for a choice).")
     general_case: str = Field(description="The full statement, shown as a worked table in the generalize block.")
-    scope_statements: list[ScopeStatement] = Field(description="Exactly 3 'We have proved …' claims with both true and false ones.")
+    scope_statements: list[ScopeStatement] = Field(
+        description="The scored scope check's claims: 3 'We have proved …' claims with both true and false ones, and a 4th that shows a move the proof may not make (false)."
+    )
     practice_statements: list[PracticeStatement] = Field(description="3–6 statements the practice proves; none is the statement, its guided case or a worked example.")
     capstone_statement: str = Field(
         description="The variant that ends the lesson: a statement of the family nothing else proves, where the same strategy works but ONE thing changes (at most 4 letters, 2–3 steps)."

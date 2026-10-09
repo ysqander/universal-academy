@@ -109,6 +109,8 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const [finishedId, setFinishedId] = useState<string | null>(null);
   // The plan of a task just before it finished (a halted lesson reports only what was answered).
   const [planBefore, setPlanBefore] = useState<{ id: string; planned: number } | null>(null);
+  // The suggestion the answer that finished a task showed in its feedback (the results page doesn't repeat it).
+  const [lastSuggestion, setLastSuggestion] = useState<{ id: string; text: string } | null>(null);
   const taskRef = useRef<Task | null>(task);
   const bootPromise = useRef<Promise<Initial> | null>(null);
   const autoStarted = useRef<string | null>(null);
@@ -214,6 +216,7 @@ export default function StudyPage({ courseId }: { courseId: string }) {
     if (result.task.phase === "done") {
       setFinishedId(result.task.id);
       setConfirmEnd(false);
+      setLastSuggestion(result.suggestion_text ? { id: result.task.id, text: result.suggestion_text } : null);
     }
   }, []);
 
@@ -523,6 +526,7 @@ export default function StudyPage({ courseId }: { courseId: string }) {
         key={task.id}
         task={task}
         plannedBefore={planBefore?.id === task.id ? planBefore.planned : 0}
+        shownSuggestion={lastSuggestion?.id === task.id ? lastSuggestion.text : null}
         // The server's figure for the finished task: includes re-scoring after a flag, the lesson bonus, and 0 for a
         // voided or abandoned task (a local sum of answer XP would go stale).
         xpEarned={task.xp_value}

@@ -143,7 +143,9 @@ def _lesson_candidates(view: _CourseView, now: datetime) -> list[Candidate]:
         n_desc = len(view.graph.descendants(sid))
         covered = {a: w for a, w in view.graph.down.get(sid, {}).items() if a in due and a not in quiz_owed}
         importance = 1 + 0.3 * n_desc + sum(covered.values())
-        if db.loads(p["kp_failures_json"], {}):
+        if p["status"] == "in_progress" and engine.left_attempt(engine._skill_row(sid)) is not None:
+            reason = "Started before — continues where you left off"  # a guided proof lesson keeps its answers
+        elif db.loads(p["kp_failures_json"], {}):
             reason = "Second try — fresh questions after a pause"
         elif p["status"] == "in_progress":
             reason = "Started before — begins again from the top"

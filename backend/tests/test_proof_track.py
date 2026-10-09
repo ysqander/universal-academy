@@ -429,3 +429,13 @@ def test_a_proof_lesson_revises_once_and_its_final_review_runs_lighter(tmp_path,
         "optional_content_needed": [], "split_recommended": False, "split_reason": "",
     })).keys() == {9, 10}
     assert BlockRepair(blocks=[]).blocks == []
+
+
+def test_a_variant_explanation_may_not_name_the_law_a_later_step_asks_for():
+    """The guided S10 (2026-10-09): step 2's explanation gave "(a+b)c = c(a+b) = ac+bc by commutativity and
+    distributivity" before step 3 asked about it — the variant's one real move was shown, not asked."""
+    draft = lesson()
+    steps = list(draft.capstone.steps)
+    steps[1] = steps[1].model_copy(update={"explanation": steps[1].explanation + " The coordinates agree by commutativity."})
+    hard, _ = problems(draft.model_copy(update={"capstone": draft.capstone.model_copy(update={"steps": steps})}))
+    assert any("cap step 2: its explanation names the law before step 3" in p for p in hard)

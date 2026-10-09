@@ -410,7 +410,14 @@ class ProofPlan(BaseModel):
     general_case: str = Field(description="The full statement, shown as a worked table in the generalize block.")
     scope_statements: list[ScopeStatement] = Field(description="Exactly 3 'We have proved …' claims with both true and false ones.")
     practice_statements: list[PracticeStatement] = Field(description="3–6 statements the practice proves; none is the statement, its guided case or a worked example.")
-    capstone_statement: str = Field(description="A natural statement of the family nothing else proves, its fixed input computed by an earlier skill, and how it is then used.")
+    capstone_statement: str = Field(
+        description="The variant that ends the lesson: a statement of the family nothing else proves, where the same strategy works but ONE thing changes (at most 4 letters, 2–3 steps)."
+    )
+    # a default so that plans stored before the variant still load (the strict schema still requires the field)
+    variant_change: str = Field(
+        default="",
+        description="One line: what the variant changes compared with the taught statement (another right-hand side, an extra term, the other operation, a hypothesis dropped, …).",
+    )
     halves: list[ProofHalf] = Field(description="two_halves: exactly the 2 halves; [] for every other pattern.")
 
 
@@ -479,6 +486,11 @@ class InlineCheck(BaseModel):
     answer: str = Field(description="Same conventions as QuestionDraft.answer; '' for reflect.")
     answer_display: str
     explanation: str = Field(description="Shown after the learner responds: the reasoning, in one to three sentences.")
+    # a default so that lessons stored before scored checks still load (the strict schema still requires the field)
+    hint: str = Field(
+        default="",
+        description="Proof lessons (scored checks): one sentence shown after a wrong first answer — it points to the move or the inputs, never the result. '' for reflect, and in other lessons.",
+    )
 
 
 TeachingBlockKind = Literal["setup", "explain", "demonstrate", "check", "faded_example", "generalize", "summary"]
@@ -511,7 +523,7 @@ class LessonV2Draft(BaseModel):
     objective: str
     goal_line: str = Field(description="'Your goal:' one sentence in learner language with a concrete example.")
     blocks: list[TeachingBlock] = Field(
-        description="The ordered teaching sequence: at most 9 blocks (10 with a case the learner missed), 1-2 graded checks + 1 reflect check."
+        description="The ordered teaching sequence: at most 9 blocks (10 with a case the learner missed), 1-2 graded checks + 1 reflect check (proof skills: THE PROOF TRACK — 10 blocks, 4-6 scored checks + 1 reflect)."
     )
     notation: list[NotationItem] = Field(description="Only symbols actually used in this lesson, each introduced in the text before use.")
     knowledge_points: list[KnowledgePointDraft] = Field(
@@ -520,7 +532,8 @@ class LessonV2Draft(BaseModel):
     capstone: QuestionDraft = Field(
         description=(
             "The final multistep problem (kind 'multistep', 2-4 steps) that makes the learner chain the lesson's "
-            "ideas — and earlier skills — to solve one problem. Each step machine-checked; key 'cap'."
+            "ideas — and earlier skills — to solve one problem. Each step machine-checked; key 'cap'. Proof skills: "
+            "THE VARIANT (2-3 steps; the same strategy with one thing changed)."
         )
     )
     connection: str = Field(description="1-2 sentences: what this enables next.")

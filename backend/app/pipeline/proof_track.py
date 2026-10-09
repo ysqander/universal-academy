@@ -6,6 +6,10 @@ These checks find them in a draft so that the revision fixes them:
 - plan_problems: the planner's ProofPlan (a defective plan is re-planned once);
 - proof_problems: a lesson draft against its plan → (hard, soft). Hard problems keep a revision that introduces them
   from replacing a draft without them; both kinds go to the revision.
+
+Since 2026-10-09 (the learner, after studying S4a) a proof lesson's graded inline checks are its scored steps and the
+capstone slot holds a short variant (rules.GUIDED_PROOF_RULE; learning/guided.py): scored_check_problems and
+variant_problems check those; the knowledge points are the retry and review pool.
 """
 
 from __future__ import annotations
@@ -20,13 +24,15 @@ from ..learning.grading import parse_answer, parse_true_false_set
 from ..llm_schemas import InlineCheck, LessonV2Draft, MultistepStep, ProofPlan, QuestionDraft
 from .lessons import clamp_target
 from ..prompts.rules import PROOF_PATTERN_NAMES
-from .questions import _printed_in, visible_length
+from .questions import _printed_in, typed_back, visible_length
 
 RESERVED_LETTERS = {"e", "E", "i", "I", "j", "p"}  # grader constants; p next to i reads as π
 SLOT_NAMES = {"x", "y", "u", "v"}
 ABSTRACT_PATTERNS = {"law_chain", "suppose_two"}
 TEACHING_LETTERS, ANY_LETTERS = 4, 6
 TERMS, SPARE_TERMS = 4, 6
+MIN_SCORED, MAX_SCORED = 4, 6  # scored steps in the teaching (rules.GUIDED_PROOF_RULE)
+VARIANT_STEPS = (2, 3)
 MAX_OPTION_CHARS, KEY_LENGTH_RATIO = 90, 1.3
 
 _GREEK = r"(?:\\alpha|\\beta|\\gamma|\\lambda|\\mu|α|β|γ|λ|μ)"
@@ -121,6 +127,11 @@ def plan_problems(plan: ProofPlan, n_practice_steps: int) -> list[str]:
             problems.append(f"practice statement {s.statement[:60]!r} names knowledge point {s.knowledge_point}, which does not exist")
         if _norm_statement(s.statement) in taken:
             problems.append(f"practice statement {s.statement[:60]!r} is the teaching's statement or its guided case")
+    variant = _norm_statement(plan.capstone_statement)
+    if not variant:
+        problems.append("proof.capstone_statement is empty: the variant that ends the lesson (the same strategy, one thing changed)")
+    elif variant in taken | {_norm_statement(s.statement) for s in plan.practice_statements}:
+        problems.append("proof.capstone_statement (the variant) repeats the teaching's statement, its guided case or a practice statement")
     marks = {s.true for s in plan.scope_statements}
     if len(plan.scope_statements) != 3 or marks != {True, False}:
         problems.append("proof.scope_statements needs exactly 3 claims, both true and false ones")
@@ -164,7 +175,8 @@ def plan_lines(plan: ProofPlan) -> list[str]:
         *[f"- {s.statement} — {'T' if s.true else 'F'}" for s in plan.scope_statements],
         "Practice statements:",
         *[f"- knowledge point {s.knowledge_point} ({s.role}): {s.statement}" for s in plan.practice_statements],
-        f"Capstone statement: {plan.capstone_statement}",
+        f"Variant (the capstone field — the final problem, counts double): {plan.capstone_statement}"
+        + (f" — what changes: {plan.variant_change}" if plan.variant_change.strip() else ""),
     ]
     for h in plan.halves:
         lines.append(f"Half {h.label}: assume {h.assume}; show {h.show}; pattern {h.pattern}")
@@ -209,7 +221,7 @@ class Typed:
     where: str
     answer: str
     prompt: str
-    role: str  # "inline" | "faded" | "served" | "spare" | "capstone"
+    role: str  # "inline" | "faded" | "served" (a knowledge point's first questions: a retry's) | "spare" | "capstone" (the variant)
     first_kp1: bool = False
 
 
@@ -257,7 +269,7 @@ def _letter_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], 
         elif len(names) > TEACHING_LETTERS and (t.role in ("inline", "faded", "capstone") or t.first_kp1):
             soft.append(
                 f"{t.where}: {len(names)} letters; at most {TEACHING_LETTERS} in the teaching checks, knowledge point 1's "
-                "first question and the capstone (fix one input at a simple value)"
+                "first question and the variant (fix one input at a simple value)"
             )
         exprs = _scalars(t.answer) or []
         terms = max((_terms(e) for e in exprs if e.free_symbols), default=0)
@@ -325,13 +337,6 @@ def _arc_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], lis
                 "(the first factor) and show u, v and both results as '?': reading u and v off route B's own intermediate "
                 "is where the routes get mixed (the learner's report)"
             )
-        if c.kind in ("numeric", "expression"):
-            shown = [b.body for b in blocks[: n + 1]] + [b.check.prompt for b in blocks[: n + 1] if b.check is not None]
-            if _printed_in(c.answer, shown, small_integers=False, letters_only=True):
-                hard.append(
-                    f"block {n + 1}: the faded check's answer {c.answer_display or c.answer} is printed before the learner "
-                    "computes it — show the other route only after the faded example"
-                )
     reflect = [n for n, b in enumerate(blocks) if b.check is not None and b.check.kind == "reflect"]
     scope = [n for n, b in enumerate(blocks) if b.check is not None and b.check.kind == "true_false_set"
              and _tf_set_ok(b.check.choices, b.check.answer)]
@@ -367,11 +372,15 @@ def _walkthrough_problems(q: QuestionDraft, plan: ProofPlan, *, capstone: bool =
     choices = sum(1 for s in steps if s.kind == "multiple_choice")
     tf_steps = [s for s in steps if s.kind == "true_false_set"]
     abstract = plan.pattern in ABSTRACT_PATTERNS
-    if not 3 <= len(steps) <= 4:
-        problems.append(f"{q.key}: {len(steps)} steps; a proof {'capstone' if capstone else 'walkthrough'} has 3–4")
+    low, high = VARIANT_STEPS if capstone else (3, 4)
+    if not low <= len(steps) <= high:
+        problems.append(
+            f"{q.key}: {len(steps)} steps; " + ("the variant has 2–3 (the strategy's moves on the changed statement)"
+                                                if capstone else "a proof walkthrough has 3–4")
+        )
     # an abstract derivation has no typed vector lines: a true_false_set of line justifications stands in for them
     stand_in = abstract and any(_tf_set_ok(s.choices, s.answer) for s in tf_steps)
-    if typed < 2 and not stand_in:
+    if typed < 2 and not stand_in and not (capstone and abstract and typed >= 1):
         problems.append(f"{q.key}: {typed} typed steps; at least 2 (route A's result, route B's first leg or the slots of its last product)")
     if choices > 1:
         problems.append(f"{q.key}: {choices} multiple_choice steps; at most 1")
@@ -400,16 +409,9 @@ def _walkthrough_problems(q: QuestionDraft, plan: ProofPlan, *, capstone: bool =
         if key in slot_tuples:
             problems.append(f"{q.key} step {i}: the same slot tuple twice")
         slot_tuples.append(key)
-    if capstone and steps and not abstract:
-        first, last = steps[0], steps[-1]
-        if first.kind not in ("numeric", "expression") or _symbol_names(first.answer):
-            problems.append("cap: step 1 is the earlier skill computing the fixed input (a constant key)")
-        if last.kind not in ("numeric", "expression") or _symbol_names(last.answer):
-            problems.append("cap: the last step USES the proved statement to get a value (a constant key)")
-        if not any(s.kind in ("numeric", "expression") and _symbol_names(s.answer) for s in steps):
-            problems.append("cap: no typed step with letters (route A's result, or route B's slots or first leg)")
+    if capstone and steps:
         if _SLOT_ROW.search(q.prompt) or any(_SLOT_ROW.search(s.prompt) or _RESET.search(s.prompt) for s in steps) or _RESET.search(q.prompt):
-            problems.append("cap: the capstone shows slot rows or 'reset the slots' — remove the scaffold (a slot tuple may still be asked for)")
+            problems.append("cap: the variant shows slot rows or 'reset the slots' — remove the scaffold (a slot tuple may still be asked for)")
     return problems
 
 
@@ -473,8 +475,8 @@ def _explanation_problems(q: QuestionDraft) -> list[str]:
 
 
 def capstone_proof_problems(cap: QuestionDraft, plan: ProofPlan) -> list[str]:
-    """The proof capstone's shape: an earlier skill computes the fixed input, a typed route step with letters, the
-    proved statement used for a value, no scaffold in its prompts; short options."""
+    """The capstone slot of a proof lesson holds the variant: 2–3 steps, typed where the pattern computes, no scaffold
+    in its prompts, short options."""
     problems = _walkthrough_problems(cap, plan, capstone=True)
     for i, step in enumerate(cap.steps, start=1):
         problems += _option_problems(step, f"cap step {i}")
@@ -486,10 +488,64 @@ def _small_integer_tuple(answer: str) -> bool:
     return bool(exprs) and len(exprs) >= 2 and all(e.is_Integer and abs(int(e)) < 20 for e in exprs)
 
 
+def scored_check_problems(draft: LessonV2Draft) -> tuple[list[str], list[str]]:
+    """(hard, soft) problems of the teaching's scored steps (every graded inline check): how many there are, their
+    hints, and that none can be read before the learner answers it — the app sends the lesson one scored step at a
+    time, so only the blocks up to the step, earlier checks' prompts, explanations and answers can give it away."""
+    hard: list[str] = []
+    soft: list[str] = []
+    blocks = draft.blocks
+    graded = [n for n, b in enumerate(blocks) if _graded(b.check)]
+    if len(graded) < MIN_SCORED:
+        hard.append(
+            f"the teaching has {len(graded)} scored steps (graded checks); {MIN_SCORED}–{MAX_SCORED} — the proof's real "
+            "moves: the concrete case's key computation(s), the guided case's key line, scope, and one '?' entry of the "
+            "general table"
+        )
+    elif len(graded) > MAX_SCORED:
+        soft.append(f"the teaching has {len(graded)} scored steps; at most {MAX_SCORED}")
+    general = [n for n, b in enumerate(blocks) if b.kind == "generalize"]
+    if general and not any(n >= general[0] for n in graded):
+        soft.append(
+            f"block {general[0] + 1}: the general case has no scored '?' entry — leave one short cell for the learner "
+            "(a slot tuple, a solved coordinate, a coordinate of at most 4 terms) and ask for it"
+        )
+    for n in graded:
+        block, c = blocks[n], blocks[n].check
+        assert c is not None
+        where = f"block {n + 1}"
+        if not c.hint.strip():
+            hard.append(f"{where}: the scored check has no hint — one sentence shown after a wrong first answer, pointing to the move or the inputs")
+        if c.kind == "true_false":
+            hard.append(f"{where}: a scored true_false check is a coin flip — use a true_false_set of 3–4 claims or a multiple_choice of 4")
+        elif c.kind == "multiple_choice" and len(c.choices) < 4:
+            soft.append(f"{where}: a scored multiple_choice has {len(c.choices)} options; 4")
+        elif c.kind == "true_false_set" and not _tf_set_ok(c.choices, c.answer):
+            soft.append(f"{where}: a scored true_false_set needs 3–4 claims, both true and false ones")
+        if c.kind not in ("numeric", "expression") or not c.answer.strip():
+            continue
+        shown = [x.body for x in blocks[: n + 1]] + [x.check.prompt for x in blocks[: n + 1] if x.check is not None]
+        shown += [t for x in blocks[:n] if x.check is not None for t in (x.check.explanation, x.check.answer_display)]
+        letters = bool(_symbol_names(c.answer))  # a short letter key ("-b") is printed for other reasons too often
+        if _printed_in(c.answer, shown, small_integers=False, letters_only=letters):
+            hard.append(
+                f"{where}: the scored check's answer {c.answer_display or c.answer} is printed before the learner answers "
+                "it — move the line or table that holds it to a later block (or into the check's explanation)"
+            )
+        elif (back := typed_back(c.kind, c.answer, [c.prompt, block.body])) is not None:
+            hard.append(f"{where}: typing ${back}$ from the block back is accepted as the answer — ask for a result the learner works out")
+        if c.hint.strip() and _printed_in(c.answer, [c.hint], small_integers=True, letters_only=letters):
+            hard.append(f"{where}: the hint gives the answer away — point to the move or the inputs instead")
+    return hard, soft
+
+
 def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], list[str]]:
     """(hard, soft) proof-track problems of a lesson draft against its plan."""
     hard, soft = _letter_problems(draft, plan)
     h, s = _arc_problems(draft, plan)
+    hard += h
+    soft += s
+    h, s = scored_check_problems(draft)
     hard += h
     soft += s
     served_scope = False
@@ -500,14 +556,14 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
         typed = sum(1 for st in first.steps if st.kind in ("numeric", "expression")) if first.kind == "multistep" else 0
         if typed < 2:
             hard.append(
-                f"knowledge point 1 leads with {first.key} ({first.kind}): the question every learner is served there is "
-                "the transfer walkthrough of a practice statement (3–4 steps, at least 2 typed); a repair or slot-error "
+                f"knowledge point 1 leads with {first.key} ({first.kind}): the question a retry serves there is the "
+                "transfer walkthrough of a practice statement (3–4 steps, at least 2 typed); a repair or slot-error "
                 "question is a spare"
             )
     served_count = sum(clamp_target(kp.target_questions) for kp in points)
     if served_count > len(points) or len(points) > 3:
         soft.append(
-            f"{served_count} practice questions are served before the capstone; the track serves one per knowledge point "
+            f"{served_count} practice questions lead the knowledge points; a retry serves one per knowledge point "
             "(knowledge point 1's walkthrough, knowledge point 2's true_false_set) — set target_questions to 1 and move "
             "further statements to worked examples or spares"
         )
@@ -521,8 +577,7 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
             if q.kind in ("numeric", "expression") or (q.kind == "true_false_set" and _tf_set_ok(q.choices, q.answer)):
                 single = True
             law_choices += sum(_law_choice(p) for p in _parts(q))
-            if position < target:
-                served_scope |= any(p.kind == "true_false_set" and _tf_set_ok(p.choices, p.answer) for p in _parts(q))
+            if position < target:  # (what a proof establishes is tested in the lesson: the scope check, the variant)
                 marks = (parse_true_false_set(q.answer) or "") if q.kind == "true_false_set" else ""
                 if len(marks) >= 4 and min(marks.count("T"), marks.count("F")) < 2:
                     soft.append(f"{q.key}: {marks} — at least two true and two false claims, so marking everything one way fails")
@@ -537,12 +592,13 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
         if re.search(rf"(?<![A-Za-z}}])\\{name}{assigned}", cap.prompt) or re.search(rf"(?<![\w}}])\\?{char}{assigned}", cap.prompt):
             soft.append(f"cap: \\{name} names a computed number here but an arbitrary input elsewhere — give the fixed input a new letter (\\mu)")
     served_scope |= any(s.kind == "true_false_set" and _tf_set_ok(s.choices, s.answer) for s in cap.steps)
+    served_scope |= any(_graded(b.check) and b.check.kind == "true_false_set" and _tf_set_ok(b.check.choices, b.check.answer)
+                        for b in draft.blocks)  # type: ignore[union-attr]  # the scored scope check
     law_choices += sum(_law_choice(s) for s in cap.steps) + sum(_law_choice(b.check) for b in draft.blocks if b.check)
     if not served_scope:
         hard.append(
-            "no question served first and no capstone step tests what a proof establishes: lead knowledge point 2 with a "
-            "true_false_set of 4–5 claims about shown arguments (a numeric check as proof, a fixed input generalized, a "
-            "circular step, …)"
+            "no scored step and no variant step tests what a proof establishes: the scope check after the guided case is "
+            "a true_false_set of the plan's three 'We have proved …' claims"
         )
     if law_choices > 1:
         soft.append(f"{law_choices} 'which law' choices in the lesson; at most one")

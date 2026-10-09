@@ -28,6 +28,7 @@ from typing import Any
 import networkx as nx
 
 from .. import db, llm, prompts
+from ..learning import guided
 from ..prompts.rules import MISCONCEPTIONS_HEADER
 from ..config import settings
 from ..llm_schemas import (
@@ -89,7 +90,7 @@ from .questions import (
     is_choice_based,
 )
 from .textutil import clean_source_refs, normalize_sibling_refs, sibling_keys
-from .verify import VERIFICATION_PREFIX, verify_skill
+from .verify import VERIFICATION_PREFIX, verify_guided_checks, verify_skill
 from .visuals import FINALIZE_TIMEOUT, finalize_plan
 
 log = logging.getLogger("ua.pipeline.lesson_v2")
@@ -731,6 +732,8 @@ def _check_lines(check: InlineCheck | dict[str, Any], indent: str = "   ") -> li
     key = c.get("answer") or (f"option {c['correct_choice']}" if c.get("correct_choice") is not None else "")
     lines.append(f"{indent}  answer: {key or '—'} · shown as: {c.get('answer_display', '')}")
     lines.append(f"{indent}  explanation after responding: {c.get('explanation', '')}")
+    if (c.get("hint") or "").strip():
+        lines.append(f"{indent}  hint (after a wrong first answer): {c['hint']}")
     return lines
 
 
@@ -1004,6 +1007,7 @@ def clean_inline_check(check: InlineCheck) -> dict[str, Any]:
             "answer": "",
             "answer_display": check.answer_display.strip(),
             "explanation": explanation,
+            "hint": "",
         }
     draft = QuestionDraft(
         key="check",
@@ -1031,6 +1035,7 @@ def clean_inline_check(check: InlineCheck) -> dict[str, Any]:
         "answer": q.answer,
         "answer_display": q.answer_display.strip(),
         "explanation": explanation,
+        "hint": check.hint.strip(),  # a proof lesson's scored step shows it after a wrong first answer
     }
 
 
@@ -1119,8 +1124,8 @@ async def validate_v2(
         if strict:
             raise InvalidLesson("the teaching sequence has no inline check (1–3 are needed before the practice)")
         notes.append("the teaching sequence has no inline check")
-    elif len(checks) > 4:
-        notes.append(f"{len(checks)} inline checks (1–3 planned)")
+    elif len(checks) > (7 if proof else 4):  # a proof lesson: 4–6 scored steps and a reflect check
+        notes.append(f"{len(checks)} inline checks ({'5–7' if proof else '1–3'} planned)")
     if checks and not any(c["kind"] == "reflect" for c in checks):
         notes.append("no explanation ('reflect') check")
     if not any(b["kind"] == "faded_example" for b in blocks):
@@ -1174,10 +1179,12 @@ def served_questions(draft: LessonV2Draft) -> list[QuestionDraft]:
 
 def lesson_context(lesson: LessonV2Draft | dict[str, Any]) -> list[str]:
     """What the learner sees beside a practice question, which its answers must not simply repeat: block bodies,
-    inline-check prompts, and each knowledge point's explanation and worked example (shown in the practice panel)."""
+    inline checks (prompts, and the answers and explanations shown once answered), and each knowledge point's
+    explanation and worked example (shown in the practice panel)."""
     d = lesson.model_dump() if isinstance(lesson, LessonV2Draft) else lesson
     blocks = d.get("blocks") or []
     texts = [b.get("body") or "" for b in blocks] + [b["check"].get("prompt") or "" for b in blocks if b.get("check")]
+    texts += [b["check"].get(k) or "" for b in blocks if b.get("check") for k in ("answer_display", "explanation")]
     for kp in d.get("knowledge_points") or []:
         example = kp.get("worked_example") or {}
         texts += [kp.get("explanation") or "", example.get("problem") or "", example.get("takeaway") or ""]
@@ -1481,6 +1488,10 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         final, rewritten = await repair_served_questions(course, skill, spec, final, prefix, blocked)
         result.notes += rewritten
         cap_problems = capstone_problems(final.capstone) + capstone_blockers
+        if proof and spec.proof is not None:  # the variant: its shape, and nothing the lesson printed answers it
+            cap_problems += capstone_proof_problems(final.capstone, spec.proof)
+            cap_problems += answer_known_problems(final.capstone, context, proof=True)
+            cap_problems = list(dict.fromkeys(cap_problems))
         if cap_problems:  # rewrite just the capstone rather than drop steps (or end the lesson without one)
             try:
                 rewritten = await rewrite_capstone(course, skill, spec, render_lesson(final), prefix, cap_problems)
@@ -1493,6 +1504,8 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
             result.notes += [f"stored although (proof track): {p}" for p in sum(proof_problems(final, spec.proof), [])]
         lesson, pools, capstone, notes = await validate_v2(final, spec, figures, proof=proof, strict=False)
         result.notes += notes
+        if proof and spec.proof is not None:  # the checks are scored steps, then the variant (learning/guided.py)
+            lesson["scoring"] = guided.GUIDED
     except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
         log.exception("v2 lesson %s failed", key)
         result.error = str(e)
@@ -1525,6 +1538,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         + f" · final review: {review_summary(final_review)}"
     )
     result.verify_notes = await verify_skill(skill_id)
+    result.verify_notes += await verify_guided_checks(skill_id)
     if capstone_defects(skill_id):  # e.g. withheld by verification: one capstone-only repair, verified again
         result.verify_notes.append(await repair_stored_capstone(ctx, skill_id, prefix))
     for note in result.verify_notes:

@@ -138,10 +138,9 @@ def response_of(check: dict[str, Any], body: BlockCheckRequest) -> str:
 
 
 def not_yet_feedback(check: dict[str, Any], result: grading.GradeResult) -> str:
-    """The message after a wrong first answer: the grader's nudge for a typed answer ("Check the sign."), never the
-    statement-by-statement verdict of a set (that would be its answer key)."""
-    if check.get("kind") in ("numeric", "expression") and result.feedback and not result.feedback.startswith("Not quite"):
-        return f"{result.feedback} {NOT_YET}"
+    """The message after a wrong first answer: "not yet" and nothing more — the check's hint is the help the ½ point
+    pays for. The grader's diagnosis ("your answer is the conjugate of the expected one") would turn the second try into
+    a sign flip, and a set's statement-by-statement verdict would be its answer key; both come once the step is done."""
     return NOT_YET
 
 

@@ -397,32 +397,37 @@ REFERENCE_PROOF = """\
 REFERENCE PROOF LESSON — structure only. Its statement is not in this course (conjugates come in a later chapter):
 adapt the arc, never the content. Pattern two_routes; statement conj(αβ) = conj(α)·conj(β) for all α, β ∈ C, where
 conj(x+yi) = x − yi; letters α = a+bi, β = c+di.
-Teaching
+Teaching (S = a scored step: it counts toward the lesson, and the next block comes only once it is answered)
 1. setup "Two routes, same destination": route A multiplies α and β, then conjugates; route B conjugates α and β,
    then multiplies. The statement says the routes always meet; we may not assume it. We may use the definitions of
    product and conjugate, equality = both coordinates equal, real-number laws. We may not use the statement itself.
 2. demonstrate "First, fill the slots": α = 2+i, β = i. Route B's first leg: conj(α) = 2 − i and conj(i) = 0 − 1i, so
    the slot row of conj(α)·conj(β) is x = 2, y = −1, u = 0, v = −1.
-3. check (expression, constant key): "Compute the row and enter conj(α)·conj(β) in standard form." Key −1−2i. A
-   learner who mixes up the inputs gets 1−2i or 1+2i.
-4. check (reflect). Lead-in: route A, αi = (2+i)(0+1i) with slots 2, 1, 0, 1, gives −1+2i; its conjugate is −1−2i —
-   the same destination. "Why is this not yet a proof?"
-5. demonstrate "Letters stand for every input": keep β = i and write α = a+bi. Route B's first leg: conj(α) = a − bi,
+3. check (S, expression, constant key): "Compute the row and enter conj(α)·conj(β) in standard form." Key −1−2i. A
+   learner who mixes up the inputs gets 1−2i or 1+2i. Hint: "x, y come from conj(α), u, v from conj(i)".
+4. check (S, expression, constant key) "Route A, calculated separately": the slot row of αi = (2+i)(0+1i) with both
+   results '?'; "enter αi in standard form". Key −1+2i. Explanation: its conjugate is −1−2i — the same destination.
+5. check (reflect): "Both routes reached −1−2i. Why is this not yet a proof?"
+6. demonstrate "Letters stand for every input": keep β = i and write α = a+bi. Route B's first leg: conj(α) = a − bi,
    conj(i) = 0 − 1i.
-6. faded_example: row x = a, y = −b, u = ?, v = ?. Check (expression): "Enter conj(α)·conj(i) in standard form; the
+7. faded_example (S): row x = a, y = −b, u = ?, v = ?. Check (expression): "Enter conj(α)·conj(i) in standard form; the
    coordinates may stay unexpanded." Key -b-a*i.
-7. demonstrate: route A, αi with slots (a, b, 0, 1) gives −b + ai; its conjugate is −b − ai. Comparison table: real
+8. demonstrate: route A, αi with slots (a, b, 0, 1) gives −b + ai; its conjugate is −b − ai. Comparison table: real
    −b | −b; imaginary −a | −a. Proved for β = i and every α.
-8. check (true_false_set) "We have proved:" conj(αi) = conj(α)·conj(i) for every α (T); conj(αβ) = conj(α)·conj(β) for
-   every α, β (F, not yet); the calculation with α = 2+i proved it for every α (F).
-9. generalize: β = c+di; route A | route B in one table (inner result, slots of the outer product, real coordinate,
-   imaginary coordinate); the real laws named once; "the letters were arbitrary, so … for all α, β"; the method in
+9. check (S, true_false_set) "We have proved:" conj(αi) = conj(α)·conj(i) for every α (T); conj(αβ) = conj(α)·conj(β)
+   for every α, β (F, not yet); the calculation with α = 2+i proved it for every α (F).
+10. generalize (S): β = c+di; route A | route B in one table — inner result, then the slots of route B's outer product
+   as '?' (check: "enter the four slots (x, y, u, v) of conj(α)·conj(β)", key (a, -b, c, -d)); the coordinate rows in
+   the check's explanation; the real laws named once; "the letters were arbitrary, so … for all α, β"; the method in
    one line.
-Practice: KP1 Transfer — served walkthrough of conj((1+i)α) = (1−i)·conj(α): s1 route A, key a-b-(a+b)*i; s2 the slots
-of route B's product, key (1, -1, a, -b); s3 the real law for one shown pair (choice). KP2 What a proof establishes —
-worked example conj(α+β) = conj(α) + conj(β); served true_false_set of 5 claims. Capstone: s1 μ = (2+i)(1+i), key
-1+3*i (earlier skill); s2 route A of conj(μα), key a-3*b-(3*a+b)*i; s3 the slots of conj(μ)·conj(α), key
-(1, -3, a, -b); s4 use — "μα = 4−7i for an α you are not told; enter conj(μ)·conj(α)", key 4+7*i."""
+Variant (the capstone slot, weight 2): conj(α + β) = conj(α) + conj(β) — a sum where the teaching had a product: s1
+route A, key a+c-(b+d)*i; s2 the real law that makes the imaginary coordinates −(b+d) and (−b)+(−d) equal
+(multiple_choice, 4 short law names); s3 a true_false_set of 3 claims about what the change does (no slot table is
+needed for a sum; both coordinates are still compared; one example sum would still prove nothing).
+Practice (not served in the lesson — a retry and the reviews ask it): KP1 Transfer — walkthrough of
+conj((1+i)α) = (1−i)·conj(α): s1 route A, key a-b-(a+b)*i; s2 the slots of route B's product, key (1, -1, a, -b); s3
+the real law for one shown pair (choice). KP2 What a proof establishes — worked example conj(conj(α)) = α; a true_false_set
+of 5 claims."""
 
 
 # The planner's and writer's header above the skill's misconceptions (a Learner's miss is re-tested on NEW numbers).
@@ -446,3 +451,37 @@ uniqueness half of an existence-and-uniqueness proof the objects exist BY HYPOTH
 "multiplying by β" — cancelling α — is valid there, not circular. What may not be used is the general cancellation law
 or the formula 1/α before they are proved. A question never keys such a valid step as False, and a "may not use" line
 never forbids it."""
+
+
+# The learner's request after studying the proof-track S4a (2026-10-09): the proof is the exercise, then one variant —
+# no replay of the proof in practice. Shared by every provider's proof track (planner, writer, reviewer).
+GUIDED_PROOF_RULE = """\
+WHAT THE LEARNER ASKED FOR AFTER STUDYING THE PROOF-TRACK S4a (2026-10-09): going through exercises that "basically
+repeat the same thing again" was the part they disliked. In a proof lesson the steps the learner works out while going
+through the proof ARE the scored exercise, and the lesson ends with ONE short variant that shows the understanding is
+there — never a replay of the proof. So:
+- SCORED STEPS. Every graded inline check of the teaching sequence (every kind but 'reflect') counts toward the
+  lesson's score like a question: right first time 1 point; after a wrong first answer the learner sees "not yet" and
+  the check's hint, and a right second answer earns ½ (a choice check has one try); "Show answer" earns 0. The app
+  sends the lesson only up to the next unanswered scored step, so the block AFTER a scored step may show its answer.
+- 4–6 SCORED STEPS, and they are the proof's real moves, never tidy-ups: the key computation(s) of the concrete case
+  (1–2 steps), the guided case's key line (the faded example), scope (the true_false_set of the plan's three claims),
+  and one entry of the general case's worked table (a '?' cell: a short slot tuple, a solved coordinate, or a
+  coordinate of at most 4 terms). One 'reflect' check (never scored) still asks why agreement on numbers is not a proof.
+- EACH SCORED STEP: its answer is printed nowhere before the learner answers — not in its own block or prompt, not in
+  an earlier block, nor in an earlier check's prompt, explanation or answer (an earlier skill's result recalled in the
+  setup counts as printed); never a value the statement forces (the second route's final value, the 1 of a checked
+  inverse); `hint` = one sentence pointing to the move or the inputs, never the result; a typed answer's prompt says
+  the form to enter; a multiple_choice has 4 options; never a true_false check (a coin flip) — a true_false_set of 3–4
+  claims instead.
+- THE VARIANT (the capstone field; it counts double): the plan's variant statement — a statement the teaching did
+  not prove, where the same strategy works but ONE thing changes (another right-hand side, an extra term, the other
+  operation, a fixed input of another kind, a hypothesis dropped and why it is needed). 2–3 steps, at least one typed
+  (two when the pattern computes), at most 4 letters, no slot rows, no earlier-skill computation needed; never the
+  teaching's statement again with other numbers, never a step whose key the statement forces. Its last step may ask
+  what the change does (to the proof, or to the result).
+- A misconception the lesson names, and a "Learner's miss", is tested by a scored step or a variant step whose key
+  differs from the misconception's answer.
+- PRACTICE IS FOR LATER. The knowledge points (the transfer walkthrough, "what a proof establishes", their spares) are
+  not served in the lesson: a retry of the lesson and the spaced reviews ask them. Write them as before, with
+  target_questions 1."""

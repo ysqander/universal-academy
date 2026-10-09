@@ -740,7 +740,7 @@ def test_invalid_draft_is_revised_with_the_validation_problem(tmp_path, monkeypa
 def test_inline_check_validation():
     reflect = InlineCheck(kind="reflect", prompt="Why?", choices=["x"], correct_choice=2, answer="a", answer_display="Because.", explanation="")
     assert clean_inline_check(reflect) == {"kind": "reflect", "prompt": "Why?", "choices": [], "correct_choice": None,
-                                           "answer": "", "answer_display": "Because.", "explanation": ""}
+                                           "answer": "", "answer_display": "Because.", "explanation": "", "hint": ""}
     with pytest.raises(InvalidQuestion):
         clean_inline_check(reflect.model_copy(update={"answer_display": "", "explanation": ""}))
     tf = InlineCheck(kind="true_false", prompt="True?", choices=[], correct_choice=1, answer="", answer_display="False", explanation="e")

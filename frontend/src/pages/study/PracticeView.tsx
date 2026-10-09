@@ -4,9 +4,11 @@ import { WorkedExampleView } from "../../components/lesson/WorkedExampleView";
 import { Markdown } from "../../components/Markdown";
 import { SourceRefs } from "../../components/SourceRefs";
 import { StateMessage } from "../../components/StateMessage";
+import { isGuidedProgress } from "../../lib/guided";
 import { kpPosition } from "../../lib/score";
 import type { AnswerResult, Task } from "../../types";
 import type { SuggestionAction } from "./FeedbackPanel";
+import { GuidedStepper } from "./GuidedStepper";
 import { KpStepper } from "./KpStepper";
 import { MultistepCard } from "./MultistepCard";
 import { QuestionCard } from "./QuestionCard";
@@ -26,7 +28,9 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
   const lesson = task.lesson;
   const { progress, question } = task;
   const inCapstone = Boolean(progress.in_capstone) || question?.role === "capstone";
-  const kp = inCapstone ? undefined : lesson?.knowledge_points[progress.kp_index];
+  // A proof lesson whose steps were scored while reading: its practice is the variant problem alone.
+  const guided = task.type === "lesson" && isGuidedProgress(progress);
+  const kp = inCapstone || guided ? undefined : lesson?.knowledge_points[progress.kp_index];
   const explainerRef = useRef<HTMLDetailsElement>(null);
   const [explainer, setExplainer] = useState<{ kp: number; open: boolean } | null>(null);
   const explainerOpen = explainer && explainer.kp === progress.kp_index ? explainer.open : progress.kp_questions_used <= 1;
@@ -69,7 +73,7 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
     task.type === "review"
       ? `Question ${Math.min(progress.answered + 1, total)} of ${total}`
       : // Lessons: the stepper above says "Question n of target"; the card only says when this one is an extra.
-        kpPosition(progress, kp).extra
+        !guided && kpPosition(progress, kp).extra
         ? "Extra question"
         : null;
 
@@ -85,7 +89,12 @@ export function PracticeView({ task, onAnswered, onAdvance, onFlagged, onEasier,
 
   return (
     <div className="practice-view">
-      {task.type === "lesson" && lesson && <KpStepper points={lesson.knowledge_points} progress={progress} scored={after?.progress} end={end} />}
+      {task.type === "lesson" &&
+        (guided ? (
+          <GuidedStepper progress={progress} scored={after?.progress} end={end} />
+        ) : (
+          lesson && <KpStepper points={lesson.knowledge_points} progress={progress} scored={after?.progress} end={end} />
+        ))}
       {task.type === "review" && (
         <div className="review-progress" aria-label={position ?? undefined}>
           {Array.from({ length: total }, (_, i) => (

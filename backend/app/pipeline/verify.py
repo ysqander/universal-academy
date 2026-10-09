@@ -19,7 +19,12 @@ Before any model call, a question whose answer key contradicts its own displayed
 as a cached prefix and is told to work inside it, so it does not object about cases the textbook excludes.
 
 Flags are shared with the learner: a question the learner reported (any flag whose reason does not start with
-'verification:') is never un-flagged or re-verified here — verification only manages its own flags."""
+'verification:') is never un-flagged or re-verified here — verification only manages its own flags.
+
+A guided proof lesson's scored steps (its graded inline checks, learning/guided.py) count toward the lesson like
+questions, so they are verified like a multistep question's steps (verify_guided_checks): the solver reads the lesson
+up to the step, with the earlier steps' correct results, and the step — never its answer. A step that still disagrees
+after the re-check is withheld (check["withheld"] = the reason): it stays in the lesson, unscored."""
 
 from __future__ import annotations
 
@@ -30,6 +35,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import db, llm
+from ..learning import guided
+from ..views import lesson_version
 from ..learning.grading import check_answer
 from ..llm_schemas import IndependentAnswer
 from .lessons import LEGACY_TARGET, kp_targets
@@ -373,7 +380,11 @@ async def verify_skill(skill_id: str) -> list[str]:
     Returns log notes (questions kept despite disagreement)."""
     rows = [r for r in db.query("SELECT * FROM questions WHERE skill_id = ?", (skill_id,)) if needs_verification(r)]
     verdicts = await asyncio.gather(*(verify_question(r) for r in rows)) if rows else []
-    return _verdict_notes(verdicts) + keep_kps_servable(skill_id)
+    notes = _verdict_notes(verdicts) + keep_kps_servable(skill_id)
+    skill = db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (skill_id,))
+    if skill and guided_unverified(skill["lesson_json"]):  # scored steps a generation left unverified
+        notes += await verify_guided_checks(skill_id)
+    return notes
 
 
 def _verdict_notes(verdicts: list[Verdict | None]) -> list[str]:
@@ -391,7 +402,7 @@ async def reverify_skill(skill_id: str) -> list[str]:
         if is_machine_checkable(r["kind"]) and not learner_flagged(r)
     ]
     verdicts = await asyncio.gather(*(verify_question(r) for r in rows)) if rows else []
-    return _verdict_notes(verdicts) + keep_kps_servable(skill_id)
+    return _verdict_notes(verdicts) + keep_kps_servable(skill_id) + await verify_guided_checks(skill_id)
 
 
 def keep_kps_servable(skill_id: str) -> list[str]:
@@ -430,3 +441,150 @@ def _keep_rank(row: dict[str, Any]) -> tuple[int, float]:
     independent = record.get("independent", {})
     has_problem = bool((independent.get("problems") or "").strip().lower() not in _NO_PROBLEM)
     return (int(has_problem), float(independent.get("confidence", 1.0)))
+
+
+# ---------------------------------------------------------------------------
+# Guided proof lessons: the scored steps (inline checks) of the teaching sequence
+# ---------------------------------------------------------------------------
+
+
+def _check_row(skill: dict[str, Any], index: int, check: dict[str, Any]) -> dict[str, Any]:
+    """A scored step shaped like a question row (for judge / recheck / verify_request)."""
+    return {
+        "id": f"{skill['id']}:block{index}",
+        "skill_id": skill["id"],
+        "key": f"{skill['key']} block {index + 1}",
+        "kind": check["kind"],
+        "prompt": check.get("prompt", ""),
+        "choices_json": db.dumps(guided.choices(check)),
+        "answer": check.get("answer", ""),
+        "correct_choice": check.get("correct_choice"),
+        "tolerance": None,
+    }
+
+
+def guided_check_request(blocks: list[dict[str, Any]], index: int, row: dict[str, Any]) -> str:
+    """The lesson up to a scored step as the learner has read it (earlier checks with their correct results), then
+    the step — never its answer."""
+    lines = ["THE LESSON SO FAR (what the learner has read before this step; earlier checks' results are correct)"]
+    for j, block in enumerate(blocks[: index + 1]):
+        heading = (block.get("heading") or "").strip()
+        lines += ["", f"Block {j + 1}" + (f" — {heading}" if heading else ""), block.get("body") or ""]
+        check = guided.check_of(block)
+        if check is not None and j < index:
+            lines.append(f"   Check: {check.get('prompt', '')}")
+            options = guided.choices(check)
+            if check["kind"] == "true_false_set":
+                lines += [f"   statement {k}. {c}" for k, c in enumerate(options, start=1)]
+            elif options:
+                lines += [f"   option {k}. {c}" for k, c in enumerate(options)]
+            result = guided.answer_display(check) if check["kind"] != "reflect" else (check.get("answer_display") or "")
+            lines.append(f"   Its result: {result}")
+            if check.get("explanation"):
+                lines.append(f"   Explanation shown: {check['explanation']}")
+    lines += ["", "CURRENT STEP — solve only this step", verify_request(row)]
+    return "\n".join(lines)
+
+
+async def verify_guided_lesson(skill: dict[str, Any], lesson: dict[str, Any], *, may_release: bool = True) -> list[str]:
+    """Verify a guided proof lesson's scored steps (concurrently) — every gradeable graded check, withheld ones
+    included; a disagreeing or doubtful step is re-checked once by the stronger model, and one that still fails is
+    withheld (unscored). `lesson` (a lesson_json dict) is updated in place: check["withheld"], and the records in
+    lesson["guided_verify"]. A step verified before stays withheld when `may_release` is False. A step whose solve
+    failed twice keeps its previous state (noted, recorded 'unverified'). Returns log notes."""
+    if not guided.is_guided(lesson):
+        return []
+    blocks = guided.blocks_of(lesson)
+    order = [i for i, b in enumerate(blocks) if (c := guided.check_of(b)) is not None and guided.gradeable(c)]
+    rows = {i: _check_row(skill, i, guided.check_of(blocks[i]) or {}) for i in order}
+    texts = {i: guided_check_request(blocks, i, rows[i]) for i in order}
+    step_instructions = prompts.for_role("verify").VERIFY_STEP_INSTRUCTIONS
+    answers = await asyncio.gather(
+        *(_solve(rows[i], texts[i], instructions=step_instructions, label=f"verify {rows[i]['key']}") for i in order)
+    )
+
+    async def judged(i: int, independent: IndependentAnswer | None) -> Verdict | None:
+        if independent is None:
+            return None
+        verdict = judge(rows[i], independent)
+        if verdict.record["status"] in ("disagree", "problem"):
+            instructions = _step_recheck_instructions(rows[i]["kind"])
+            verdict = await recheck(rows[i], verdict, text=texts[i], instructions=instructions)
+        return verdict
+
+    verdicts = await asyncio.gather(*(judged(i, a) for i, a in zip(order, answers)))
+    notes: list[str] = []
+    records = []
+    for i, verdict in zip(order, verdicts):
+        check = guided.check_of(blocks[i])
+        assert check is not None
+        if verdict is None:
+            notes.append(f"{rows[i]['key']}: the scored step could not be verified (solver failed) — left as it was")
+            records.append({"block": i, "status": "unverified"})
+            continue
+        records.append({"block": i, **verdict.record})
+        if verdict.flagged:
+            check["withheld"] = verdict.reason
+            notes.append(f"{rows[i]['key']}: withheld from scoring — {verdict.reason.removeprefix(VERIFICATION_PREFIX).strip()}")
+        elif check.get("withheld") and may_release:
+            check.pop("withheld")
+            notes.append(f"{rows[i]['key']}: verified again — scored")
+        elif verdict.note:
+            notes.append(verdict.note)
+    lesson["guided_verify"] = records
+    return notes
+
+
+def migrate_guided_attempts(skill_id: str, old_version: str, new_version: str, lesson: dict[str, Any]) -> int:
+    """Carry the guided attempts of a lesson version over to the same lesson with new verdicts: a step withheld now
+    leaves the attempt (its log entry voided, so its points no longer count), everything answered stays answered —
+    nothing seen is scored again. Returns the number of tasks moved."""
+    scored = set(guided.scored_indices(lesson))
+    moved = 0
+    for row in db.query("SELECT id, state_json FROM tasks WHERE skill_id = ? AND type = 'lesson'", (skill_id,)):
+        st = db.loads(row["state_json"], {}) or {}
+        g = st.get("guided")
+        if not isinstance(g, dict) or g.get("version") != old_version:
+            continue
+        gone = [i for i in g.get("order") or [] if i not in scored]
+        g["version"] = new_version
+        g["order"] = [i for i in g.get("order") or [] if i in scored]
+        for i in gone:
+            (g.get("checks") or {}).pop(str(i), None)
+        for entry in st.get("log") or []:
+            if entry.get("q") in {f"block:{i}" for i in gone}:
+                entry["void"] = True
+        db.execute("UPDATE tasks SET state_json = ? WHERE id = ?", (db.dumps(st), row["id"]))
+        moved += 1
+    return moved
+
+
+async def verify_guided_checks(skill_id: str) -> list[str]:
+    """Verify a stored guided proof lesson's scored steps (regenerate --only verify, an interrupted build's resume).
+    The new verdicts change lesson_json, so its attempts are carried over to the new version (migrate_guided_attempts)
+    in the same transaction; a step already withheld stays withheld while an attempt of the lesson exists."""
+    skill = db.query_one("SELECT id, key, lesson_json FROM skills WHERE id = ?", (skill_id,))
+    lesson = db.loads(skill["lesson_json"], {}) if skill and skill["lesson_json"] else {}
+    if not guided.is_guided(lesson):
+        return []
+    old_version = lesson_version(skill["lesson_json"])
+    attempts = db.query_one(
+        "SELECT COUNT(*) AS n FROM tasks WHERE skill_id = ? AND type = 'lesson' AND state_json LIKE ?",
+        (skill_id, f"%{old_version}%"),
+    )["n"]
+    notes = await verify_guided_lesson(skill, lesson, may_release=not attempts)
+    new_json = db.dumps(lesson)
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT lesson_json FROM skills WHERE id = ?", (skill_id,)).fetchone()
+        if current is None or current[0] != skill["lesson_json"]:
+            return notes + ["scored steps: the lesson changed during verification — not recorded"]
+        conn.execute("UPDATE skills SET lesson_json = ? WHERE id = ?", (new_json, skill_id))
+    moved = migrate_guided_attempts(skill_id, old_version, lesson_version(new_json), lesson)
+    return notes + ([f"scored steps: {moved} attempt(s) carried over to the verified lesson"] if moved else [])
+
+
+def guided_unverified(lesson_json: str | None) -> bool:
+    """A guided lesson whose scored steps have no verification record (an interrupted generation)."""
+    lesson = db.loads(lesson_json, {}) if lesson_json else {}
+    return guided.is_guided(lesson) and not lesson.get("guided_verify")

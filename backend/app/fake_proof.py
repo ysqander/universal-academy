@@ -1,10 +1,12 @@
 """Offline proof-track fixtures for the fake LLM (UA_FAKE_LLM=1) and the tests: a proof plan and a lesson that follow
 THE PROOF TRACK (app/prompts/<provider>/proof.py) — the S4a design ("Prove complex arithmetic laws by comparing coordinates") with
-every key checked in SymPy. The lesson passes every check of pipeline/proof_track.py; tests break it on purpose."""
+every key checked in SymPy: 10 blocks with 5 scored steps (each with its hint) and a variant in the capstone slot. The
+lesson passes every check of pipeline/proof_track.py; tests break it on purpose."""
 
 from __future__ import annotations
 
 from .fake_llm import _block, _check, _marker, _multistep, _question, _step
+from .llm_schemas import InlineCheck
 from .llm_schemas import (
     KnowledgePointDraft,
     LessonV2Draft,
@@ -16,6 +18,12 @@ from .llm_schemas import (
     WorkedExample,
     WorkedStep,
 )
+
+def _scored(**fields) -> InlineCheck:
+    """A scored step with the fake verifier's (invisible) marker, so the offline verification agrees with its key."""
+    marker = _marker(fields.get("correct_choice"), fields.get("answer", ""))
+    return _check(**{**fields, "prompt": fields["prompt"] + marker})
+
 
 SLOT_HEADER = "| product | $x$ | $y$ | $u$ | $v$ | real $xu-yv$ | imaginary $xv+yu$ |\n|---|---|---|---|---|---|---|\n"
 
@@ -41,6 +49,7 @@ def proof_plan() -> ProofPlan:
             ScopeStatement(statement="$(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$", true=True),
             ScopeStatement(statement="$(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every $\\alpha,\\beta,\\lambda$", true=False),
             ScopeStatement(statement="the calculation with $\\alpha=1+i$, $\\beta=2+i$ proved it for every $\\alpha,\\beta$", true=False),
+            ScopeStatement(statement="expanding $(\\alpha\\beta)i$ term by term with $i^2=-1$ would also have been a valid proof", true=False),
         ],
         practice_statements=[
             PracticeStatement(statement="$(1+i)(\\alpha+\\beta)=(1+i)\\alpha+(1+i)\\beta$", knowledge_point=1, role="special_case"),
@@ -48,7 +57,8 @@ def proof_plan() -> ProofPlan:
             PracticeStatement(statement="$(1-i)(\\alpha+\\beta)=(1-i)\\alpha+(1-i)\\beta$", knowledge_point=1, role="repair"),
             PracticeStatement(statement="$(1+i)(\\alpha\\beta)=((1+i)\\alpha)((1+i)\\beta)$ (false)", knowledge_point=2, role="decide"),
         ],
-        capstone_statement="$(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$ with $\\mu=(2-i)(1+i)$; then $\\alpha\\beta=2-5i$ gives $(\\alpha\\mu)\\beta$",
+        capstone_statement="$(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$ for all $\\alpha,\\beta$, with $\\mu=3+i$",
+        variant_change="route B pairs α with μ first instead of β with λ",
         halves=[],
     )
 
@@ -75,17 +85,28 @@ def _blocks() -> list:
         ),
         _block(
             "check", "Finish route B", "Route B now multiplies $\\alpha$ by $\\beta\\lambda$.",
-            check=_check(kind="expression",
+            check=_scored(kind="expression",
                          prompt="Reset the slots — $x,y$ from $\\alpha=1+i$; $u,v$ from $\\beta\\lambda=-1+2i$ — and enter "
                          "$\\alpha(\\beta\\lambda)$ as a complex number in standard form (e.g. $3-2i$).",
                          answer="-3+i", answer_display="$-3+i$",
-                         explanation="Slots $1,1,-1,2$: real part $1\\cdot(-1)-1\\cdot 2=-3$, imaginary part $1\\cdot 2+1\\cdot(-1)=1$."),
+                         explanation="Slots $1,1,-1,2$: real part $1\\cdot(-1)-1\\cdot 2=-3$, imaginary part $1\\cdot 2+1\\cdot(-1)=1$.",
+                         hint="$x$ and $y$ come from $\\alpha$, $u$ and $v$ from $\\beta\\lambda$; then real $xu-yv$, imaginary $xv+yu$."),
         ),
         _block(
-            "check", "Route A on the same numbers",
-            "Route A, with fresh slots:\n\n" + SLOT_HEADER
-            + "| $\\alpha\\beta=(1+i)(2+i)$ | $1$ | $1$ | $2$ | $1$ | $1$ | $3$ |\n"
-            "| $(\\alpha\\beta)\\lambda=(1+3i)(0+1i)$ | $1$ | $3$ | $0$ | $1$ | $-3$ | $1$ |",
+            "check", "Route A, calculated separately",
+            "Route A starts again from the inputs, with fresh slots:\n\n" + SLOT_HEADER
+            + "| $\\alpha\\beta=(1+i)(2+i)$ | $1$ | $1$ | $2$ | $1$ | ? | ? |",
+            check=_scored(kind="expression",
+                         prompt="Enter $\\alpha\\beta$ as a complex number in standard form (e.g. $3-2i$).",
+                         answer="1+3*i", answer_display="$1+3i$",
+                         explanation="Real part $1\\cdot2-1\\cdot1=1$, imaginary part $1\\cdot1+1\\cdot2=3$. Then "
+                         "$(\\alpha\\beta)\\lambda=(1+3i)(0+1i)$ with slots $1,3,0,1$ gives $-3+i$ — the same "
+                         "destination as route B.",
+                         hint="Fill the row: $x,y$ from $\\alpha=1+i$, $u,v$ from $\\beta=2+i$."),
+        ),
+        _block(
+            "check", "Same destination — is that a proof?",
+            "Both routes reached the same number.",
             check=_check(kind="reflect",
                          prompt="Both routes reached $-3+i$. Why does this not yet prove $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$?",
                          answer_display="It checks one choice of the three numbers; the law claims every choice, so we need "
@@ -102,11 +123,12 @@ def _blocks() -> list:
             "faded_example", "Your turn: route B's last product",
             "Route B now multiplies $\\alpha$ by $\\beta i$. Reset the slots.\n\n" + SLOT_HEADER
             + "| $\\alpha(\\beta i)=(a+bi)(-d+ci)$ | $a$ | $b$ | ? | ? | ? | ? |",
-            check=_check(kind="expression",
+            check=_scored(kind="expression",
                          prompt="Enter $\\alpha(\\beta i)$ as a complex number in standard form (e.g. $3-2i$); the "
                          "coordinates may stay unexpanded.",
                          answer="-a*d-b*c+(a*c-b*d)*i", answer_display="$(-ad-bc)+(ac-bd)i$",
-                         explanation="$u=-d$ and $v=c$: real part $a(-d)-bc$, imaginary part $ac+b(-d)$."),
+                         explanation="$u=-d$ and $v=c$: real part $a(-d)-bc$, imaginary part $ac+b(-d)$.",
+                         hint="$u$ and $v$ are the coordinates of route B's own intermediate $\\beta i$, not of $\\beta$."),
         ),
         _block(
             "demonstrate", "Route A, then compare",
@@ -119,25 +141,33 @@ def _blocks() -> list:
         ),
         _block(
             "check", "What has been proved?", "Before the general case, say exactly what the letters covered.",
-            check=_check(kind="true_false_set", prompt="What has been proved so far? Mark each statement true or false.",
+            check=_scored(kind="true_false_set", prompt="What has been proved so far? Mark each statement true or false.",
                          choices=["$(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta\\in\\mathbf{C}$",
                                   "$(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every $\\alpha,\\beta,\\lambda\\in\\mathbf{C}$",
-                                  "The calculation with $\\alpha=1+i$, $\\beta=2+i$ proved $(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$"],
-                         answer="TFF", answer_display="True, false, false",
-                         explanation="The letters covered every $\\alpha,\\beta$ with $\\lambda=i$ fixed; the numbers covered one case."),
+                                  "The calculation with $\\alpha=1+i$, $\\beta=2+i$ proved $(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$",
+                                  "Expanding $(\\alpha\\beta)i$ term by term with $i^2=-1$ would also have been a valid proof"],
+                         answer="TFFF", answer_display="True, false, false, false",
+                         explanation="The letters covered every $\\alpha,\\beta$ with $\\lambda=i$ fixed; the numbers covered one "
+                         "case; expanding complex brackets uses complex distributivity, another law of 1.3.",
+                         hint="Which inputs did the letters range over, and which stayed fixed?"),
         ),
         _block(
             "generalize", "Every λ: one more pair of letters",
             "The same steps, with $\\lambda=g+hi$:\n\n"
             "| | route A: $(\\alpha\\beta)\\lambda$ | route B: $\\alpha(\\beta\\lambda)$ |\n|---|---|---|\n"
-            "| inner product | $\\alpha\\beta=(ac-bd)+(ad+bc)i$ | $\\beta\\lambda=(cg-dh)+(ch+dg)i$ |\n"
-            "| slots of the outer product | $ac-bd,\\ ad+bc,\\ g,\\ h$ | $a,\\ b,\\ cg-dh,\\ ch+dg$ |\n"
-            "| real coordinate | $acg-bdg-adh-bch$ | $acg-bdg-adh-bch$ |\n"
-            "| imaginary coordinate | $ach-bdh+adg+bcg$ | $ach-bdh+adg+bcg$ |\n\n"
+            "| inner product | $\\alpha\\beta=(ac-bd)+(ad+bc)i$ | $\\beta\\lambda=$ ? |\n\n"
             "Real distributivity expands each entry, and reordering real products and sums puts the same four terms in the "
             "same order. The letters were arbitrary, so $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for all "
             "$\\alpha,\\beta,\\lambda\\in\\mathbf{C}$. The method: name the two routes, compute each from Definition 1.1 "
             "filling the slots before every product, and compare both coordinates using only real-number laws.",
+            check=_scored(kind="expression",
+                         prompt="Fill the '?' cell: enter $\\beta\\lambda$ as a complex number in standard form (e.g. "
+                         "$3-2i$); the coordinates may stay unexpanded.",
+                         answer="c*g-d*h+(c*h+d*g)*i", answer_display="$(cg-dh)+(ch+dg)i$",
+                         explanation="Slots $c,d,g,h$. The rest of the table: the outer products' slots are "
+                         "$ac-bd,\\ ad+bc,\\ g,\\ h$ (route A) and $a,\\ b,\\ cg-dh,\\ ch+dg$ (route B); both real "
+                         "coordinates are $acg-bdg-adh-bch$ and both imaginary coordinates $ach-bdh+adg+bcg$.",
+                         hint="The slots of $\\beta\\lambda$ are the coordinates of $\\beta$ and of $\\lambda$."),
         ),
     ]
 
@@ -292,29 +322,35 @@ def _scope_point() -> KnowledgePointDraft:
 
 
 def _proof_capstone() -> QuestionDraft:
+    """The variant: the same strategy, one thing changed — route B pairs α with μ first."""
     return _multistep(
         "cap",
-        "Strategy: two routes, same destination. Let $\\mu=(2-i)(1+i)$. Prove $(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$ for all "
-        "$\\alpha=a+bi$, $\\beta=c+di$ ($a,b,c,d$ real) from Definition 1.1 and real-number laws, then use it.",
+        "Strategy: two routes, same destination. Prove $(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$ for all "
+        "$\\alpha=a+bi$, $\\beta=c+di$ ($a,b,c,d$ real), with $\\mu=3+i$. Route A multiplies $\\alpha$ and $\\beta$, "
+        "then multiplies by $\\mu$; route B multiplies $\\alpha$ by $\\mu$ first, then by $\\beta$.",
         [
-            _step("expression", "Enter $\\mu$ as a complex number in standard form (e.g. $3-2i$).", answer="3+i",
-                  display="$3+i$", hint="Multiply $(2-i)(1+i)$ as in S1.", explanation="$2+2i-i+1=3+i$."),
-            _step("expression", "Route A multiplies $\\alpha$ and $\\beta$, then multiplies by $\\mu$. Enter "
-                  "$(\\alpha\\beta)\\mu$ in standard form; the coordinates may stay unexpanded.",
+            _step("expression", "Route A: enter $(\\alpha\\beta)\\mu$ in standard form (e.g. $3-2i$); the coordinates may "
+                  "stay unexpanded.",
                   answer="3*a*c-3*b*d-a*d-b*c+(a*c-b*d+3*a*d+3*b*c)*i", display="$(3ac-3bd-ad-bc)+(ac-bd+3ad+3bc)i$",
-                  hint="$\\alpha\\beta=(ac-bd)+(ad+bc)i$: the slots are $ac-bd$, $ad+bc$, $3$, $1$.",
-                  explanation="Real $3(ac-bd)-(ad+bc)$, imaginary $(ac-bd)+3(ad+bc)$."),
-            _step("expression", "Route B multiplies $\\alpha$ by $\\mu$ first, then multiplies the result by $\\beta$. "
-                  "Compute $\\alpha\\mu$, then enter the four slots $(x,y,u,v)$ of $(\\alpha\\mu)\\beta$, in this order.",
+                  hint="$\\alpha\\beta=(ac-bd)+(ad+bc)i$, then multiply by $3+i$.",
+                  explanation="Slots $ac-bd$, $ad+bc$, $3$, $1$: real $3(ac-bd)-(ad+bc)$, imaginary $(ac-bd)+3(ad+bc)$."),
+            _step("expression", "Route B: compute $\\alpha\\mu$, then enter the four slots $(x,y,u,v)$ of "
+                  "$(\\alpha\\mu)\\beta$, in this order.",
                   answer="(3*a-b, a+3*b, c, d)", display="$(3a-b,\\ a+3b,\\ c,\\ d)$",
-                  hint="$\\alpha\\mu=(a+bi)(3+i)$.", explanation="$\\alpha\\mu=(3a-b)+(a+3b)i$; route B then meets route A."),
-            _step("expression", "Suppose $\\alpha\\beta=2-5i$ for some $\\alpha,\\beta$ you are not told. Use the law to enter "
-                  "$(\\alpha\\mu)\\beta$ in standard form.", answer="11-13*i", display="$11-13i$",
-                  hint="$(\\alpha\\mu)\\beta=(\\alpha\\beta)\\mu$.", explanation="$(2-5i)(3+i)=6+2i-15i+5=11-13i$."),
+                  hint="$\\alpha\\mu=(a+bi)(3+i)$ gives $x$ and $y$.",
+                  explanation="$\\alpha\\mu=(3a-b)+(a+3b)i$; then real $(3a-b)c-(a+3b)d$ and imaginary "
+                  "$(3a-b)d+(a+3b)c$ — route A's coordinates once real sums are reordered."),
+            _step("true_false_set", "Mark each statement about this proof true or false.",
+                  choices=["The coordinates agree once real sums are reordered",
+                           "Comparing the real coordinates alone would prove the law",
+                           "The calculation covers every $\\alpha,\\beta$ with $\\mu=3+i$ fixed"],
+                  answer="TFT", display="True, false, true", hint="What does equality of complex numbers need, and what did the letters range over?",
+                  explanation="Equality needs both coordinates; the letters covered every $\\alpha,\\beta$, with $\\mu$ fixed."),
         ],
-        display="$11-13i$",
-        solution="$\\mu=3+i$; both routes give $(3ac-3bd-ad-bc)+(ac-bd+3ad+3bc)i$, so $(\\alpha\\mu)\\beta=(\\alpha\\beta)\\mu=(2-5i)(3+i)=11-13i$.",
-        targets="prove a new statement of the family and use it",
+        tier=3, display="$(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$",
+        solution="Route A gives $(3ac-3bd-ad-bc)+(ac-bd+3ad+3bc)i$. Route B: $\\alpha\\mu=(3a-b)+(a+3b)i$, then "
+        "$((3a-b)c-(a+3b)d)+((3a-b)d+(a+3b)c)i$ — the same coordinates after reordering real sums.",
+        targets="the variant: the same strategy with another pairing",
     )
 
 

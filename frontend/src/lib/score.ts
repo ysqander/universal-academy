@@ -2,7 +2,7 @@ import { cooldownEnd, returnTimePhrase } from "./cooldown.ts";
 // Score-based lessons and reviews (SPEC §6.3–§6.4): 1 point for an independent right answer, ½ with a hint, 0 when
 // wrong or after the solution was shown; a multistep question earns the mean of its steps; the capstone counts double.
 // Pass mark 80 %. Everything here is pure formatting of what the server sends (TaskProgress / AnswerResult).
-import type { AnswerResult, KnowledgePoint, Task, TaskOutcome, TaskProgress } from "../types";
+import type { AnswerResult, KnowledgePoint, QuestionPublic, Task, TaskOutcome, TaskProgress } from "../types";
 
 export const DEFAULT_PASS_MARK = 0.8;
 
@@ -55,7 +55,8 @@ export interface ScoreView {
   answered: number;
   /** Questions planned for the whole task; 0 = not known (older server). */
   planned: number;
-  /** "3 of 7 answered" / "Last question" / "Stopped after 2 questions" / null when the plan isn't known. */
+  /** "3 of 7 answered" / "Last question" / "Stopped after 2 questions" / null when the plan isn't known. A scored
+   * proof lesson: "2 of 5 steps answered" / "Variant problem next" / "Last problem". */
   remainingLabel: string | null;
   /** The lesson stopped early (80 % out of reach with planned questions left): not every planned question was asked. */
   halted: boolean;
@@ -91,9 +92,18 @@ export function scoreView(progress: Partial<TaskProgress>, end?: TaskEnd | null)
   const label = hasScore ? `Score ${percentLabel(fraction, passMark)}` : "Score —";
   const passLabel = `pass at ${percentLabel(passMark)}`;
   const halted = end?.outcome === "failed" && wasHalted(progress, end.plannedBefore);
+  // A proof lesson with scored steps: the steps, then one variant problem (the capstone slot).
+  const guidedTotal = Math.max(0, Math.round(num(progress.guided_total)));
+  const guidedDone = Math.min(Math.max(0, Math.round(num(progress.guided_done))), guidedTotal);
   let remainingLabel: string | null = null;
   if (halted) {
-    remainingLabel = `Stopped after ${answered} ${answered === 1 ? "question" : "questions"}`;
+    remainingLabel =
+      guidedTotal > 0 && answered <= guidedTotal
+        ? `Stopped after ${answered} proof ${answered === 1 ? "step" : "steps"}`
+        : `Stopped after ${answered} ${answered === 1 ? "question" : "questions"}`;
+  } else if (guidedTotal > 0 && !end) {
+    remainingLabel =
+      progress.in_capstone ? "Last problem" : guidedDone < guidedTotal || !progress.variant ? `${guidedDone} of ${guidedTotal} steps answered` : "Variant problem next";
   } else if (planned > 0) {
     const left = Math.max(0, planned - answered);
     remainingLabel = left === 1 && answered > 0 && !end ? "Last question" : `${Math.min(answered, planned)} of ${planned} answered`;
@@ -175,6 +185,13 @@ export function pointsLabel(result: ScoredResult, revealed = false): string | nu
   return revealed || result.correct ? "0 points — solution shown" : "0 points";
 }
 
+/**
+ * How many hints a question has: the server's count (QuestionPublic.hints holds only the ones already shown, so the
+ * next text comes from POST /hint), never fewer than are on screen. Older servers sent every hint and no count.
+ */
+export const hintTotal = (question: Pick<QuestionPublic, "hints"> & { hint_count?: number | null }, shown = 0): number =>
+  Math.max(Math.round(num(question.hint_count)), question.hints.length, shown);
+
 /** One multistep step: "1 point", "½ point — with the hint", "0 points — solution shown", "0 points". */
 export function stepPointsLabel(score: number, revealed = false): string {
   if (score >= 1) return "1 point";
@@ -211,6 +228,19 @@ export function lessonEndNote(
   if (halted) return { halted, text: `${percentLabel(view.passMark)} is no longer reachable in this attempt — ${back}.` };
   const score = view.hasScore ? `Your score, ${percentLabel(view.fraction, view.passMark)}, is` : "Your score is";
   return { halted, text: `${score} below the ${percentLabel(view.passMark)} pass mark — ${back}.` };
+}
+
+/**
+ * What a failed lesson suggests next (TaskProgress.suggestion_text: e.g. prerequisites made due), for the completion
+ * screen — unless the last answer's feedback already said it (`shown`: that AnswerResult's suggestion_text). A guided
+ * attempt that ended at the start of its variant has no such answer, so this is where it is said.
+ */
+export function completionSuggestion(progress: Partial<TaskProgress>, shown?: string | null): string | null {
+  const text = (progress.suggestion_text ?? "").trim();
+  if (!text) return null;
+  const squash = (t: string): string => t.replace(/\s+/g, " ").trim().toLowerCase();
+  const said = squash(shown ?? "");
+  return said && (said === squash(text) || said.includes(squash(text))) ? null : text;
 }
 
 const PAUSE_SAID = /\bpauses? here\b|\bout of reach\b|\bno longer reachable\b|\bstopped short\b/i;

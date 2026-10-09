@@ -629,7 +629,7 @@ PROOF_PLANNER_INSTRUCTIONS = _swap(
 
 PROOF_KIND_STRUCTURE = (
     "- proof: follow THE PROOF TRACK below — one statement; numbers → why that is not a proof → a guided special case\n"
-    "  the learner builds → what was proved → the general case as a worked table."
+    "  the learner builds → what was proved → the general case as a worked table; the steps are scored, then a variant."
 )
 
 
@@ -639,11 +639,80 @@ _PROOF_SERVED_CLAUSE = SERVED_SEQUENCE_RULE[SERVED_SEQUENCE_RULE.index("In a pro
 _PROOF_WALKTHROUGH_EXAMPLE = MULTISTEP_FORMAT[MULTISTEP_FORMAT.index(" A proof as a walkthrough") :]
 
 
+# In a proof lesson the teaching's graded checks are the scored steps and the variant ends the lesson (rules.py
+# GUIDED_PROOF_RULE): the general texts' "inline checks are formative" and "served question or capstone step" go.
+_GENERAL_CHECKS_HEADER = "INLINE CHECKS (`check` of check / faded_example blocks; formative — graded by the app, never scored)"
+_PROOF_CHECKS_HEADER = (
+    "INLINE CHECKS (`check` of check / faded_example blocks and the generalize block's '?' cell; in a proof skill every\n"
+    "graded check is a SCORED step — see THE PROOF TRACK)"
+)
+_GENERAL_MISCONCEPTION_TEST = (
+    "learner is actually served — a question served first in its knowledge point, or a capstone step — whose key differs\n"
+    "  from the answer a learner holding the misconception would give (inline checks are formative and spare questions\n"
+    "  may never be served, so neither counts)."
+)
+_PROOF_MISCONCEPTION_TEST = (
+    "learner is actually served — in a proof skill a scored step of the teaching or a variant step — whose key differs\n"
+    "  from the answer a learner holding the misconception would give (a reflect check or a knowledge-point question,\n"
+    "  which only a retry and the reviews serve, does not count)."
+)
+_GENERAL_MISCONCEPTION_REVIEW = (
+    "that no\n"
+    "  served question (the first target_questions of its knowledge point) or capstone step tests with a key that differs\n"
+    "  from the misconception's answer (inline checks and spare questions do not count); a \"Learner's miss\" re-tested only\n"
+    "  on its original numbers, a typed miss re-tested only as a choice option, or a miss re-tested only in a spare\n"
+    "  question → blocking;"
+)
+_PROOF_MISCONCEPTION_REVIEW = (
+    "that no\n"
+    "  scored step of the teaching or variant step tests with a key that differs from the misconception's answer (a\n"
+    "  reflect check or a knowledge-point question does not count — a retry and the reviews serve those); a \"Learner's\n"
+    "  miss\" re-tested only on its original numbers, a typed miss re-tested only as a choice option, or a miss re-tested\n"
+    "  only in a knowledge-point question → blocking;"
+)
+
+
+# The proof track's own limits and capstone (the variant) replace the general ones where they would contradict it.
+_PROOF_WRITER_SWAPS = [
+    ("At most 9 blocks (10 only when the spec\nplans a case the learner missed)",
+     "In a proof skill: 10 blocks (THE PROOF TRACK; 11 only when the spec\nplans a case the learner missed)"),
+    ("split it only while the sequence stays within 9 blocks", "split it only while the sequence stays within the proof track's 10 blocks"),
+    (CAPSTONE_RULE, "CAPSTONE (`capstone`) — in a proof skill this field holds THE VARIANT: follow THE VARIANT in THE PROOF TRACK\n"
+                    "below (the general capstone rules — an earlier skill producing the input, 2–4 steps — do not apply)."),
+]
+_PROOF_REVIEWER_SWAPS = [
+    ("(splitting only while the sequence stays within 9 blocks)", "(splitting only while the sequence stays within the proof track's 10 blocks)"),
+    ("blocking when the sequence has more than 10 blocks", "blocking when the sequence has more than 11 blocks (a proof lesson has 10)"),
+    ("- the capstone: missing, not multistep,", "- the capstone (in a proof skill: the variant): missing, not multistep,"),
+    ("no earlier skill doing real work in a\n  step of its own (only the arithmetic already inside this lesson's procedure), ", ""),
+    ("repair: the capstone pattern (an earlier skill produces the input → this lesson's method once → a different move\n"
+     "  with the result) or drop the offending step",
+     "repair: the variant's shape (THE PROOF TRACK: the same strategy, one thing changed, 2–3 steps) or drop the\n"
+     "  offending step"),
+    ('a "Prerequisite slip" with no typed question served first that includes the case → blocking',
+     'a "Prerequisite slip" with no typed scored step or variant step that includes the case → blocking'),
+]
+
+
+def _swaps(text: str, pairs: list[tuple[str, str]]) -> str:
+    for old, new in pairs:
+        text = _swap(text, old, new)
+    return text
+
+
 PROOF_WRITER_INSTRUCTIONS = _swap(
     _swap(
         _swap(
             _swap(
-                WRITER_INSTRUCTIONS,
+                _swap(
+                    _swap(
+                        _swaps(WRITER_INSTRUCTIONS, _PROOF_WRITER_SWAPS),
+                        _GENERAL_CHECKS_HEADER,
+                        _PROOF_CHECKS_HEADER,
+                    ),
+                    _GENERAL_MISCONCEPTION_TEST,
+                    _PROOF_MISCONCEPTION_TEST,
+                ),
                 "- proof: the statement and why it is plausible (a small case) → the strategy → the proof with every step justified\n"
                 "  → a check of one step's justification.",
                 PROOF_KIND_STRUCTURE,
@@ -660,7 +729,7 @@ PROOF_WRITER_INSTRUCTIONS = _swap(
 
 
 PROOF_REVIEWER_INSTRUCTIONS = _swap(
-    REVIEWER_INSTRUCTIONS,
+    _swaps(_swap(REVIEWER_INSTRUCTIONS, _GENERAL_MISCONCEPTION_REVIEW, _PROOF_MISCONCEPTION_REVIEW), _PROOF_REVIEWER_SWAPS),
     "split_recommended: true only when",
     PROOF_REVIEW_PASS + "\n" + CIRCULARITY_RULE + "\nA 'may not use' line, a question key or a solution that calls a valid "
     "step circular is a math error (math_errors).\nsplit_recommended: true only when",
@@ -675,8 +744,22 @@ PROOF_QUESTION_REPAIR_NOTE = _swap(
 )
 
 
-PROOF_CAPSTONE_REPAIR_NOTE = _swap(
+PROOF_CAPSTONE_REPAIR_NOTE = _swaps(
     CAPSTONE_REPAIR_NOTE,
-    CAPSTONE_REPAIR_NOTE[CAPSTONE_REPAIR_NOTE.index("- in a proof skill the proof step") :],
-    PROOF_CAPSTONE_REPAIR + "\n",
+    [
+        (CAPSTONE_REPAIR_NOTE[CAPSTONE_REPAIR_NOTE.index("- in a proof skill the proof step") :], PROOF_CAPSTONE_REPAIR + "\n"),
+        ("- an earlier skill does real work in a step of its own (it computes the input — a sum or product written in the\n"
+         "  problem is fine: computing it is that step), this lesson's method is applied once, unguided, and a last step makes a\n"
+         "  different move with the result;\n", ""),
+        ("each step asks for ONE value (never a tuple of several named quantities)",
+         "each step asks for ONE answer (a product's slot tuple counts as one)"),
+        ("follows the CAPSTONE rules", "follows THE VARIANT rules of THE PROOF TRACK"),
+    ],
+)
+
+
+PROOF_REVISION_NOTE = _swap(
+    REVISION_NOTE,
+    "split one only while the sequence stays within 9 blocks",
+    "split one only while the sequence stays within the proof track's 10 blocks",
 )

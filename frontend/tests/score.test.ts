@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  completionSuggestion,
   halves,
   hasCapstone,
+  hintTotal,
   kpPosition,
   lessonEndNote,
   lessonStages,
@@ -275,4 +277,46 @@ test("lessonEndNote: the pause text follows Task.cooldown_until", () => {
   assert.match(lessonEndNote(p, 0, null, now).text, /whenever you like/);
   assert.match(lessonEndNote(p, 0, "2026-10-06T12:00:00Z", now).text, /comes back at \d{2}:\d{2} with fresh questions/);
   assert.match(lessonEndNote(p).text, /about 2 hours/); // older servers: no field
+});
+
+test("scoreView of a proof lesson with scored steps: steps answered, then the variant", () => {
+  const guided = (over: Partial<TaskProgress>) =>
+    progress({ guided_total: 5, guided_done: 0, in_guided: true, variant: true, planned: 6, has_capstone: true, ...over });
+  assert.equal(scoreView(guided({ guided_done: 2, answered: 2, points: 1.5, max_points: 2, score: 0.75 })).remainingLabel, "2 of 5 steps answered");
+  assert.equal(scoreView(guided({ guided_done: 5, answered: 5, in_guided: false })).remainingLabel, "Variant problem next");
+  assert.equal(scoreView(guided({ guided_done: 5, answered: 5, in_guided: false, in_capstone: true })).remainingLabel, "Last problem");
+  // Finished: the plan, as for any lesson.
+  const passed = guided({ guided_done: 5, answered: 6, in_guided: false, points: 6, max_points: 7, score: 6 / 7 });
+  assert.equal(scoreView(passed, { outcome: "passed", plannedBefore: 6 }).remainingLabel, "6 of 6 answered");
+  // Ended when the steps left 80 % out of reach.
+  const ended = guided({ guided_done: 5, answered: 5, in_guided: false, points: 2, max_points: 5, score: 0.4, halted: true });
+  assert.equal(scoreView(ended, { outcome: "failed", plannedBefore: 6 }).remainingLabel, "Stopped after 5 proof steps");
+  // Halted inside the variant: questions again.
+  assert.equal(scoreView(guided({ answered: 6, halted: true }), { outcome: "failed" }).remainingLabel, "Stopped after 6 questions");
+});
+
+test("hintTotal: the server's count, never fewer than are on screen; older servers sent every hint", () => {
+  assert.equal(hintTotal({ hints: [], hint_count: 2 }), 2);
+  assert.equal(hintTotal({ hints: ["First"], hint_count: 2 }, 1), 2);
+  assert.equal(hintTotal({ hints: ["First", "Second"] }), 2);
+  assert.equal(hintTotal({ hints: [], hint_count: 1 }, 2), 2);
+  assert.equal(hintTotal({ hints: [], hint_count: 0 }), 0);
+});
+
+test("scoreView of a proof lesson without a servable variant never announces one", () => {
+  const p = progress({ guided_total: 3, guided_done: 3, in_guided: false, variant: false, planned: 3, answered: 3, points: 3, max_points: 3, score: 1 });
+  assert.equal(scoreView(p).remainingLabel, "3 of 3 steps answered");
+  assert.equal(scoreView({ ...p, guided_done: 1, answered: 1 }).remainingLabel, "1 of 3 steps answered");
+});
+
+test("completionSuggestion: a failed lesson's next step, unless the last answer already said it", () => {
+  const text = "This lesson has stopped short of 80% twice. Refresh S3a and S2b first — they are now due as reviews.";
+  const p = progress({ suggestion_text: text });
+  assert.equal(completionSuggestion(p), text);
+  assert.equal(completionSuggestion(p, null), text);
+  assert.equal(completionSuggestion(p, text), null);
+  assert.equal(completionSuggestion(p, `  ${text.replace(/ /g, "  ")} `), null, "whitespace doesn't matter");
+  assert.equal(completionSuggestion(p, "Re-read the worked example."), text);
+  assert.equal(completionSuggestion(progress({})), null);
+  assert.equal(completionSuggestion(progress({ suggestion_text: "  " })), null);
 });

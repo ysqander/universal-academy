@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 
 from .. import db, llm
 from ..ingest.pdf import resolve_stored
-from ..learning import quiz
+from ..learning import engine, quiz
 from ..learning.state import skill_states
 from ..learning.stats import compute_stats
 from ..pipeline import jobs
@@ -32,7 +32,7 @@ from ..schemas import (
     SkillNode,
     SourcePage,
 )
-from ..views import label_of, lesson_view, local_figure_id, page_labels_for
+from ..views import label_of, local_figure_id, page_labels_for
 
 log = logging.getLogger("ua.api.courses")
 
@@ -271,7 +271,7 @@ def get_lesson(sid: str) -> Lesson:
         raise HTTPException(404, f"Skill {sid} not found")
     if quiz.blocks_reference(skill["course_id"], datetime.now(timezone.utc)):
         raise HTTPException(409, quiz.REFERENCE_CLOSED)
-    lesson = lesson_view(sid)
+    lesson = engine.lesson_preview(sid)  # a guided proof lesson is gated like its task
     if lesson is None:
         status = skill["lesson_status"]
         detail = "The lesson could not be generated." if status == "failed" else "The lesson is still being written."

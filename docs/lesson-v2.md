@@ -98,28 +98,43 @@ notch higher on the same model (`UA_PROOF_EFFORT_NOTCHES`, default 1: planner an
   conditions_or_counterexample "Check the conditions, or break one" — the ONE statement the teaching proves, the
   picture, may use / may not use, one letter set (never e, i, j, p, z…, w…, or the slot names), the numbers, the
   guided case (one input fixed, at most 4 letters) and its key line, the general case, three scope claims, 3–6
-  practice statements and the capstone statement.
-- **Teaching** (9 blocks): setup (the picture; may / may not use — the only circularity warning) → slots on the
-  numbers → the learner finishes route B on numbers (graded) → reflect: why one example is not a proof → letters for
-  every input → faded example = route B's last leg in letters (printed nowhere before) → route A and the comparison
-  table → scope true_false_set → the general case as one worked table ending with the method (no summary block).
-  Slot tables (product | x | y | u | v | real xu−yv | imaginary xv+yu, "reset the slots" between products) fade:
-  filled → "?" in the faded example → hints only in practice → none in the capstone.
-- **Practice**: knowledge point 1 "Transfer" (a walkthrough of another statement of the family, one input fixed);
-  knowledge point 2 "What a proof establishes" (a true_false_set about shown arguments: numeric check, fixed input
-  generalized, circular step, real law inside a coordinate). Only route legs the statement does not force are scored:
-  route A's result, route B's first leg, the slots of route B's last product — never route B's final value.
-- **Capstone**: an earlier skill computes the fixed input → route A → route B's slots or first leg → USE the proved
-  statement for a value the learner could not get otherwise.
+  practice statements and the variant (`capstone_statement` + `variant_change`).
+- **Scored steps and the variant** (2026-10-09, the learner after studying S4a: no replaying of the proof — "whenever
+  we're working out the proof, we are already scoring points", then one "wrinkle or variant"): the teaching's graded
+  checks are scored (1 / ½ on a second try after the hint / 0), the lesson ends with one variant, and the knowledge
+  points are the retry and review pool. Rule text `GUIDED_PROOF_RULE` in `prompts/rules.py`; engine and API in SPEC
+  §6.3b.
+- **Teaching** (10 blocks, 5 scored steps S): setup (the picture; may / may not use — the only circularity warning) →
+  slots on the numbers (one filled row) → S the learner finishes route B on numbers → S route A's first leg on numbers
+  → reflect (unscored): why one example is not a proof → letters for every input → S faded example = route B's last
+  leg in letters → route A and the comparison table → S scope true_false_set → S the general case as one worked table
+  with one '?' cell, ending with the method (no summary block). find_then_check: S eliminate one unknown on the
+  instance, S the candidate, … the general table's '?' a solved coordinate. Each scored step has a hint and its answer
+  is printed nowhere before it (the app sends the next block only once it is answered, so the block after may show
+  it). Slot tables (product | x | y | u | v | real xu−yv | imaginary xv+yu, "reset the slots" between products) fade:
+  filled → "?" in the faded example → hints only in practice → none in the variant.
+- **Practice** (a retry and the reviews — not served in the lesson): knowledge point 1 "Transfer" (a walkthrough of
+  another statement of the family, one input fixed); knowledge point 2 "What a proof establishes" (a true_false_set
+  about shown arguments: numeric check, fixed input generalized, circular step, real law inside a coordinate). Only
+  route legs the statement does not force are scored: route A's result, route B's first leg, the slots of route B's
+  last product — never route B's final value.
+- **Variant** (the capstone slot, weight 2): a statement the teaching did not prove where the same strategy works but
+  one thing changes; 2–3 steps (two_routes: route A's result, route B's slots or first leg, optionally a statement set
+  about what the change does); no earlier-skill computation. Replaced (2026-10-09) the 4-step capstone "an earlier skill
+  computes the fixed input → route A → route B → USE".
 - **Checks** (`pipeline/proof_track.py`, hard and soft like the other validation): letters outside the plan's set,
   more than 6 letters (4 in the teaching, knowledge point 1's first question and the capstone), more than 4 terms per
-  coordinate (6 in spares), numbers first, the faded check a typed route leg not printed before, arc order, served
-  scope, walkthrough and capstone shape, inflated statements, "fully expand", method-description options, one "which
-  law" choice, the warning once. Repair messages keep the lesson's letters.
+  coordinate (6 in spares), numbers first, the faded check a typed route leg, arc order, scope tested by a scored step
+  or the variant, walkthrough and variant shape, inflated statements, "fully expand", method-description options, one
+  "which law" choice, the warning once; scored steps (`scored_check_problems`): 4–6, each with a hint that does not
+  give the answer, no true_false coin flip, no answer printed before it (in its block, earlier blocks, earlier checks'
+  prompts, explanations or answers). Repair messages keep the lesson's letters. Scored steps are verified like
+  multistep steps (`verify_guided_checks`).
 - **Grading** (all lessons): for a key with letters, a response that still holds a complex computation —
   '(a+bi)(c+di)', 'c(a+bi)', '(a+bi)^2' — is "Not yet computed" (asked again, not counted); unexpanded coordinates
   such as 'a(−d)−bc+(ac+b(−d))i' are accepted. A real key with letters takes no i.
-- Offline fixture: `app/fake_proof.py` (the S4a design) passes every check; `tests/test_proof_track.py`.
+- Offline fixture: `app/fake_proof.py` (the S4a design, 10 blocks with 5 scored steps and a 3-step variant) passes
+  every check; `tests/test_proof_track.py`, `tests/test_guided_steps.py`.
 - First live sample (S4a, Sol +1 notch, $1.31, 2026-10-08): both blind learner judges preferred it "much better" than
   the old S4a (clarity 8 vs 4, convoluted 3 vs 8, longest typed coordinate 4 terms vs 6–12, no letter changes); no
   math errors in 99 recomputed items. The design audit's two blocking defects — a faded slot row that printed u and v,

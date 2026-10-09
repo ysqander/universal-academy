@@ -100,13 +100,13 @@ def test_new_letters_and_long_expansions_are_found():
 def test_the_learners_part_must_be_a_route_leg_not_printed_and_after_numbers():
     draft = lesson()
     blocks = list(draft.blocks)
-    faded = blocks[5]
+    faded = blocks[6]
     regroup = faded.model_copy(update={"check": faded.check.model_copy(update={"answer": "-3+i"})})  # a number, not route B
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], regroup, *blocks[6:]]}))
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:6], regroup, *blocks[7:]]}))
     assert any("fewer than 2 letters" in p for p in hard)
-    printed = blocks[4].model_copy(update={"body": blocks[4].body + "\n\nRoute B will give $(-ad-bc)+(ac-bd)i$."})
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:4], printed, *blocks[5:]]}))
-    assert any("printed before the learner computes it" in p for p in hard)
+    printed = blocks[5].model_copy(update={"body": blocks[5].body + "\n\nRoute B will give $(-ad-bc)+(ac-bd)i$."})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], printed, *blocks[6:]]}))
+    assert any("block 7: the scored check's answer" in p and "printed before the learner answers it" in p for p in hard)
     letters_first = blocks[2].model_copy(update={"check": blocks[2].check.model_copy(update={"answer": "-a*d-b*c+(a*c-b*d)*i"})})
     hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:2], letters_first, *blocks[3:]]}))
     assert any("numbers first" in p for p in hard)
@@ -121,24 +121,65 @@ def test_inflated_statements_method_options_and_missing_scope_are_found():
         "Compute route A, then compare it with route B coordinate by coordinate",
         "Real sums can be regrouped and reordered", "Real products can be reordered", "Adding $0$ changes nothing"]})
     inflated = inflated.model_copy(update={"steps": steps})
-    scope = draft.knowledge_points[1]
-    no_scope = scope.model_copy(update={"questions": [scope.questions[2], *scope.questions[:2]]})  # the decide question served
-    kps = [draft.knowledge_points[0].model_copy(update={"questions": [inflated, *draft.knowledge_points[0].questions[1:]]}), no_scope]
-    hard, _ = problems(draft.model_copy(update={"knowledge_points": kps}))
+    kps = [draft.knowledge_points[0].model_copy(update={"questions": [inflated, *draft.knowledge_points[0].questions[1:]]}),
+           draft.knowledge_points[1]]
+    # no scored step and no variant step about what a proof establishes (statement sets that are all true test nothing)
+    blocks = list(draft.blocks)
+    blocks[8] = blocks[8].model_copy(update={"check": blocks[8].check.model_copy(update={"answer": "TTT"})})
+    cap_steps = list(draft.capstone.steps)
+    cap_steps[2] = cap_steps[2].model_copy(update={"answer": "TTT"})
+    cap = draft.capstone.model_copy(update={"steps": cap_steps})
+    hard, _ = problems(draft.model_copy(update={"knowledge_points": kps, "blocks": blocks, "capstone": cap}))
     assert any("shifted by a constant" in p for p in hard)
     assert any("describes a method" in p for p in hard)
     assert any("tests what a proof establishes" in p for p in hard)
 
 
-def test_the_capstone_uses_the_statement_and_drops_the_scaffold():
+def test_the_variant_is_short_and_drops_the_scaffold():
     draft = lesson()
     cap = draft.capstone
     steps = list(cap.steps)
     steps[1] = steps[1].model_copy(update={"prompt": "Reset the slots and enter $(\\alpha\\beta)\\mu$."})
-    steps[3] = steps[3].model_copy(update={"answer": "a+b*i"})
-    hard, _ = problems(draft.model_copy(update={"capstone": cap.model_copy(update={"steps": steps})}))
+    hard, _ = problems(draft.model_copy(update={"capstone": cap.model_copy(update={"steps": [*steps, steps[0]]})}))
     assert any("reset the slots" in p for p in hard)
-    assert any("USES the proved statement" in p for p in hard)
+    assert any("the variant has 2–3" in p for p in hard)
+    one_typed = [steps[0], steps[2]]
+    hard, _ = problems(draft.model_copy(update={"capstone": cap.model_copy(update={"steps": one_typed})}))
+    assert any("cap: 1 typed steps; at least 2" in p for p in hard)
+
+
+def test_scored_steps_need_hints_and_may_not_be_readable_before_they_are_answered():
+    """2026-10-09, the learner after S4a: the steps worked out in the proof are the score (rules.GUIDED_PROOF_RULE)."""
+    draft = lesson()
+    blocks = list(draft.blocks)
+    assert not any("scored" in p for p in sum(problems(draft), []))
+    no_hint = blocks[2].model_copy(update={"check": blocks[2].check.model_copy(update={"hint": ""})})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:2], no_hint, *blocks[3:]]}))
+    assert any("block 3: the scored check has no hint" in p for p in hard)
+    gives = blocks[3].model_copy(update={"check": blocks[3].check.model_copy(update={"hint": "It is $1+3i$."})})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:3], gives, *blocks[4:]]}))
+    assert any("block 4: the hint gives the answer away" in p for p in hard)
+    # an earlier check's explanation is on screen: it may not hold a later step's answer
+    explained = blocks[2].model_copy(update={"check": blocks[2].check.model_copy(update={
+        "explanation": blocks[2].check.explanation + " Route A starts with $\\alpha\\beta=1+3i$."})})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:2], explained, *blocks[3:]]}))
+    assert any("block 4: the scored check's answer $1+3i$ is printed before" in p for p in hard)
+    coin = blocks[8].model_copy(update={"check": blocks[8].check.model_copy(update={
+        "kind": "true_false", "choices": ["True", "False"], "correct_choice": 0, "answer": ""})})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:8], coin, *blocks[9:]]}))
+    assert any("block 9: a scored true_false check is a coin flip" in p for p in hard)
+    unscored = [b.model_copy(update={"check": None}) if n in (3, 9) else b for n, b in enumerate(blocks)]
+    hard, soft = problems(draft.model_copy(update={"blocks": unscored}))
+    assert any("the teaching has 3 scored steps" in p for p in hard)
+    assert any("block 10: the general case has no scored '?' entry" in p for p in soft)
+
+
+def test_the_variant_is_its_own_statement():
+    plan = proof_plan()
+    assert plan_problems(plan, 2) == []
+    replay = plan.model_copy(update={"capstone_statement": plan.practice_statements[0].statement})
+    assert any("repeats the teaching's statement" in p for p in plan_problems(replay, 2))
+    assert any("variant" in p for p in plan_problems(plan.model_copy(update={"capstone_statement": ""}), 2))
 
 
 def test_the_warning_appears_once():
@@ -197,6 +238,21 @@ def test_proof_prompts_replace_the_general_proof_rules():
         assert name in PROOF_PLANNER_INSTRUCTIONS and name in PROOF_WRITER_INSTRUCTIONS
 
 
+def test_the_learners_scoring_request_reaches_every_proof_prompt_of_both_providers():
+    """rules.GUIDED_PROOF_RULE (2026-10-09) is written once and shared; the general texts keep formative checks."""
+    from app.prompts import anthropic, openai
+    from app.prompts.rules import GUIDED_PROOF_RULE
+
+    for texts in (openai, anthropic):
+        for name in ("PROOF_PLANNER_INSTRUCTIONS", "PROOF_WRITER_INSTRUCTIONS"):
+            assert GUIDED_PROOF_RULE in getattr(texts, name), name
+        formative = "formative — graded by the app, never scored"
+        assert formative not in texts.PROOF_WRITER_INSTRUCTIONS and formative in texts.WRITER_INSTRUCTIONS
+        assert "scored step of the teaching or variant step" in texts.PROOF_REVIEWER_INSTRUCTIONS
+        assert "THE VARIANT" in texts.PROOF_CAPSTONE_REPAIR_NOTE and "earlier skill computes" not in texts.PROOF_CAPSTONE_REPAIR_NOTE
+        assert GUIDED_PROOF_RULE not in texts.WRITER_INSTRUCTIONS
+
+
 def test_a_proof_skill_is_replanned_on_the_proof_track(tmp_path, monkeypatch):
     cid = built_course(tmp_path)
     key = skill_by_title(cid, "Justify commutativity")["key"]
@@ -218,6 +274,14 @@ def test_a_proof_skill_is_replanned_on_the_proof_track(tmp_path, monkeypatch):
     stored = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE id = ?", (result.skill_id,))["lesson_json"])
     assert stored["plan"]["proof"]["pattern"] == "two_routes"
     assert stored["blocks"][0]["heading"] == "Two routes, same destination"
+    # the checks are scored steps with their hints, every one verified; the variant fills the capstone slot
+    from app.learning import guided
+
+    assert stored["scoring"] == "guided" and guided.scored_indices(stored) == [2, 3, 6, 8, 9]
+    assert all(stored["blocks"][i]["check"]["hint"] for i in guided.scored_indices(stored))
+    assert [r["status"] for r in stored["guided_verify"]] == ["agree"] * 5, stored["guided_verify"]
+    cap = db.query_one("SELECT steps_json FROM questions WHERE skill_id = ? AND role = 'capstone'", (result.skill_id,))
+    assert len(db.loads(cap["steps_json"])) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +292,8 @@ def test_a_proof_skill_is_replanned_on_the_proof_track(tmp_path, monkeypatch):
 def test_the_faded_row_leaves_route_bs_inputs_to_the_learner():
     draft = lesson()
     blocks = list(draft.blocks)
-    filled = blocks[5].model_copy(update={"body": blocks[5].body.replace("| $a$ | $b$ | ? | ? | ? | ? |", "| $a$ | $b$ | $-d$ | $c$ | ? | ? |")})
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], filled, *blocks[6:]]}))
+    filled = blocks[6].model_copy(update={"body": blocks[6].body.replace("| $a$ | $b$ | ? | ? | ? | ? |", "| $a$ | $b$ | $-d$ | $c$ | ? | ? |")})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:6], filled, *blocks[7:]]}))
     assert any("faded slot row prints the inputs" in p for p in hard)
 
 
@@ -240,7 +304,7 @@ def test_transfer_is_served_first_and_one_question_per_point():
     longer = kp2.model_copy(update={"target_questions": 3})
     hard, soft = problems(draft.model_copy(update={"knowledge_points": [repair_first, longer]}))
     assert any("knowledge point 1 leads with k1q3" in p for p in hard)
-    assert any("practice questions are served before the capstone" in p for p in soft)
+    assert any("practice questions lead the knowledge points" in p for p in soft)
 
 
 def test_explanations_do_not_answer_the_next_step_and_the_capstone_keeps_the_letters():
@@ -289,3 +353,32 @@ def test_a_letter_the_plan_reserves_for_the_capstones_number_is_not_an_input():
     _, soft = proof_problems(lesson().model_copy(update={"capstone": lesson().capstone.model_copy(update={
         "prompt": lesson().capstone.prompt.replace("\\mu", "\\lambda")})}), plan)
     assert any("\\lambda names a computed number" in p for p in soft)
+
+
+def test_forced_and_tuple_answers_of_scored_steps_are_found():
+    """The branch review (2026-10-09): the 1 of a checked inverse, and a slot tuple printed in an earlier block."""
+    draft = lesson()
+    blocks = list(draft.blocks)
+    forced = blocks[3].model_copy(update={
+        "body": blocks[3].body + "\n\nRecall $\\frac{2}{5}-\\frac{1}{5}i$ and $2+i$.",
+        "check": blocks[3].check.model_copy(update={"answer": "1", "answer_display": "$1$"})})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:3], forced, *blocks[4:]]}))
+    assert any("block 4: the scored check's answer $1$ is forced" in p for p in hard), hard
+    tup = blocks[9].model_copy(update={"check": blocks[9].check.model_copy(update={
+        "answer": "(a, b, c*g-d*h, c*h+d*g)", "answer_display": "$(a,b,cg-dh,ch+dg)$"})})
+    printed = blocks[7].model_copy(update={"body": blocks[7].body + "\n\nThe outer slots will be $(a, b, cg-dh, ch+dg)$."})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:7], printed, blocks[8], tup]}))
+    assert any("block 10: the scored check's tuple" in p for p in hard), hard
+
+
+def test_the_proof_prompts_drop_the_old_capstone_and_block_limits():
+    from app.prompts import anthropic, openai
+
+    for texts in (openai, anthropic):
+        writer = texts.PROOF_WRITER_INSTRUCTIONS
+        assert "It CHAINS this lesson's idea" not in writer and "At most 9 blocks" not in writer
+        assert "earlier skill does real work" not in texts.PROOF_CAPSTONE_REPAIR_NOTE
+        assert "within the proof track's 10 blocks" in texts.PROOF_REVISION_NOTE
+        assert "more than 11 blocks" in texts.PROOF_REVIEWER_INSTRUCTIONS
+        assert "no earlier skill doing real work" not in texts.PROOF_REVIEWER_INSTRUCTIONS
+        assert "It CHAINS this lesson's idea" in texts.WRITER_INSTRUCTIONS  # the general texts keep theirs

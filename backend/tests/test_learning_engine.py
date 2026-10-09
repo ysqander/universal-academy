@@ -393,7 +393,10 @@ def test_capstone_steps_hints_and_reload() -> None:
     q = task.question
     assert task.progress.in_capstone and (task.progress.kp_target, task.progress.kp_questions_used) == (1, 1)
     assert q.role == "capstone" and q.kind == "multistep" and q.step_index == 0 and q.step_results == []
-    assert [s.prompt for s in q.steps][0] == "Step 1: compute $2+3$." and q.steps[1].choices == ["A", "B", "C"]
+    assert [s.prompt for s in q.steps][0] == "Step 1: compute $2+3$."
+    # a later step is sent blank until it is reached (its prompt could state an earlier result); no hint text before use
+    assert [(s.prompt, s.choices, s.hint) for s in q.steps[1:]] == [("", [], ""), ("", [], "")]
+    assert [s.has_hint for s in q.steps] == [True, True, True] and q.steps[0].hint == ""
     dumped = q.model_dump_json()
     assert '"answer"' not in dumped and "Law C lets us regroup" not in dumped  # no answers or explanations leak
     with pytest.raises(engine.Conflict, match="final problem"):
@@ -411,6 +414,7 @@ def test_capstone_steps_hints_and_reload() -> None:
     assert s0.step_result.index == 0 and s0.step_result.score == 1.0 and s0.step_result.explanation == "$2+3=5$."
     assert s0.correct_answer == "$5$" and s0.xp_awarded == 0
     assert s0.task.question.step_index == 1 and len(s0.task.question.step_results) == 1
+    assert s0.task.question.steps[1].choices == ["A", "B", "C"] and s0.task.question.steps[2].prompt == ""
     assert s0.task.progress.answered == 2  # the capstone counts once all its steps are answered
     assert not db.query("SELECT 1 FROM attempts WHERE question_id = ?", (cap,))
     reloaded = engine.get_task(task_id)
@@ -421,6 +425,7 @@ def test_capstone_steps_hints_and_reload() -> None:
     assert (h.hint, h.hints_used) == ("Not A.", 1)
     assert engine.hint(cap, T0).hint == "Not A."  # default: the current step; still one hint
     assert engine.get_task(task_id).question.hints_used == 1
+    assert engine.get_task(task_id).question.steps[1].hint == "Not A."  # the used hint survives a reload
     s1 = engine.submit_answer(task_id, step_submit(cap, 1), T0)
     assert s1.status == "step" and s1.step_result.score == 0.5 and "half a point" in s1.step_result.feedback
     assert s1.correct_choice == 2 and s1.score == pytest.approx(0.75)  # running mean of the steps so far

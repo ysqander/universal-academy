@@ -13,6 +13,8 @@ export interface StepsSummary {
   results: StepResult[];
   total: number;
   capstone: boolean;
+  /** The capstone slot holds a proof lesson's variant (same idea, one thing changed). */
+  variant?: boolean;
   /** Steps answered with "Show solution". */
   revealed?: ReadonlySet<number>;
 }
@@ -74,7 +76,13 @@ export function FeedbackPanel({ result, answerShown = false, revealed = false, s
   // verdict and the recap. The server's "Lesson passed with N%." is said once, by the progress note below.
   const feedback = withoutPassNote(steps ? multistepNote(result) : stripStockVerdict(result.feedback));
   const toneNote = tone.note;
-  const points = steps ? (steps.capstone ? "Counts double in your score" : null) : pointsLabel(result, revealed);
+  const points = steps
+    ? steps.capstone
+      ? steps.variant
+        ? "The variant (same idea, one thing changed) counts double in your score"
+        : "Counts double in your score"
+      : null
+    : pointsLabel(result, revealed);
   const note = progressNote(before, result.task, `${feedback} ${result.suggestion_text ?? ""}`);
   const suggestion = result.suggestion ? SUGGESTION_ACTIONS[result.suggestion] : undefined;
   const taskOngoing = result.task.phase !== "done";

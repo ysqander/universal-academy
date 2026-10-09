@@ -67,7 +67,7 @@ Per page, in PDF points:
 | graph | one high-reasoning call over the whole chapter markdown (`<<page N · p.L>>` markers, figure list) → `KnowledgeGraphDraft`; then validation | `skills`, `edges`, `foundations`, course.big_picture/excluded |
 | lessons | per skill (concurrent): `LessonDraft` from skill spec + its source pages (±1 page) + prerequisite/dependent skills + book exercises on those pages | skills.lesson_json, `questions` |
 | visuals | per skill: separate **visualization planner** call → `VisualizationPlan`; function plots are pre-sampled with SymPy (≤ 21 parameter values × 200 points) | skills.viz_json |
-| verify | per machine-checkable question: first a no-model check that the answer key agrees with the question's own displayed answer (else `key_mismatch` → flagged); then an independent solve (`IndependentAnswer`, model `gpt-6-luna`, given the course's notation such as "F: R or C" and told to work inside it); compare with the grader (§6.1). Disagreement or reported problem → `flagged=1` (kept out of scoring) | questions.verify_json/flagged |
+| verify | per machine-checkable question: first a no-model check that the answer key agrees with the question's own displayed answer (else `key_mismatch` → flagged); then an independent solve (`IndependentAnswer`, model `gpt-6-luna`, given the course's notation such as "F: R or C" and told to work inside it); compare with the grader (§6.1). Disagreement or reported problem → `flagged=1` (kept out of scoring). A guided proof lesson's scored steps are verified the same way before the lesson is stored (`verify_guided_lesson`; a rejected step gets `check.withheld` and is not scored); a stored one is re-verified by `regenerate --only verify` or the build's resume, carrying running attempts over | questions.verify_json/flagged, skills.lesson_json |
 | finalize | initialize `progress` rows (available if no in-chapter prerequisites, else locked), course.status=ready | progress |
 
 Rules:
@@ -85,14 +85,14 @@ Rules:
 
 ### 4.2 Prompting principles (graph + lessons)
 - Nodes are **outcomes**, not headings: the objective names a task the learner can do at the end (solve, compute, find, construct, prove — a proof is an outcome); evaluating, checking or identifying is a step inside the skill that uses it, unless the judgement is itself the hard part (is this a vector space? is this sum direct?). Split only into separate outcomes; stop when one small family of problems assesses it ([DECISIONS.md §2](DECISIONS.md)).
-- Include conceptual abilities as tasks (predict, interpret, prove), not only procedures. Proof-oriented books (Axler) need proof skills (kind `proof`), practised with multistep walkthroughs; a "show that" about one given object is a computation.
+- Include conceptual abilities as tasks (predict, interpret, prove), not only procedures. Proof-oriented books (Axler) need proof skills (kind `proof`): the lesson's scored guided steps and a variant (§6.3b), multistep walkthroughs in retries and reviews; a "show that" about one given object is a computation.
 - Edges mean "needed before"; encompassing weight says how much practising the dependent skill exercises the prerequisite (drives FIRe-lite).
 - Preserve the author's notation and definitions; cite printed item numbers (1.3) and pages.
 - Lessons: Why it matters → The idea → Worked example → Your turn (tier ramp 1→3) → Connection; short main path; depth behind "Show the missing steps". Questions must be self-contained, assess the stated objective, use only taught or prerequisite material; prefer machine-checkable forms; adapt book exercises when suitable (cite them).
 
 ### 4.2b Lesson generation v2 (experimental — see [lesson-v2.md](lesson-v2.md))
-Planner (`TeachingPlan`, may split a node into separate outcomes; sees block feedback and the learner's missed or
-assisted answers on the skill) → writer (`LessonV2Draft`: ordered teaching blocks, each declaring its one `new_idea`,
+Planner (`TeachingPlan`, may split a node into separate outcomes; sees block feedback, keys the learner reported as
+wrong, and the learner's missed or assisted answers on the skill — guided proof steps included) → writer (`LessonV2Draft`: ordered teaching blocks, each declaring its one `new_idea`,
 with inline checks and faded examples, then practice knowledge points) → reviewer (`LessonReview`: missing-bridge pass
 `issues` + density/outcome pass `density_issues`) → one revision when either pass reports anything, a second one
 only for blocking issues or validation problems left (`MAX_REVISIONS`). Validation sends a draft back when the
@@ -105,10 +105,13 @@ lessons. Stored as
 skill with `backend/scripts/replan.py --course <id> --skill S2 [--dry-run] [--no-split]`; a split
 replaces the node by narrower skills (keys S2a, S2b, …, kept at the original's place in the learning order), rewires
 edges, recomputes order/reduction and unlocks, and is only allowed while the original skill has no answered attempts
-and no FSRS card. `scripts/regenerate.py` rewrites a v2 skill from its stored teaching spec. Inline checks and block
-feedback carry `Lesson.version`; a stale page gets 409 and a reload prompt.
+(guided proof steps included) and no FSRS card. A proof plan written before the variant (no `variant_change`) is not
+regenerated — it is re-planned. `scripts/regenerate.py` rewrites a v2 skill from its stored teaching spec. Inline checks and block
+feedback carry `Lesson.version`; a stale page gets 409 and a reload prompt. A proof lesson written on the proof track
+is stored with `lesson_json.scoring = "guided"`: its graded inline checks are scored guided steps (§6.3b), each with a
+`hint`; verification may withhold one (`check.withheld`).
 
-Question rules (all generators): no free_response "show your working" questions (computations are typed answers; proofs become multistep walkthroughs); each KP sets `target_questions` (1–3: how much there really is to demonstrate) and gets target + 2 questions that each ask something different (new case, prediction, spot the error, reverse problem — not the same procedure with new numbers); every new lesson ends with a multistep capstone (`role='capstone'`, 2–4 machine-checked steps, each with a hint and an explanation) that chains the lesson's ideas with earlier skills; no "common mistakes" section (v1 and v2 lessons both end with a capstone). Complex-number answers are always asked and keyed as a+bi. Capstone validation rejects steps whose answer is given away (printed in the problem or an earlier step, or forced by a definition such as "multiply back and get 1"); the capstone must chain this lesson's idea with an earlier skill using fresh numbers, not replay a practice question. A step may refer only to earlier steps that exist. A v2 capstone that still breaks these rules after the revision, or that verification withholds, is rewritten on its own (`lesson_v2.repair_stored_capstone`; for stored lessons `scripts/regenerate.py --only capstone [--note …]`) instead of losing steps. A halted lesson's cooldown is honoured on manual starts too (409 "comes back at HH:MM" unless `force`). Never ask "how many of these are true / belong to …" — use `true_false_set`
+Question rules (all generators): no free_response "show your working" questions (computations are typed answers; proofs become multistep walkthroughs); each KP sets `target_questions` (1–3: how much there really is to demonstrate) and gets target + 2 questions that each ask something different (new case, prediction, spot the error, reverse problem — not the same procedure with new numbers); every new lesson ends with a multistep capstone (`role='capstone'`, 2–4 machine-checked steps, each with a hint and an explanation) that chains the lesson's ideas with earlier skills — except a proof lesson, whose capstone slot holds its variant (2–3 steps, the same strategy with one thing changed, no earlier skill required, §6.3b); no "common mistakes" section (v1 and v2 lessons both end with a capstone). Complex-number answers are always asked and keyed as a+bi. Capstone validation rejects steps whose answer is given away (printed in the problem or an earlier step, or forced by a definition such as "multiply back and get 1"); the capstone must chain this lesson's idea with an earlier skill using fresh numbers, not replay a practice question. A step may refer only to earlier steps that exist. A v2 capstone that still breaks these rules after the revision, or that verification withholds, is rewritten on its own (`lesson_v2.repair_stored_capstone`; for stored lessons `scripts/regenerate.py --only capstone [--note …]`) instead of losing steps. A halted lesson's cooldown is honoured on manual starts too (409 "comes back at HH:MM" unless `force`). Never ask "how many of these are true / belong to …" — use `true_false_set`
 (the learner marks each statement true or false; answer = one letter per statement, e.g. "FTT"; feedback names the
 statements that were marked wrong). With ≥ 3 statements it does not count toward the choice-question cap. A tuple
 answer becomes an unordered set only when the prompt says the order of the answers does not matter.
@@ -147,20 +150,23 @@ Prefer the book's own figure when one fits. Never 3D. Interactivity only when mo
 | GET `/api/courses/{cid}/graph` | → `CourseGraph` |
 | GET `/api/courses/{cid}/figures/{fid}.png` | → PNG |
 | GET `/api/courses/{cid}/source/{page}` | → `SourcePage` |
-| GET `/api/skills/{sid}/lesson` | → `Lesson` (404 until ready) |
+| GET `/api/skills/{sid}/lesson` | → `Lesson` (404 until ready; a guided proof lesson not yet learned is gated like its task, §6.3b) |
 | POST `/api/foundations/{cid}/{key}` | `FoundationKnownRequest` → `FoundationNode` |
 | GET `/api/courses/{cid}/next` | → `NextTaskResponse` (active task + ranked menu; no side effects) |
 | POST `/api/courses/{cid}/continue` | → `Task` (resume active task, else a due quiz, else the top option; 409 if nothing to do) |
 | POST `/api/courses/{cid}/tasks` | `StartTaskRequest` → `Task` (manual override: learn/review a chosen skill; 409 if another task is active unless `replace_active`; locked skills need `force`) |
 | GET `/api/tasks/{tid}` | → `Task` |
 | GET `/api/settings` / PUT `/api/settings` | `{daily_goal}` |
-| POST `/api/tasks/{tid}/practice` | → `Task` (lesson read → practice phase, first question served) |
+| POST `/api/tasks/{tid}/practice` | → `Task` (lesson read → practice phase, first question served; a guided proof lesson: 409 while a scored step is open, else the variant — or the attempt ends when 80 % is out of reach, §6.3b) |
 | POST `/api/tasks/{tid}/answer` | `AnswerSubmit` → `AnswerResult` (multistep: one submission per step with `step`; 409 if it is not the current step) |
 | POST `/api/tasks/{tid}/easier` | → `Task` (swap current question for an unseen lower-tier one) |
 | POST `/api/tasks/{tid}/abandon` | → `Task` |
 | POST `/api/questions/{qid}/hint[?step=i]` | → `HintResponse` (next hint, or the hint of multistep step *i*; recorded server-side for the current attempt) |
 | POST `/api/questions/{qid}/reveal` | `RevealRequest` → `RevealResponse` (marks the current attempt as revealed, unless it is a free-response comparison after a committed answer) |
-| POST `/api/skills/{sid}/blocks/{i}/check` | `BlockCheckRequest` → `BlockCheckResult` (v2 inline check; formative, not recorded) |
+| POST `/api/skills/{sid}/blocks/{i}/check` | `BlockCheckRequest` → `BlockCheckResult` (v2 inline check; formative, not recorded; 409 for a guided proof lesson's scored step before the skill is learned) |
+| POST `/api/tasks/{tid}/blocks/{i}/check` | `BlockCheckRequest` (version required) → `GuidedCheckResult` (a scored guided step, §6.3b; 422 unreadable = no try; 409 stale version / not the current step) |
+| POST `/api/tasks/{tid}/blocks/{i}/reveal` | `GuidedRevealRequest` → `GuidedCheckResult` (the step's answer; the step earns 0) |
+| POST `/api/tasks/{tid}/blocks/{i}/flag` | `FlagRequest` → `Task` (a done scored step's key reported as wrong: kept for review, the score is unchanged) |
 | POST `/api/skills/{sid}/blocks/{i}/feedback` | `BlockFeedbackRequest` → 204 ("This step isn't clear") |
 | POST `/api/questions/{qid}/flag` | `FlagRequest` → `Task` (question excluded; attempts on it voided; replacement served) |
 
@@ -191,10 +197,20 @@ A lesson = the teaching part (v2: the teaching sequence; v1: intro sections) + 1
 - Legacy proof rule (only for lessons that still contain free_response questions): a KP with a free_response question also needs one independent self-graded "correct" written answer; if none can be obtained the requirement is waived and the first FSRS rating is Hard.
 - New lessons contain **no free_response questions** (no "show your working"); proofs are taught through multistep walkthroughs (choose the justified next step / the law used) and the capstone. No "common mistakes" section is generated or shown.
 - Questions are served in pool order, never repeating a question within a task; on a later retry of the lesson prefer questions never seen before.
+- Hints: a question's hint texts (`QuestionPublic.hints`) are sent only once shown — `hint_count` says how many exist; a multistep step's `hint` only once used (`has_hint`), and a step after the current one comes without prompt or options.
+
+### 6.3b Guided proof lessons (decided 2026-10-09, [DECISIONS.md §2, §5](DECISIONS.md))
+A v2 proof lesson with `lesson_json.scoring = "guided"`, of a skill not yet learned (`learning/guided.py`):
+- **Scored steps.** Its graded inline checks (not 'reflect', not withheld, with a gradeable key) are answered inside the task: `POST /api/tasks/{tid}/blocks/{i}/check`. Right first time 1; a wrong first answer to a numeric / expression step or a statement set (≥ 3 statements) → status `retry`, "not yet" and the step's hint, then ½ if right, 0 if wrong; a choice step has one try; `/reveal` = 0. A done step is never graded again. Each logs like a question of weight 1 (`q = "block:<i>"`).
+- **Gating.** The task's lesson (and `GET /api/skills/{sid}/lesson`) holds the blocks up to and including the first open scored step (`Lesson.blocks_total` counts all); "Go deeper" and the knowledge points' explanations and worked examples are withheld during a scored attempt. `InlineCheckPublic.scored/second_try/state` carry the server's record.
+- **Variant.** `POST /practice` is 409 while a step is open. Then, if 80 % is out of reach even with the variant right, the attempt ends (failed, key `guided`, 2-hour pause); otherwise the capstone slot's question — the variant, weight 2 — is served. No knowledge-point questions. `TaskProgress.guided_total/guided_done/in_guided/variant/best_possible` drive the UI.
+- **Leaving and retrying.** Starting the lesson again after leaving an unfinished attempt continues its state. A failure's advice (e.g. the remediation after a second failure) is kept in `TaskProgress.suggestion_text`, since an attempt that ends at "Start the variant" has no answer to carry it. After a finished attempt of the same lesson version, the next is a retry (`Lesson.guided = "retry"`): the steps are shown answered and not scored; the knowledge points' questions and only a capstone never answered before are scored.
+- **Reports.** `POST /api/tasks/{tid}/blocks/{i}/flag` on a done step stores the report (`block_feedback` kind `wrong_key`, shown to the planner) and marks the step `reported`; the score does not change — voiding on a report would let a learner reveal every answer, report them all and pass on the variant. A key found wrong on review is corrected there.
+- **Leaving** keeps everything: a left attempt's open question (the variant at its step, a retry's question with its hints) comes back as the current one, and its help or solution is not handed out in between (409). The menu says "continues where you left off".
 
 ### 6.4 Review task (spaced repetition)
 - FSRS (`fsrs` 6.x, desired_retention 0.9, `learning_steps=()` and `relearning_steps=()` so cards stay in Review state; fuzzing on).
-- A review = 3 questions of the skill (mixed KPs; when the skill has a capstone, it may replace one of them — weight 2), preferring questions never answered before, then least-recently answered; flagged excluded. When fewer than 3 unseen questions remain for a skill, request a background top-up (pipeline `request_top_up`).
+- A review = 3 questions of the skill (mixed KPs; when the skill has a capstone, it may replace one of them — weight 2; a guided proof lesson's reviews draw its walkthroughs, statement sets and variant), preferring questions never answered before, then least-recently answered; flagged excluded. When fewer than 3 unseen questions remain for a skill, request a background top-up (pipeline `request_top_up`).
 - **Order-sensitive score** (Math Academy): answer i (1-based) has order weight i (× 2 for a capstone); points as in §6.3 (1 / 0.5 / 0; multistep = mean of steps); `score = Σ wᵢcᵢ / Σ wᵢ`.
 - Rating: score ≥ 0.8 → Good (Easy optional when perfect and fast); 0.6 ≤ score < 0.8 → Hard; < 0.6 → Again. XP: 4 if ≥ 0.8 (+1 if perfect), 2 if ≥ 0.6, 1 otherwise.
 

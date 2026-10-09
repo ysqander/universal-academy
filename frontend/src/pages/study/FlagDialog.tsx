@@ -7,11 +7,19 @@ import type { Task } from "../../types";
 
 interface FlagDialogProps {
   open: boolean;
-  questionId: string;
+  /** The question reported (POST /api/questions/{id}/flag) — unless `send` reports something else. */
+  questionId?: string;
+  /** Report something other than a question (a proof lesson's scored step); resolves to the server's updated task. */
+  send?: (reason: string) => Promise<Task>;
   onClose: () => void;
   onFlagged: (task: Task) => void;
   /** What happens to the question (default: practice — voided and replaced). */
   description?: string;
+  title?: string;
+  reasons?: readonly string[];
+  confirmLabel?: string;
+  /** The toast once the report is in. */
+  sentMessage?: string;
 }
 
 const REASONS = ["The answer marked correct is wrong", "The question is ambiguous", "It uses something not taught yet", "There's a typo in the math"];
@@ -19,7 +27,18 @@ const REASONS = ["The answer marked correct is wrong", "The question is ambiguou
 /** "This question seems wrong": excludes the question from scoring and serves a replacement. */
 const DEFAULT_DESCRIPTION = "The question is removed from scoring — any answer to it is voided — and you get a replacement.";
 
-export function FlagDialog({ open, questionId, onClose, onFlagged, description = DEFAULT_DESCRIPTION }: FlagDialogProps) {
+export function FlagDialog({
+  open,
+  questionId,
+  send: sendReport,
+  onClose,
+  onFlagged,
+  description = DEFAULT_DESCRIPTION,
+  title = "Report this question",
+  reasons = REASONS,
+  confirmLabel = "Set it aside",
+  sentMessage = "Thanks — that question is set aside and won't count.",
+}: FlagDialogProps) {
   const toast = useToast();
   const id = useId();
   const [reason, setReason] = useState("");
@@ -28,9 +47,9 @@ export function FlagDialog({ open, questionId, onClose, onFlagged, description =
   const send = async () => {
     setSending(true);
     try {
-      const task = await flagQuestion(questionId, reason.trim());
+      const task = sendReport ? await sendReport(reason.trim()) : await flagQuestion(questionId ?? "", reason.trim());
       onClose();
-      toast.show("Thanks — that question is set aside and won't count.", "success");
+      toast.show(sentMessage, "success");
       onFlagged(task);
     } catch (err) {
       toast.error(err);
@@ -43,7 +62,7 @@ export function FlagDialog({ open, questionId, onClose, onFlagged, description =
     <Dialog
       open={open}
       onClose={onClose}
-      title="Report this question"
+      title={title}
       size="sm"
       footer={
         <>
@@ -51,7 +70,7 @@ export function FlagDialog({ open, questionId, onClose, onFlagged, description =
             Cancel
           </button>
           <button type="button" className="btn btn--primary" onClick={() => void send()} disabled={sending}>
-            {sending && <Spinner size={14} label="Sending" />} Set it aside
+            {sending && <Spinner size={14} label="Sending" />} {confirmLabel}
           </button>
         </>
       }
@@ -59,7 +78,7 @@ export function FlagDialog({ open, questionId, onClose, onFlagged, description =
       <div className="flag-form">
         <p className="muted">{description}</p>
         <div className="flag-form__reasons" role="group" aria-label="Common reasons">
-          {REASONS.map((r) => (
+          {reasons.map((r) => (
             <button key={r} type="button" className="btn btn--sm" aria-pressed={reason === r} onClick={() => setReason(r)}>
               {r}
             </button>

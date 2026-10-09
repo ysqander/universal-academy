@@ -116,6 +116,11 @@ async def regenerate(
                 tracker.log(f"Capstone {outcome}")
             if (questions or capstones) and not (lessons or visuals or verify):
                 return
+            if lessons and spec is not None and spec.proof is not None and not spec.proof.variant_change.strip():
+                # a proof plan written before the variant (2026-10-09) still describes the old capstone
+                report.lessons_kept.append(skill["key"])
+                tracker.log(f"Skill {skill['key']}: a proof plan from before the variant — re-plan it with replan.py")
+                return
             if lessons and spec is not None:
                 result = await generate_v2_lesson(ctx, skill["id"], spec, prefix)  # also verifies the new questions
                 (report.lessons_regenerated if result.ok else report.lessons_kept).append(skill["key"])

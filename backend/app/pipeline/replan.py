@@ -96,7 +96,8 @@ def _skill_row(course_id: str, key: str) -> dict[str, Any]:
 
 
 def split_blockers(skill_id: str, conn=None) -> list[str]:
-    """Learner history a split would destroy: answered (non-voided) attempts, an FSRS card, review history."""
+    """Learner history a split would destroy: answered (non-voided) attempts, an FSRS card, review history, answered
+    guided proof steps."""
 
     def one(sql: str) -> Any:
         if conn is not None:
@@ -112,6 +113,12 @@ def split_blockers(skill_id: str, conn=None) -> list[str]:
     reviews = one("SELECT COUNT(*) FROM review_log WHERE skill_id = ?")
     if reviews:
         reasons.append(f"{reviews} review-log entr{'ies' if reviews != 1 else 'y'}")
+    steps = one(  # a guided proof lesson's scored steps live in the task log, not in attempts
+        "SELECT COUNT(*) FROM tasks t, json_each(t.state_json, '$.log') e WHERE t.skill_id = ? AND t.type = 'lesson' "
+        "AND json_extract(e.value, '$.q') LIKE 'block:%'"
+    )
+    if steps:
+        reasons.append(f"{steps} answered proof step{'s' * (steps != 1)}")
     return reasons
 
 

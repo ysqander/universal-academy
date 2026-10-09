@@ -8,13 +8,14 @@ import {
   lessonFingerprint,
   loadAnswered,
   saveAnswered,
+  sequenceKey,
   stripGoalLabel,
   visibleBlocks,
   type CheckOutcome,
 } from "../src/lib/lessonFlow.ts";
-import type { InlineCheckPublic, TeachingBlockView } from "../src/types.ts";
+import type { GuidedCheckState, InlineCheckPublic, TeachingBlockView } from "../src/types.ts";
 
-const check: InlineCheckPublic = { kind: "numeric", prompt: "What does $6i^2$ become?", choices: [] };
+const check: InlineCheckPublic = { kind: "numeric", prompt: "What does $6i^2$ become?", choices: [], scored: false, second_try: false, state: null };
 const block = (index: number, withCheck = false): TeachingBlockView => ({
   index,
   kind: withCheck ? "check" : "explain",
@@ -106,4 +107,64 @@ test("the goal line's own 'Your goal:' label is dropped", () => {
   assert.equal(stripGoalLabel("**Your goal:** Calculate $(2+3i)(1+2i)$."), "Calculate $(2+3i)(1+2i)$.");
   assert.equal(stripGoalLabel("Your goal: explain why."), "explain why.");
   assert.equal(stripGoalLabel("Calculate a product."), "Calculate a product.");
+});
+
+// A proof lesson's scored steps (lib/guided.ts): the server's record gates, and the server holds the later blocks back.
+const record = (status: GuidedCheckState["status"], scored = true): GuidedCheckState => ({
+  status,
+  tries: status === "open" ? 0 : 1,
+  first_response: null,
+  response: null,
+  correct: status === "done" ? true : null,
+  points: status === "done" ? 1 : null,
+  revealed: false,
+  feedback: "",
+  hint: "",
+  answer_display: "",
+  explanation: "",
+  voided: false,
+  scored,
+});
+const scoredBlock = (index: number, state: GuidedCheckState | null): TeachingBlockView => ({
+  ...block(index, true),
+  check: { ...check, kind: "expression", scored: true, second_try: true, state },
+});
+
+test("a scored step gates until the server says it is done: skips and stored answers don't open it", () => {
+  // The server sent blocks 0–2 of 7 (the first open step is block 2).
+  const sent = [block(0), block(1), scoredBlock(2, record("open"))];
+  let state = flowReducer(initialFlow({ 2: outcome(true) }), { type: "skipped", index: 2 });
+  const view = visibleBlocks(sent, state, true, 7);
+  assert.equal(view.gate?.index, 2);
+  assert.equal(view.hidden, 4, "the steps the server holds back are counted from blocks_total");
+  // A wrong first answer with one more try still holds the lesson back.
+  assert.equal(visibleBlocks([block(0), block(1), scoredBlock(2, record("retry"))], state, true, 7).gate?.index, 2);
+  // Done: the next blocks arrive from the server and the next open step gates.
+  const more = [block(0), block(1), scoredBlock(2, record("done")), block(3), scoredBlock(4, record("open"))];
+  state = initialFlow();
+  const next = visibleBlocks(more, state, true, 7);
+  assert.equal(next.gate?.index, 4);
+  assert.equal(next.hidden, 2);
+  // An unscored check before a scored one still gates softly (answered or skipped).
+  const mixed = [block(0, true), scoredBlock(1, record("open"))];
+  assert.equal(gatePosition(mixed, initialFlow()), 0);
+  assert.equal(gatePosition(mixed, flowReducer(initialFlow(), { type: "skipped", index: 0 })), 1);
+});
+
+test("a retry of the lesson shows its steps answered: nothing is gated by them", () => {
+  const all = [block(0), scoredBlock(1, record("done", false)), block(2), scoredBlock(3, record("open", false))];
+  const view = visibleBlocks(all, initialFlow(), true, 4);
+  assert.equal(view.gate, null);
+  assert.equal(view.shown.length, 4);
+});
+
+test("a scored lesson keeps its key while it grows; other lessons are keyed by their blocks", () => {
+  const sent = { skill_id: "sk1", version: "abc12345", guided: "scored" as const, blocks: [block(0), scoredBlock(1, record("open"))] };
+  const grown = { ...sent, blocks: [...sent.blocks.slice(0, 1), scoredBlock(1, record("done")), block(2)] };
+  assert.equal(sequenceKey(sent, "t1"), sequenceKey(grown, "t1"), "answering a step must not remount the sequence");
+  assert.notEqual(sequenceKey(sent, "t1"), sequenceKey(sent, "t2"), "another attempt starts afresh");
+  assert.notEqual(sequenceKey(sent, "t1"), sequenceKey({ ...sent, version: "def67890" }, "t1"), "a regenerated lesson too");
+  const plain = { skill_id: "sk1", version: "abc12345", guided: null, blocks };
+  assert.equal(sequenceKey(plain), lessonFingerprint(plain));
+  assert.equal(sequenceKey({ ...plain, guided: "retry" as const }, "t1"), lessonFingerprint(plain));
 });

@@ -177,6 +177,16 @@
   margin-bottom: var(--space-1);
 }
 
+/* 80 % is out of reach even with the variant right: the card ends the attempt (no call to action colour). */
+.learn-view__start[data-ends] {
+  background: var(--surface);
+}
+
+/* A proof lesson with scored steps: the steps and the score so far, over the lesson's reading column. */
+.learn-view__progress {
+  max-width: var(--reading);
+}
+
 /* ---------- practice ---------- */
 
 .practice-view {

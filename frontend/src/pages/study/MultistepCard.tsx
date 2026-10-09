@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState, type FormEvent } from "react";
-import { getHint, isApiError, submitAnswer } from "../../api";
+import { getHint, getTask, isApiError, submitAnswer } from "../../api";
 import { ChoiceList, MathInput, TfKeyList, TrueFalseSetInput } from "../../components/answers/AnswerInputs";
 import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
@@ -14,6 +14,7 @@ import { formatClock } from "../../lib/format";
 import {
   activeStep,
   initialTrail,
+  mergeSteps,
   questionDone,
   revealedStepIndexes,
   STEP_MARK_GLYPH,
@@ -21,6 +22,8 @@ import {
   stepMark,
   stepPips,
   stepResultOf,
+  stepHasHint,
+  stepReached,
   stepRevealed,
   stepsSummary,
   trailItems,
@@ -45,9 +48,10 @@ interface MultistepCardProps {
 }
 
 /**
- * A multistep question (the lesson's capstone, or a guided walkthrough): the problem on top, then its steps one at a
- * time. Each step is machine-checked on its own (POST /answer with `step`), shows right / wrong, the result and why,
- * then "Next step"; answered steps stay above as a compact trail. After the last step: the question's summary.
+ * A multistep question (the lesson's capstone, a proof lesson's variant, or a guided walkthrough): the problem on top,
+ * then its steps one at a time. Each step is machine-checked on its own (POST /answer with `step`), shows right /
+ * wrong, the result and why, then "Next step"; answered steps stay above as a compact trail. After the last step: the
+ * question's summary. A step's prompt arrives with the answer to the step before it (never earlier).
  */
 export function MultistepCard({ task, question, position, onAnswered, onContinue, onSuggestion, onEasier, onTaskReplaced }: MultistepCardProps) {
   const [trail, dispatch] = useReducer(trailReducer, question, initialTrail);
@@ -62,7 +66,10 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
   const { seconds } = useStopwatch(final === null);
   const cardRef = useRef<HTMLElement>(null);
   const capstone = question.role === "capstone";
-  const steps = question.steps;
+  // A proof lesson's variant: the same idea with one thing changed (it takes the capstone's slot).
+  const variant = capstone && Boolean(task.progress.variant);
+  // The steps as far as the server has sent them: the next one's prompt comes with the answer to this one.
+  const [steps, setSteps] = useState(question.steps);
   const active = activeStep(trail);
   const shownIndex = trail.open ?? active;
   const shownStep = shownIndex === null ? null : (steps[shownIndex] ?? null);
@@ -76,8 +83,26 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
     if (card && card.getBoundingClientRect().top < 0) card.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  // The step to answer came without its prompt (the answer's task didn't carry it): ask the server for it once.
+  const missing = shownStep !== null && !stepReached(shownStep) ? shownStep.index : null;
+  useEffect(() => {
+    if (missing === null) return;
+    let cancelled = false;
+    getTask(task.id).then(
+      (fresh) => {
+        if (!cancelled && fresh.question?.id === question.id) setSteps((known) => mergeSteps(known, fresh.question?.steps));
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [missing, task.id, question.id]);
+
   const onStepAnswered = (result: AnswerResult, index: number, revealed: boolean) => {
     const stepResult = stepResultOf(result, index);
+    const fresh = result.task.question;
+    if (fresh && fresh.id === question.id) setSteps((known) => mergeSteps(known, fresh.steps));
     if (revealed || stepRevealed(stepResult)) setRevealedSteps((prev) => new Set(prev).add(index));
     dispatch({ type: "answered", result: stepResult });
     if (questionDone(result)) {
@@ -108,7 +133,7 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
         <span className="question-card__kicker">
           {capstone ? (
             <span className="multistep__badge">
-              <Icon name="layers" size={13} /> Put it together
+              <Icon name="layers" size={13} /> {variant ? "A variant" : "Put it together"}
             </span>
           ) : null}
           {capstone ? position && <span className="multistep__position">{position}</span> : (position ?? "Your turn")}
@@ -120,7 +145,9 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
 
       {capstone && (
         <p className="multistep__intro">
-          One problem in {trail.total} steps that chains this lesson's ideas. Each step is checked before the next — it counts double in your score.
+          {variant
+            ? `Same idea, one thing changes — it counts double. One problem in ${trail.total} steps, each checked before the next.`
+            : `One problem in ${trail.total} steps that chains this lesson's ideas. Each step is checked before the next — it counts double in your score.`}
         </p>
       )}
 
@@ -147,7 +174,13 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
           </ol>
         )}
 
-        {shownStep && shownIndex !== null && (
+        {missing !== null && (
+          <p className="step-card__note">
+            <Spinner size={14} label="Loading the next step" /> Loading the next step…
+          </p>
+        )}
+
+        {shownStep && shownIndex !== null && missing === null && (
           <StepCard
             key={shownStep.index}
             taskId={task.id}
@@ -180,7 +213,7 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
         <FeedbackPanel
           result={final}
           answerShown
-          steps={{ results: trail.results, total: trail.total, capstone, revealed: revealedSteps }}
+          steps={{ results: trail.results, total: trail.total, capstone, variant, revealed: revealedSteps }}
           before={task}
           onContinue={() => onContinue(final)}
           onSuggestion={(action) => onSuggestion(action, final)}
@@ -235,7 +268,7 @@ function StepTrailItem({ step, result, revealed }: { step: MultistepStepPublic |
           </span>
         </summary>
         <div className="step-trail__body">
-          {step && <Markdown className="step-trail__prompt">{step.prompt}</Markdown>}
+          {step && stepReached(step) && <Markdown className="step-trail__prompt">{step.prompt}</Markdown>}
           {result.explanation.trim() && <Markdown className="step-trail__explanation">{result.explanation}</Markdown>}
           <p className="step-trail__points">{stepPointsLabel(result.score, revealed)}</p>
         </div>
@@ -276,8 +309,10 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
   const [choice, setChoice] = useState<number | null>(null);
   const [response, setResponse] = useState("");
   const [tfMarks, setTfMarks] = useState<TfMark[]>(() => emptyTfMarks(isTfSet ? choices.length : 0));
-  // The server records the hint (POST /hint?step=i), so after a reload it is shown again.
+  // The server records the hint (POST /hint?step=i) and sends its text with the step once used, so after a reload it
+  // is shown again; until then the text comes only from POST /hint.
   const [hint, setHint] = useState<string | null>(() => (hintUsed && step.hint.trim() ? step.hint : null));
+  const hasHint = stepHasHint(step);
   const [hinting, setHinting] = useState(false);
   const [submitting, setSubmitting] = useState<"answer" | "reveal" | null>(null);
   // A response the grader can't take yet ("simplify it", "mark every statement"): said here, not in a toast.
@@ -290,7 +325,7 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
   const ready = isChoice ? choice !== null : isTfSet ? tfResponse !== null : response.trim().length > 0;
   const busy = submitting !== null;
   const canSubmit = !answered && !busy && ready;
-  const canHint = !answered && !busy && !hinting && hint === null && step.hint.trim().length > 0;
+  const canHint = !answered && !busy && !hinting && hint === null && hasHint;
   const last = index >= total - 1;
 
   // Answered: move focus to "Next step" (Enter continues) or, on the last step, leave it to the summary below.
@@ -334,16 +369,10 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
     setHinting(true);
     try {
       const { hint: text } = await getHint(questionId, index);
-      setHint(text.trim() ? text : step.hint);
+      setHint(text);
       onHint();
     } catch (err) {
-      if (isApiError(err, 404) || isApiError(err, 405) || isApiError(err, 422)) {
-        // A server without per-step hints: show it locally; the answer still reports it (hints_used).
-        setHint(step.hint);
-        onHint();
-      } else {
-        toast.error(err);
-      }
+      toast.error(err);
     } finally {
       setHinting(false);
     }
@@ -481,7 +510,7 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
               {submitting === "answer" && <Spinner size={14} label="Checking" />} Check step
             </button>
             <div className="question-card__tools">
-              {step.hint.trim() && (
+              {hasHint && (
                 <button
                   type="button"
                   className="btn btn--ghost btn--sm"

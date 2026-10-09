@@ -14,6 +14,8 @@ import type {
   CourseGraph,
   CourseSummary,
   FoundationNode,
+  GuidedCheckResult,
+  GuidedRevealRequest,
   Health,
   HintResponse,
   JobStatus,
@@ -195,6 +197,19 @@ export const getLesson = (skillId: string, signal?: AbortSignal) => get<Lesson>(
 /** Answer a v2 lesson's inline check (formative: graded, never recorded). `reflect` checks send an empty body. */
 export const checkBlock = (skillId: string, blockIndex: number, body: BlockCheckRequest) =>
   post<BlockCheckResult>(`/api/skills/${seg(skillId)}/blocks/${blockIndex}/check`, body);
+/**
+ * Answer a scored step of a proof lesson inside its task (SPEC §6.3b; `version` = Lesson.version, required). 422 for
+ * an unreadable or unsimplified answer (not a try); 409 for a stale lesson, an earlier step still open, or a finished
+ * task. The result carries the step's record and the updated task (with the next blocks once the step is done).
+ */
+export const checkGuided = (taskId: string, blockIndex: number, body: BlockCheckRequest) =>
+  post<GuidedCheckResult>(`/api/tasks/${seg(taskId)}/blocks/${blockIndex}/check`, body);
+/** "Show answer" on a scored step: it is done with 0 points. */
+export const revealGuided = (taskId: string, blockIndex: number, version: string) =>
+  post<GuidedCheckResult>(`/api/tasks/${seg(taskId)}/blocks/${blockIndex}/reveal`, { version } satisfies GuidedRevealRequest);
+/** Report a done scored step's answer key as wrong: its points stop counting (the step's state.voided). */
+export const flagGuided = (taskId: string, blockIndex: number, reason: string) =>
+  post<Task>(`/api/tasks/${seg(taskId)}/blocks/${blockIndex}/flag`, { reason });
 /** "This step isn't clear" on one teaching block (204). */
 export const sendBlockFeedback = (skillId: string, blockIndex: number, body: BlockFeedbackRequest) =>
   post<void>(`/api/skills/${seg(skillId)}/blocks/${blockIndex}/feedback`, body);

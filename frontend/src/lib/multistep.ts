@@ -1,7 +1,7 @@
 // Multistep questions (kind "multistep"; the lesson's capstone): one problem, 2–4 guided steps answered one at a time.
 // The learner sees each step's result before the next one; answered steps stay above as a compact trail.
 // The server records every step (QuestionPublic.step_index / step_results), so a reload resumes at the right step.
-import type { AnswerResult, QuestionPublic, StepResult } from "../types";
+import type { AnswerResult, MultistepStepPublic, QuestionPublic, StepResult } from "../types";
 import { halves } from "./score.ts";
 
 export interface StepTrail {
@@ -122,6 +122,26 @@ export function multistepNote(result: Pick<AnswerResult, "feedback"> & { note?: 
   const recap = STEPS_RECAP.exec(result.feedback);
   return recap ? result.feedback.slice(recap.index + recap[0].length).trim() : "";
 }
+
+/**
+ * The steps as far as the server has sent them. A step after the current one comes without its prompt, choices and
+ * hint (they could give an earlier answer away); the task returned with a step's answer carries the next step's. A
+ * step keeps what it already showed (a used hint's text) when the newer copy is still blank.
+ */
+export function mergeSteps(known: readonly MultistepStepPublic[], fresh: readonly MultistepStepPublic[] | null | undefined): MultistepStepPublic[] {
+  if (!fresh || fresh.length !== known.length) return [...known];
+  return known.map((step, i) => {
+    const next = fresh[i];
+    if (!next || next.index !== step.index || !next.prompt.trim()) return step;
+    return next.hint.trim() || !step.hint.trim() ? next : { ...next, hint: step.hint };
+  });
+}
+
+/** A step can be shown: the server has sent its prompt (a later step's is blank until it is reached). */
+export const stepReached = (step: Pick<MultistepStepPublic, "prompt"> | null | undefined): boolean => Boolean(step?.prompt.trim());
+
+/** The step has a hint to ask for (its text comes from POST /hint; older servers sent the text, not has_hint). */
+export const stepHasHint = (step: Pick<MultistepStepPublic, "hint"> & { has_hint?: boolean }): boolean => Boolean(step.has_hint) || step.hint.trim().length > 0;
 
 /** The response finished the whole question (the last step, or the server ended it). */
 export const questionDone = (result: AnswerResult): boolean => result.status !== "step" && result.question_done !== false;

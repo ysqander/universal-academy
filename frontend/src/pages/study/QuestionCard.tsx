@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { getHint, isApiError, revealSolution, submitAnswer } from "../../api";
+import { getHint, revealSolution, submitAnswer } from "../../api";
 import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
@@ -9,6 +9,7 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useStopwatch } from "../../hooks/useStopwatch";
 import { ChoiceList, FreeResponseInput, MathInput, TfKeyList, TrueFalseSetInput, type ChoiceMark } from "../../components/answers/AnswerInputs";
 import { formatClock } from "../../lib/format";
+import { hintTotal as hintTotalOf } from "../../lib/score";
 import { emptyTfMarks, encodeTfMarks, markNextUnmarked, parseTfKey, resolveTfKey, tfRowResults, type TfLetter, type TfMark } from "../../lib/trueFalseSet";
 import type { AnswerResult, QuestionPublic, RevealResponse, SelfGrade, Task } from "../../types";
 import { FeedbackPanel, type SuggestionAction } from "./FeedbackPanel";
@@ -56,7 +57,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const [response, setResponse] = useState(committed ?? "");
   // true_false_set: one True/False mark per statement, sent as "TFT".
   const [tfMarks, setTfMarks] = useState<TfMark[]>(() => emptyTfMarks(question.kind === "true_false_set" ? question.choices.length : 0));
-  // Hints come from POST /hint (recorded server-side, so a reload can't erase them); texts by hint index.
+  // Hints come from POST /hint (recorded server-side, so a reload can't erase them); texts by hint index. The question
+  // carries the texts of the hints already shown (hints_used of them), never the ones still to come.
   const [hintTexts, setHintTexts] = useState<string[]>(() => question.hints.slice(0, question.hints_used));
   const [hinting, setHinting] = useState(false);
   const [revealed, setRevealed] = useState<RevealResponse | null>(null);
@@ -114,7 +116,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
   const canSubmit =
     !answered && !submitting && !restoring && (isChoice ? choice !== null : isTfSet ? tfResponse !== null : response.trim().length > 0);
   const hintsShown = hintTexts.length;
-  const hintTotal = Math.max(question.hints.length, hintsShown);
+  const hintTotal = hintTotalOf(question, hintsShown);
   const shortFreeAnswer = isFree && committedLength(response) < MIN_COMMITTED_CHARS;
 
   const send = async (selfGrade: SelfGrade | null) => {
@@ -172,7 +174,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     }
   };
 
-  const canHint = !answered && !grading && !hinting && !restoring && hintsShown < question.hints.length;
+  const canHint = !answered && !grading && !hinting && !restoring && hintsShown < hintTotal;
 
   const nextHint = async () => {
     if (!canHint) return;
@@ -180,17 +182,12 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
     try {
       const { hint, hints_used: used } = await getHint(question.id);
       setHintTexts((prev) => {
-        // The server's count wins: hints taken before a reload come back too (texts from the question).
+        // The server's count wins (a hint taken in another tab counts too); the text is the one it just sent.
         const count = Math.max(used, prev.length);
-        return Array.from({ length: count }, (_, i) => (i === used - 1 ? hint : (prev[i] ?? question.hints[i] ?? "")));
+        return Array.from({ length: count }, (_, i) => (i === used - 1 ? hint : (prev[i] ?? "")));
       });
     } catch (err) {
-      if (isApiError(err, 404) || isApiError(err, 405)) {
-        // Older server without POST /hint: show it locally; the count is still reported with the answer.
-        setHintTexts((prev) => [...prev, question.hints[prev.length] ?? ""]);
-      } else {
-        toast.error(err);
-      }
+      toast.error(err);
     } finally {
       setHinting(false);
     }
@@ -310,7 +307,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                   Hint {i + 1} of {hintTotal}
                   {i === 0 && !answered && <span className="hint__cost"> · ½ point for this question</span>}
                 </span>
-                <Markdown>{hint}</Markdown>
+                {hint && <Markdown>{hint}</Markdown>}
               </li>
             ))}
           </ol>
@@ -381,7 +378,7 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
               {restoring && committed ? "Reopening your answer…" : isFree ? "Compare with the model answer" : "Check answer"}
             </button>
             <div className="question-card__tools">
-              {question.hints.length > 0 && (
+              {hintTotal > 0 && (
                 <button
                   type="button"
                   className="btn btn--ghost btn--sm"
@@ -390,8 +387,8 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
                   title={hintsShown === 0 ? "With a hint, a right answer earns ½ point" : undefined}
                 >
                   {hinting ? <Spinner size={14} label="Loading hint" /> : <Icon name="bulb" size={15} />}
-                  {hintsShown === 0 ? "Hint" : hintsShown < question.hints.length ? `Next hint (${hintsShown + 1} of ${question.hints.length})` : "No more hints"}
-                  {hintsShown < question.hints.length && <kbd>H</kbd>}
+                  {hintsShown === 0 ? "Hint" : hintsShown < hintTotal ? `Next hint (${hintsShown + 1} of ${hintTotal})` : "No more hints"}
+                  {hintsShown < hintTotal && <kbd>H</kbd>}
                 </button>
               )}
               <button

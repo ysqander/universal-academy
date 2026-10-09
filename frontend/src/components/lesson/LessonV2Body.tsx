@@ -1,12 +1,13 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { FigureCatalogContext } from "../../context/course";
 import { kindLabel } from "../../lib/format";
+import { isScoredCheck, isScoredLesson, moreSteps, type GuidedHandlers } from "../../lib/guided";
 import {
   flowReducer,
   initialFlow,
-  lessonFingerprint,
   loadAnswered,
   saveAnswered,
+  sequenceKey,
   stripGoalLabel,
   visibleBlocks,
   type CheckOutcome,
@@ -29,21 +30,29 @@ interface LessonV2BodyProps {
   preview?: boolean;
   /** Shown after the whole sequence once no check holds it back (e.g. "Start practice"). */
   footer?: ReactNode;
+  /** A proof lesson's scored steps are answered in this task (the study page); null/absent elsewhere. */
+  guided?: GuidedHandlers | null;
 }
 
 /** A v2 lesson: a planned teaching sequence (blocks with a running example and inline checks) instead of fixed sections. */
 export function LessonV2Body(props: LessonV2BodyProps) {
-  const fingerprint = useMemo(() => lessonFingerprint(props.lesson), [props.lesson]);
-  // A different lesson (or a regenerated one) starts with fresh gating state.
+  const fingerprint = useMemo(() => sequenceKey(props.lesson, props.guided?.taskId), [props.lesson, props.guided?.taskId]);
+  // A different lesson (or a regenerated one) starts with fresh gating state. A scored proof lesson keeps its key while
+  // the server sends the next blocks (sequenceKey).
   return <Sequence key={fingerprint} fingerprint={fingerprint} {...props} />;
 }
 
-function Sequence({ lesson, kind, preview = false, footer, fingerprint }: LessonV2BodyProps & { fingerprint: string }) {
+function Sequence({ lesson, kind, preview = false, footer, guided = null, fingerprint }: LessonV2BodyProps & { fingerprint: string }) {
   const gating = !preview;
-  // Answered checks survive a reload within the browser session; skips don't (the gate closes again).
+  // Answered checks survive a reload within the browser session; skips don't (the gate closes again). Scored proof
+  // steps are never stored here: their record comes from the server with the lesson.
   const [flow, dispatch] = useReducer(flowReducer, fingerprint, (fp: string) => initialFlow(gating ? loadAnswered(fp) : {}));
   const catalog = useMemo(() => Object.fromEntries(lesson.figures.map((f) => [localFigureId(f.id), f])), [lesson.figures]);
-  const { shown, hidden, gate } = visibleBlocks(lesson.blocks, flow, gating);
+  // A scored proof lesson: the server sends the blocks up to the first open step; blocks_total counts them all.
+  const total = Math.max(lesson.blocks_total || 0, lesson.blocks.length);
+  const { shown, hidden, gate } = visibleBlocks(lesson.blocks, flow, gating, total);
+  const scoredGate = gate !== null && isScoredCheck(gate.check);
+  const notSent = isScoredLesson(lesson) ? total - lesson.blocks.length : 0;
   const blockRefs = useRef(new Map<number, HTMLElement>());
   const footerRef = useRef<HTMLDivElement>(null);
   // Blocks already on screen at first render don't fade in; later ones (revealed by a gate) do.
@@ -142,27 +151,40 @@ function Sequence({ lesson, kind, preview = false, footer, fingerprint }: Lesson
                   outcome={flow.answered[block.index] ?? null}
                   skipped={Boolean(flow.skipped[block.index])}
                   onAnswered={onAnswered}
+                  guided={guided}
                   fresh={position >= initialShown}
                 />
               ))}
             </div>
 
             {gate ? (
-              <div className="teach-gate">
+              <div className="teach-gate" data-scored={scoredGate ? "" : undefined}>
                 <p className="teach-gate__text">
                   <Icon name="lock" size={15} />
                   <span>
-                    Answer the check to continue
-                    {hidden > 0 && <span className="teach-gate__count"> · {hidden === 1 ? "1 more step" : `${hidden} more steps`} after it</span>}
+                    {/* A scored step has no Skip: it counts, and the server sends what follows once it is answered. */}
+                    {scoredGate ? "Answer to continue — this step counts toward your score" : "Answer the check to continue"}
+                    {hidden > 0 && <span className="teach-gate__count"> · {moreSteps(hidden)} after it</span>}
                   </span>
                 </p>
-                <button type="button" className="btn btn--quiet btn--sm teach-gate__skip" onClick={skip} aria-label="Skip the check and show the rest of the lesson">
-                  Skip
-                </button>
+                {!scoredGate && (
+                  <button type="button" className="btn btn--quiet btn--sm teach-gate__skip" onClick={skip} aria-label="Skip the check and show the rest of the lesson">
+                    Skip
+                  </button>
+                )}
               </div>
             ) : (
               <div className="lesson-v2__after">
-                {extraFigures.length > 0 && (
+                {/* The preview of a scored proof lesson: the server sends the blocks up to the first open step only. */}
+                {notSent > 0 && (
+                  <p className="teach-gate">
+                    <span className="teach-gate__text">
+                      <Icon name="lock" size={15} /> {moreSteps(notSent)} in the lesson
+                    </span>
+                  </p>
+                )}
+                {/* Figures of the blocks not sent yet would show out of context. */}
+                {extraFigures.length > 0 && notSent === 0 && (
                   <section className="lesson__section">
                     <h2 className="lesson__h">From the book</h2>
                     <div className="lesson__figures">

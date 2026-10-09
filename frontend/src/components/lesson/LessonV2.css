@@ -250,6 +250,22 @@
   background: var(--paper);
 }
 
+/* Scored proof steps: one more try pending, right on the second try (½), answer shown (0) or reported. */
+.teach-block[data-check="retry"]::before {
+  border: 2px solid var(--status-progress);
+  background: var(--paper);
+}
+
+.teach-block[data-check="half"]::before {
+  border-color: var(--success);
+  background: linear-gradient(90deg, var(--success) 50%, var(--paper) 50%);
+}
+
+.teach-block[data-check="shown"]::before {
+  border-color: var(--faint);
+  background: var(--faint);
+}
+
 .teach-block__content {
   display: flex;
   flex-direction: column;
@@ -495,6 +511,17 @@
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
 }
 
+/* Scored proof steps: right on the second try (½ point), and "not yet" with one more try. */
+.inline-check[data-tone="partial"] {
+  --tone: var(--success);
+  border-color: color-mix(in srgb, var(--success) 30%, var(--line));
+}
+
+.inline-check[data-tone="retry"] {
+  --tone: var(--status-progress);
+  border-color: color-mix(in srgb, var(--status-progress) 45%, var(--line));
+}
+
 .teach-block[data-kind="faded_example"] .inline-check {
   background: color-mix(in srgb, var(--accent-soft) 30%, var(--surface-raised));
 }
@@ -502,12 +529,108 @@
 .inline-check__label {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
+}
+
+/* "Counts toward your score" next to a scored step's label. */
+.inline-check__tag {
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: var(--surface);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  line-height: 1.7;
+}
+
+/* A scored step in the lesson preview (answered in the lesson), or one not scored this time. */
+.inline-check__note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.inline-check__note > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.inline-check__points {
+  margin-left: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The step's hint after a wrong first answer. */
+.inline-check__hint {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--status-progress);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--status-progress-bg);
+}
+
+.inline-check__hint-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--status-progress);
+}
+
+.inline-check__hint .md {
+  font-size: var(--text-base);
+}
+
+/* "Show answer" asks first: the step then earns 0 points. */
+.inline-check__confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.inline-check__confirm-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+
+.inline-check__confirm-text > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.inline-check__confirm-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.inline-check__flag {
+  align-self: flex-start;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .inline-check__actions {
@@ -581,6 +704,7 @@
 .inline-check__verdict {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-weight: 700;
   color: var(--tone);
@@ -658,6 +782,11 @@
 
 .teach-gate__count {
   color: var(--muted);
+}
+
+/* A scored proof step holds the rest back until it is answered (no Skip). */
+.teach-gate[data-scored] {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong));
 }
 
 .teach-gate__skip {

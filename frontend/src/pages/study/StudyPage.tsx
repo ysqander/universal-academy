@@ -26,6 +26,7 @@ import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import { useQuizClock } from "../../hooks/useQuizClock";
 import { useResource } from "../../hooks/useResource";
 import { TASK_LABEL } from "../../lib/format";
+import { keepsAnswersOnLeave } from "../../lib/guided";
 import { plainText, prettyTitle } from "../../lib/markdown";
 import {
   forgetOpenQuiz,
@@ -534,7 +535,7 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   } else if (task.phase === "learn") {
     body =
       task.type === "lesson" && task.lesson ? (
-        <LearnView task={task} lesson={task.lesson} onStart={() => void beginPractice(task)} starting={busy === "practice"} />
+        <LearnView task={task} lesson={task.lesson} onStart={() => void beginPractice(task)} starting={busy === "practice"} onTask={replaceTask} />
       ) : task.type === "lesson" ? (
         <StateMessage
           icon="clock"
@@ -607,9 +608,11 @@ export default function StudyPage({ courseId }: { courseId: string }) {
         }
       >
         <p>
-          Progress inside this task is discarded and it earns no XP. It will be offered again later. To pause instead, just go back
-          to the map — the task stays open and <strong>Continue learning</strong> resumes it (starting a different task there asks
-          first).
+          {task && keepsAnswersOnLeave(task)
+            ? "Your answers so far are kept — the lesson picks up where you left off when you start it again."
+            : "Progress inside this task is discarded and it earns no XP. It will be offered again later."}{" "}
+          To pause instead, just go back to the map — the task stays open and <strong>Continue learning</strong> resumes it
+          (starting a different task there asks first).
         </p>
       </Dialog>
     </CourseProvider>

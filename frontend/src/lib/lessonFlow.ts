@@ -1,7 +1,9 @@
 // Soft gating of a v2 teaching sequence: content after an inline check that is neither answered nor skipped stays
 // collapsed. Gating state lives per lesson view; answered checks are kept for the browser session (sessionStorage),
-// skips are not (a reload closes skipped gates again).
-import type { BlockCheckResult, Lesson } from "../types";
+// skips are not (a reload closes skipped gates again). A proof lesson's scored steps (lib/guided.ts) gate by the
+// server's record instead: never skipped, never stored here — the server sends the blocks after one only once it is done.
+import type { BlockCheckResult, InlineCheckPublic, Lesson } from "../types";
+import { holdsGate, isScoredCheck } from "./guided.ts";
 
 export interface CheckOutcome {
   /** What was sent: numeric / expression / true_false_set response ("TFT"), or the chosen index. */
@@ -36,8 +38,17 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
 interface GateBlock {
   index: number;
-  check: unknown;
+  check: (Pick<InlineCheckPublic, "kind"> & Partial<Pick<InlineCheckPublic, "scored" | "state">>) | null | undefined;
 }
+
+/** The block's check still holds back what follows: a scored step until the server says it is done; any other check
+ * until it is answered or skipped. */
+const holds = (block: GateBlock, state: FlowState): boolean => {
+  const check = block.check;
+  if (!check) return false;
+  if (isScoredCheck(check)) return holdsGate(check);
+  return !state.answered[block.index] && !state.skipped[block.index];
+};
 
 /**
  * Position (in `blocks`, not the block's own index) of the first block whose inline check is still open — neither
@@ -45,15 +56,23 @@ interface GateBlock {
  * Null when nothing is gated.
  */
 export function gatePosition(blocks: readonly GateBlock[], state: FlowState): number | null {
-  const at = blocks.findIndex((b) => b.check !== null && b.check !== undefined && !state.answered[b.index] && !state.skipped[b.index]);
+  const at = blocks.findIndex((b) => holds(b, state));
   return at < 0 ? null : at;
 }
 
-/** The blocks to render now, how many are still collapsed behind the gate, and the gating block (null = open). */
-export function visibleBlocks<T extends GateBlock>(blocks: readonly T[], state: FlowState, gating: boolean): { shown: T[]; hidden: number; gate: T | null } {
+/**
+ * The blocks to render now, how many are still collapsed behind the gate, and the gating block (null = open).
+ * `total`: every block of the lesson, when the server holds some back (Lesson.blocks_total of a scored proof lesson).
+ */
+export function visibleBlocks<T extends GateBlock>(
+  blocks: readonly T[],
+  state: FlowState,
+  gating: boolean,
+  total = blocks.length,
+): { shown: T[]; hidden: number; gate: T | null } {
   const at = gating ? gatePosition(blocks, state) : null;
   if (at === null) return { shown: [...blocks], hidden: 0, gate: null };
-  return { shown: blocks.slice(0, at + 1), hidden: blocks.length - at - 1, gate: blocks[at] };
+  return { shown: blocks.slice(0, at + 1), hidden: Math.max(total, blocks.length) - at - 1, gate: blocks[at] };
 }
 
 /** Short, stable fingerprint of the teaching sequence: a regenerated lesson must not inherit old answers. */
@@ -67,6 +86,15 @@ export function lessonFingerprint(lesson: Pick<Lesson, "skill_id" | "blocks">): 
     h2 = (Math.imul(h2, 33) + c) >>> 0;
   }
   return `${h1.toString(36)}${h2.toString(36)}`;
+}
+
+/**
+ * The identity of a lesson view's gating state (its React key and its storage key). A scored proof lesson grows as
+ * the server sends the next blocks, so it is named by its version and task, not by its blocks: a step answered must
+ * not remount the sequence (focus and the fade-in of the new blocks would be lost).
+ */
+export function sequenceKey(lesson: Pick<Lesson, "skill_id" | "blocks" | "guided" | "version">, taskId?: string | null): string {
+  return lesson.guided === "scored" ? `g:${lesson.skill_id}:${lesson.version}:${taskId ?? ""}` : lessonFingerprint(lesson);
 }
 
 const storageKey = (fingerprint: string): string => `ua:v2-checks:${fingerprint}`;

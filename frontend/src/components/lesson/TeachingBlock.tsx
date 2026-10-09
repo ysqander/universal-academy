@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type Ref } from "react";
 import { isApiError, sendBlockFeedback } from "../../api";
 import { useToast } from "../../context/toast";
+import { guidedDot, isScoredCheck, type GuidedHandlers } from "../../lib/guided";
 import type { CheckOutcome } from "../../lib/lessonFlow";
 import type { TeachingBlockView } from "../../types";
 import { Icon } from "../Icon";
 import { Markdown } from "../Markdown";
 import { Spinner } from "../Spinner";
 import { VisualizationView } from "../VisualizationView";
+import { GuidedCheck } from "./GuidedCheck";
 import { InlineCheck } from "./InlineCheck";
 import { StaleLessonNotice } from "./StaleLessonNotice";
 
@@ -18,6 +20,8 @@ interface TeachingBlockProps {
   outcome: CheckOutcome | null;
   skipped: boolean;
   onAnswered: (index: number, outcome: CheckOutcome) => void;
+  /** The task a scored proof step is answered in (null: the lesson preview, or a lesson without scored steps). */
+  guided: GuidedHandlers | null;
   /** Newly revealed after a gate opened: fade in. */
   fresh: boolean;
   ref?: Ref<HTMLElement>;
@@ -29,12 +33,15 @@ const CHECK_LABEL: Partial<Record<TeachingBlockView["kind"], string>> = {
 
 function checkState(block: TeachingBlockView, outcome: CheckOutcome | null, skipped: boolean): string | undefined {
   if (!block.check) return undefined;
+  // A scored proof step: the server's record (retry, ½ on the second try, answer shown …).
+  if (isScoredCheck(block.check)) return guidedDot(block.check.state);
   if (outcome) return outcome.result.correct === false ? "missed" : "done";
   return skipped ? "skipped" : "open";
 }
 
 /** One step of a v2 teaching sequence: optional heading, text, visual and inline check, plus "This step isn't clear". */
-export function TeachingBlock({ skillId, version, block, outcome, skipped, onAnswered, fresh, ref }: TeachingBlockProps) {
+export function TeachingBlock({ skillId, version, block, outcome, skipped, onAnswered, guided, fresh, ref }: TeachingBlockProps) {
+  const label = block.check ? (CHECK_LABEL[block.kind] ?? (block.check.kind === "reflect" ? "Think about it" : "Quick check")) : "";
   const headingId = useId();
   const viz = block.visualization;
   const showViz = Boolean(viz && (viz.format !== "none" || viz.figure));
@@ -63,17 +70,20 @@ export function TeachingBlock({ skillId, version, block, outcome, skipped, onAns
         )}
         <Markdown className="teach-block__body">{block.body}</Markdown>
         {viz && showViz && <VisualizationView viz={viz} />}
-        {block.check && (
-          <InlineCheck
-            skillId={skillId}
-            version={version}
-            blockIndex={block.index}
-            check={block.check}
-            outcome={outcome}
-            onAnswered={(next) => onAnswered(block.index, next)}
-            label={CHECK_LABEL[block.kind] ?? (block.check.kind === "reflect" ? "Think about it" : "Quick check")}
-          />
-        )}
+        {block.check &&
+          (isScoredCheck(block.check) ? (
+            <GuidedCheck version={version} blockIndex={block.index} check={block.check} label={label} guided={guided} />
+          ) : (
+            <InlineCheck
+              skillId={skillId}
+              version={version}
+              blockIndex={block.index}
+              check={block.check}
+              outcome={outcome}
+              onAnswered={(next) => onAnswered(block.index, next)}
+              label={label}
+            />
+          ))}
       </div>
     </section>
   );

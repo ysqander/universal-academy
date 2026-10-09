@@ -274,7 +274,10 @@ export interface MultistepStepPublic {
   prompt: string;
   kind: StepKind;
   choices: string[];
-  hint: string; // using it (POST /api/questions/{qid}/hint?step=i) halves the step's point
+  // Using the hint (POST /api/questions/{qid}/hint?step=i) halves the step's point. Its text is sent only once used
+  // (has_hint says whether there is one); a step after the current one comes without prompt, choices or hint.
+  hint: string;
+  has_hint: boolean;
 }
 
 export interface StepResult {
@@ -296,7 +299,8 @@ export interface QuestionPublic {
   kind: QuestionKind;
   prompt: string;
   choices: string[];
-  hints: string[];
+  hints: string[]; // the hints already shown for this attempt (hints_used of them); the next comes from POST /hint
+  hint_count: number; // how many hints the question has
   checklist: string[];
   source_exercise: string | null;
   flagged: boolean;
@@ -325,10 +329,31 @@ export interface KnowledgePoint {
   question_count: number;
 }
 
+/** The server's record of a scored inline check (a proof lesson's guided step, SPEC §6.3b). */
+export interface GuidedCheckState {
+  status: "open" | "retry" | "done"; // retry: the first answer was wrong; one more try for ½ point
+  tries: number; // answers given (an unreadable answer is not a try)
+  first_response: string | null; // the wrong first answer (choice checks: the option index as a string)
+  response: string | null; // done: the answer that ended the check (null: the answer was shown instead)
+  correct: boolean | null; // done: whether that answer was right (null: shown without an answer)
+  points: number | null; // done: 1 first try / 0.5 second try / 0
+  revealed: boolean; // done through "Show answer"
+  feedback: string; // the grader's message for the last answer
+  hint: string; // sent once the first answer was wrong
+  answer_display: string; // done only
+  explanation: string; // done only
+  voided: boolean; // reported as wrong by the learner: not counted
+  scored: boolean; // false on a retry of the lesson (shown with its answer, not scored again)
+}
+
 export interface InlineCheckPublic {
   kind: "numeric" | "expression" | "multiple_choice" | "true_false" | "true_false_set" | "reflect";
   prompt: string;
   choices: string[];
+  /** A proof lesson's guided step: answered via POST /api/tasks/{tid}/blocks/{i}/check and counted in the score. */
+  scored: boolean;
+  second_try: boolean; // scored: a wrong first answer gets one more try for ½ point
+  state: GuidedCheckState | null; // scored: the server's record (null in a preview of a skill never started)
 }
 
 export type TeachingBlockKind = "setup" | "explain" | "demonstrate" | "check" | "faded_example" | "generalize" | "summary";
@@ -355,6 +380,17 @@ export interface BlockCheckResult {
   explanation: string;
 }
 
+export interface GuidedRevealRequest {
+  version: string; // Lesson.version (required)
+}
+
+/** POST /api/tasks/{tid}/blocks/{i}/check (body: BlockCheckRequest with version) and .../reveal. */
+export interface GuidedCheckResult {
+  check: GuidedCheckState;
+  final: boolean; // the check is done (its points are decided)
+  task: Task; // updated task: progress, and the lesson with the next blocks once the check is done
+}
+
 export interface BlockFeedbackRequest {
   kind?: "unclear";
   note?: string;
@@ -368,6 +404,10 @@ export interface Lesson {
   objective: string;
   format: "v1" | "v2"; // v2 = planned teaching sequence (blocks)
   version: string; // hash of the stored lesson; send with block checks/feedback (409 when stale)
+  /** Proof lessons: "scored" = the checks are scored guided steps and blocks after the first open one are not sent
+   * yet (blocks_total counts them); "retry" = a later attempt: the checks are shown answered, not scored. */
+  guided: "scored" | "retry" | null;
+  blocks_total: number; // every block of the lesson, including those not sent yet
   goal_line: string;
   blocks: TeachingBlockView[];
   assumed: string[];
@@ -455,6 +495,12 @@ export interface TaskProgress {
   in_capstone: boolean; // the final multistep problem is being answered
   has_capstone: boolean; // the task ends with (or includes) a capstone
   halted?: boolean; // lesson stopped early (80 % became unreachable with planned questions left); older servers: absent
+  // Proof lessons with scored guided steps: the steps count like questions, then one variant problem (weight 2).
+  guided_total: number; // scored guided steps in this attempt (0: none, or a retry where they are not scored)
+  guided_done: number; // of them, answered (or shown)
+  in_guided: boolean; // guided steps are still open: the practice can't start yet
+  variant: boolean; // the final problem is the proof lesson's variant (same idea, something changes)
+  best_possible: number; // the score if everything still planned is answered right
 }
 
 export interface Task {

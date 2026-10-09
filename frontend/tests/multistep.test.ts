@@ -6,12 +6,15 @@ import {
   allAnswered,
   earnedSteps,
   initialTrail,
+  mergeSteps,
   multistepNote,
   questionDone,
   revealedStepIndexes,
   STEP_MARK_LABEL,
   stepMark,
   stepPips,
+  stepHasHint,
+  stepReached,
   stepResultOf,
   stepRevealed,
   stepsSummary,
@@ -21,7 +24,7 @@ import {
 } from "../src/lib/multistep.ts";
 import type { AnswerResult, MultistepStepPublic, StepResult, Task } from "../src/types.ts";
 
-const step = (index: number): MultistepStepPublic => ({ index, prompt: `Step ${index}`, kind: "expression", choices: [], hint: "Use i^2 = -1." });
+const step = (index: number): MultistepStepPublic => ({ index, prompt: `Step ${index}`, kind: "expression", choices: [], hint: "Use i^2 = -1.", has_hint: true });
 const steps = [step(0), step(1), step(2)];
 const result = (index: number, score: number): StepResult => ({
   index,
@@ -172,4 +175,33 @@ test("multistepNote: the server's note for a finished multistep question, withou
   );
   assert.equal(multistepNote({ feedback: "Not quite. Problem complete: 1 of 3 steps right." }), "");
   assert.equal(multistepNote({ feedback: "Correct." }), "");
+});
+
+test("a later step's prompt arrives with the answer to the step before it; nothing is shown before that", () => {
+  const blank = (index: number): MultistepStepPublic => ({ index, prompt: "", kind: "multiple_choice", choices: [], hint: "", has_hint: true });
+  // As served: step 1 reached, its hint not used; steps 2 and 3 blank.
+  const served = [{ ...step(0), hint: "" }, blank(1), blank(2)];
+  assert.equal(stepReached(served[0]), true);
+  assert.equal(stepReached(served[1]), false);
+  assert.equal(stepReached(undefined), false);
+  // The task after answering step 1 carries step 2.
+  const after = [{ ...step(0), hint: "" }, { ...blank(1), prompt: "Which law?", choices: ["A", "B"] }, blank(2)];
+  const merged = mergeSteps(served, after);
+  assert.equal(merged[1].prompt, "Which law?");
+  assert.deepEqual(merged[1].choices, ["A", "B"]);
+  assert.equal(stepReached(merged[2]), false);
+  // A hint already shown keeps its text when a later copy of the step is blank.
+  const hinted = [{ ...step(0), hint: "Use i^2 = -1." }, blank(1), blank(2)];
+  assert.equal(mergeSteps(hinted, after)[0].hint, "Use i^2 = -1.");
+  // Never back to blank; a different shape is ignored.
+  assert.deepEqual(mergeSteps(merged, served), merged);
+  assert.deepEqual(mergeSteps(served, after.slice(0, 2)), served);
+  assert.deepEqual(mergeSteps(served, null), served);
+});
+
+test("a step's hint is offered when the server says it has one (its text comes from POST /hint)", () => {
+  assert.equal(stepHasHint({ hint: "", has_hint: true }), true);
+  assert.equal(stepHasHint({ hint: "", has_hint: false }), false);
+  // Older servers: the text, no flag.
+  assert.equal(stepHasHint({ hint: "Use i^2 = -1." }), true);
 });

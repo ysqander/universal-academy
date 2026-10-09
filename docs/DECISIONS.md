@@ -352,9 +352,14 @@ Details: [SPEC.md §6.7](SPEC.md).
   could be read off the explanation just shown, and the additive inverse (half the objective) was proved nowhere
   served — were fixed by making the additive inverse the variant (`regenerate --only capstone --note`); five minor
   wording fixes were made by hand in the sandbox before import. Still open there: the learner never does a check
-  themselves, and the numbers case's slot row is shown filled. Next: one proof skill per remaining pattern (S16
-  suppose_two, S17 law_chain, S18 two_halves, S20 conditions_or_counterexample), each run in a sandbox and judged
-  before import.
+  themselves, and the numbers case's slot row is shown filled.
+- S10 (two_routes) is in the real course since 2026-10-09, generated with the faster default (21.5 minutes, $3.94)
+  plus a variant rewrite ($0.76) after the spot check: the variant's step 2 explanation named the law of F that step 3
+  asked about — now a hard check. Spot-check minor findings left open: Block 4 and Block 10's scored steps are close to
+  trivial (a sum of given pairs; the guided cell renamed), Block 9's statements paraphrase text on screen, and the
+  objective's other laws (commutativity, associativity, identities, inverses) appear only in practice and reviews.
+  Next: one proof skill per remaining pattern (S16 suppose_two, S17 law_chain, S18 two_halves, S20
+  conditions_or_counterexample), generated together in parallel; the first of each pattern spot-checked.
 - Quiz difficulty adaptation is a simple tier nudge; Math Academy also weighs response time (not done).
 - Evaluation of the 2026-10-07 re-plans (8 lessons, independent judges; all "much better" than v1, no wrong keys):
   the patterns it found — recognition-heavy served questions, misses re-tested only on the same numbers, long

@@ -22,7 +22,8 @@ input is reported as "too complex to check" and the worker is killed, so grading
 
 Symbol convention: names starting with z or w are complex (z, w, z_1, w2 ...); every other letter is real.
 This mirrors complex-number texts (z = a + bi with a, b real) and lets |z|^2 and z^2 be told apart.
-Indexed names are canonical: x1, x_1, x_{1} and x₁ are the same symbol x_1.
+Indexed names are canonical: x1, x_1, x_{1} and x₁ are the same symbol x_1. A one-letter index works the same way when
+glued: 'ax_k' is a·x_k and 'a_kx_k' is a_k·x_k.
 
 Letter runs: 'xy' is x*y, glued function names are peeled off ('sinx' -> sin(x), 'xsin(x)' -> x*sin(x)),
 're'/'im'/'arg' are functions only when applied to something ('re z', 'arg(z)'; but 're^(iθ)' is r·e^(iθ)), \\Re,
@@ -370,6 +371,9 @@ _TOKEN = re.compile(r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|[A-Za-z_
 # letters, then (index, letters)*, then an optional index: unambiguous, so matching is linear (no nested
 # quantifiers: a letter run ending in "_" must not backtrack exponentially).
 _INDEXED_WORD = re.compile(r"[A-Za-z]+(?:_?\d+[A-Za-z]+)*(?:_?\d+)?")
+# names with a one-letter index, glued as typed: 'ax_k' (a·x_k), 'a_kx_k' (a_k·x_k). Every segment ends at its index
+# letter, so 'x_ky' (x_k·y or x_{ky}?) is left whole and reported as an unknown name.
+_LETTER_INDEXED_WORD = re.compile(r"(?:[A-Za-z]+_[A-Za-z])+")
 
 
 def _peel(word: str, call: bool, keep_greek: frozenset[str], peel: tuple[str, ...]) -> list[str]:
@@ -410,8 +414,17 @@ def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
             call = True  # 'arg z', 're z', 'im z_1', 'arg |z|' (-> ' Abs(') are applications; 're**(it)' is not
         if "_" not in tok and not any(c.isdigit() for c in tok):
             return " ".join(_peel(tok, call, keep_greek, peel))
+        if _LETTER_INDEXED_WORD.fullmatch(tok):  # ax_k -> a x_k, as ax_1 -> a x_1
+            parts = []
+            for letters, index in re.findall(r"([A-Za-z]+)_([A-Za-z])", tok):
+                pieces = _peel(letters, False, keep_greek, peel)
+                if pieces[-1] in _KNOWN_NAMES:
+                    return tok  # sqrt_k ... (checked later)
+                pieces[-1] = f"{pieces[-1]}_{index}"
+                parts.extend(pieces)
+            return " ".join(parts)
         if not _INDEXED_WORD.fullmatch(tok):
-            return tok  # v_k, x_ab, __x ... (checked later)
+            return tok  # x_ab, x_ky, __x ... (checked later)
         parts: list[str] = []
         segments = re.findall(r"([A-Za-z]+)(?:_?(\d+))?", tok)
         for n, (letters, index) in enumerate(segments):

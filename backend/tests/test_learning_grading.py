@@ -372,6 +372,11 @@ READS = [
     ("x_1*x_2", "x_1x_2"),
     ("x_1+x_2", "x₁+x₂"),
     ("2*x_1+x_2", "2x1+x2"),
+    # a one-letter index glued to its coefficient (S10's variant, 2026-10-10: '(ax_k, bx_k)' was read as unknown names)
+    ("(a+b)*x_k", "ax_k+bx_k"),
+    ("(a+b)*x_k", "(a+b)x_k"),
+    ("a_k*x_k+b_k", "a_kx_k+b_k"),
+    ("lambda*x_k", "λx_k"),
     # glued function names, Greek names, polar form, capitalized names
     ("sin(x)", "sinx"),
     ("ln(x)", "lnx"),
@@ -458,6 +463,17 @@ def test_indexed_word_matching_is_linear() -> None:
         assert grading._INDEXED_WORD.fullmatch(ok), ok
     for bad in ("x_1_2", "v_k", "x_", "x1_", "x__1", "_x"):
         assert not grading._INDEXED_WORD.fullmatch(bad), bad
+
+
+def test_letter_indexed_words_split_like_digit_indexed_ones() -> None:
+    assert grade("(a*x_k, b*x_k)", "(ax_k, bx_k)").correct
+    assert not grade("(a*x_k, b*x_k)", "(bx_k, ax_k)").correct
+    assert "x_ky" in grade("x_k*y", "x_ky").feedback  # x_k·y or x_{ky}? left whole, reported as an unknown name
+    for token in ("a" * 60 + "_", "a_" * 30, "ab_c" * 20 + "_"):  # no exponential backtracking
+        start = time.perf_counter()
+        assert grading._LETTER_INDEXED_WORD.fullmatch(token) is None
+        normalize(token)
+        assert time.perf_counter() - start < 0.05
 
 
 def test_still_wrong_after_canonicalization() -> None:

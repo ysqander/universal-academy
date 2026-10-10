@@ -434,7 +434,7 @@ Details: [SPEC.md §6.7](SPEC.md).
   "Decide whether given operations make a vector space" and S12b, a guided proof "Prove the complexification of R^n is
   a complex vector space" (applied on the live course from the sandbox's saved plan, $6.60; the sandbox run stopped
   after $0.66 — a split cannot be imported). Final reviews: S9, S11 and S12a each had their blocking findings in the
-  capstone, rewritten and verified; S12b 0 blocking (one wording slip fixed by hand). S19–S28 are still v1.
+  capstone, rewritten and verified; S12b 0 blocking (one wording slip fixed by hand). S14–S28 followed (below).
 - **S14–S18 made by Claude Code agents** (2026-10-10, the agent route of §1, no API cost), each re-planned as a kept
   skill in a sandbox and imported (none had attempts): S14 "Compute with the scalar 0 and the zero vector"
   (computation; 4 questions flagged by verification, every knowledge point still at target), S15 "Prove pointwise
@@ -464,8 +464,21 @@ Details: [SPEC.md §6.7](SPEC.md).
   capstone/questions` reads it.
   The S17 judge's proposed claim "the chain could start from $(-1)v$ alone and reach $-v$ one law per line (F)" was
   wrong — $(-1)v=(-1)v+(v+(-v))=\dots=0+(-v)=-v$ needs no uniqueness — a reminder that review findings' fixes are
-  checked before they are applied. Next: S19–S28 (only if the learner asks; the learner's standing choice is about
-  three lessons ahead).
+  checked before they are applied.
+- **S19–S28 made by Claude Code agents** (2026-10-10, the learner asked to use the remaining Claude Code credits for
+  them): ten re-plans in sandboxes, run from a checkout pinned at the pushed commit while the books-folder change was
+  made in the main tree. Four skills split — S20 → S20a/b/c (intersections; unions of two; unions of three), S21 →
+  S21a/b, S25 → S25a/b, S26 → S26a/b — applied on the live course with `replan.py --plan <sandbox plan> --apply-only`
+  and the sandbox lessons brought in with `import_lesson.py` (nothing generated twice). Every final review's remaining
+  blocking issue was handled by the pipeline (capstone or served question rewritten, spare left out); the rule-17 scan
+  was clean; verification agreed on every key but one question (left out). One spot-check round (solver + judge +
+  skeptic, no second round for lack of time): no wrong key; the confirmed blocking findings — scored steps or capstone
+  steps answerable from the screen, served questions copying the worked example shown above them, a capstone step
+  that does not need the steps before it, true/false hints giving every verdict — were fixed in the sandboxes by
+  agents (math checked with SymPy), re-verified by the pipeline and re-imported. The 43 confirmed major findings are
+  still open, listed per lesson in [spot-check-S19-S28.md](spot-check-S19-S28.md): fix them before the learner reaches
+  each lesson. S20a–c and S25a–b were checked for blocking problems only (the weekly agent limit was reached at 19:00):
+  give them a full check before the learner reaches them. The whole chapter now has v2 lessons except S1, S5 and S6 (learned).
 - S10 (two_routes) is in the real course since 2026-10-09, generated with the faster default (21.5 minutes, $3.94)
   plus a variant rewrite ($0.76) after the spot check: the variant's step 2 explanation named the law of F that step 3
   asked about — now a hard check. Spot-check minor findings left open: Block 4 and Block 10's scored steps are close to

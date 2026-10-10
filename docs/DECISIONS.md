@@ -18,6 +18,15 @@ When you change one of these decisions, update this file (and the SPEC section i
 Decision (2026-10-06): keep v2 off the in-app build for now; use it per skill from the command line while the
 generator is still being tuned.
 
+**Agent route (2026-10-10, the learner: "use my Claude Code credits instead of the API … do the same work as you
+would do through the API, but do it yourself with agents").** With `UA_AGENT_DIR` set (`app/agent_llm.py`), every
+model call is written as a request file — the same instructions, context, images and output schema — and answered by
+Claude Code agents; the answer is checked against the same schema (`python -m app.agent_llm validate`). API keys are
+blanked. Nothing else changes: planning, writing, reviews, revisions, repairs and verification all run, so an
+agent-made lesson goes through every check an API one does. A Claude Code workflow claims the requests and dispatches
+one agent per call, matching the Anthropic mapping (Haiku for verification, the session model otherwise, at the
+role's effort). A lesson takes about 40–60 minutes (several run in parallel). Used for S14–S18.
+
 **Providers (decided 2026-10-08, the learner: "switch between openAI and anthropic").** Every LLM role runs on OpenAI
 or Anthropic (`UA_LLM_PROVIDER`, per role `UA_PROVIDER_<ROLE>`; default OpenAI until a Claude-generated lesson has been
 judged). Anthropic takes Opus 5.5 where OpenAI uses Sol and Haiku 5.5 where it uses Luna, at the same per-role efforts
@@ -316,6 +325,23 @@ Details: [SPEC.md §6.7](SPEC.md).
 ## 7. Grader conventions
 
 - `ell`, `\ell` and `ℓ` are the variable `l`.
+- **Indexed names** (2026-10-10): a digit index is canonical (`x1` = `x_1`); a one-letter index glued to its
+  coefficient splits off like a digit one (`ax_k` = a·x_k, `a_kx_k` = a_k·x_k); a longer index is one name (`a_ij`,
+  `x_ky`, `a_{ij}`); braces or a Unicode subscript end an index (`x_{k}y` and `xₖy` = x_k·y, `x_{1}2` = x_1·2). Greek
+  names keep their index (`lambda_k`, `θ_1`). Glued letters that spell a keyword stay letters, and a number before `j`
+  or `x` is a coefficient, never a Python literal (`2j_k`, `0x_1`). An unknown name that splits into the key's symbols
+  is invalid input with a hint ("write a·x_k"), not wrong.
+- **Subscript key** (2026-10-10, the learner: "first type k then push button and it turns the k into subscript in the
+  preview and is recognized well by the grader"). The answer box's key x<sub>k</sub> turns the index typed just
+  before the caret into the subscript of the letter before it (`xk` → `x_k`, `x12` → `x_12`; a number coefficient is
+  skipped: `2xk` → `2x_k`); pressed again it undoes. It does nothing where the grader would read the result
+  differently and says why under the box: the index would split a name (`theta`, `ln x`), run into the letters after
+  it (`xky`), change how an earlier index is read (`a_ijxj`), or sit after `pi`/`sqrt` (a number), inside a longer
+  number, after a backslash or inside braces. The preview draws names exactly as the grader reads them
+  (known names, Greek, roots that take one number or word, a function without brackets taking the rest of the
+  product), so what is shown is what is graded. Seven adversarial review rounds compared the preview and the grader
+  on generated inputs and on every stored key. Not handled (rare in this course): capital Greek, comma indices
+  `A_{j,k}`, hand-typed LaTeX, `∞`, factorials.
 - Learners must simplify (`require_simplified=True`); the verifier may answer in any equivalent form.
 - **No bypassing the computation, in every lesson** (2026-10-08, the learner: "Make the student do proper work and
   make it not possible to bypass the intended exercise. this is not just for proofs"). For a key with letters, an
@@ -393,7 +419,38 @@ Details: [SPEC.md §6.7](SPEC.md).
   "Decide whether given operations make a vector space" and S12b, a guided proof "Prove the complexification of R^n is
   a complex vector space" (applied on the live course from the sandbox's saved plan, $6.60; the sandbox run stopped
   after $0.66 — a split cannot be imported). Final reviews: S9, S11 and S12a each had their blocking findings in the
-  capstone, rewritten and verified; S12b 0 blocking (one wording slip fixed by hand). S14–S28 are still v1.
+  capstone, rewritten and verified; S12b 0 blocking (one wording slip fixed by hand). S19–S28 are still v1.
+- **S14–S18 made by Claude Code agents** (2026-10-10, the agent route of §1, no API cost), each re-planned as a kept
+  skill in a sandbox and imported (none had attempts): S14 "Compute with the scalar 0 and the zero vector"
+  (computation; 4 questions flagged by verification, every knowledge point still at target), S15 "Prove pointwise
+  constructions are vector spaces", and the first lesson of three proof patterns — S16 "Prove uniqueness and cancel
+  vector addition" (suppose_two), S17 "Prove the zero and negative-scalar identities" (law_chain), S18 "Prove the
+  three-condition subspace test" (two_halves). Final reviews: 0 blocking except S18's k1q1 and k2q1, rewritten in their
+  slots and verified. The spot check of S16–S18 (a solver who recomputed every key and ran the grader on several
+  typed forms, a pedagogy judge, a skeptic per finding) found no wrong key and no correct answer graded wrong. It did
+  confirm one pattern in all three: scored steps answerable from text already on screen — the setup's "We may not
+  use" list stating the very moves a "Which moves may this proof make?" step asks about, an explanation or the notation
+  panel naming the next step's key, a variant whose prompt prints its own chain, a prompt that states the equation
+  forcing its key — and true/false hints whose last hint lists every verdict (½ point for copying; a course-wide fix
+  is a separate task). The final reviews had flagged several of these as minor, and the revision left them. All
+  fixed by hand before the learner reached them, in three rounds — each round's edits were re-checked by an
+  adversarial reviewer with skeptics, and the first two rounds' edits opened new leaks of the same kind (a key
+  copyable from the line printed just above it, a recall in the setup that prints the key, an explanation listing
+  the laws the next statement asks about, a stale hint): claims that apply the rules instead of repeating them, keys
+  moved out of the notation, the setup and earlier explanations, a line for the learner to produce in S17's finish
+  and in S16's and S17's variants, S16's guided case rewritten so that both routes use an outside inverse $y$ like
+  the numbers and the learner builds route 1's first line by translating the numbers' (the book's one chain went to
+  "Go deeper"; letting $x$ play $y$'s part was the symbol swap of complaint 16), S18's first scored step now asks
+  which condition puts $(-2,2)$ into $U$ (the inherited inverse is an option), hints without verdicts, S17 k2q3 and
+  S18 k2q3 out of serving. After each round the lessons passed the mechanical checks and the pipeline's verification
+  again (agents); then they were re-imported. Left open (minor): S17's variant has no typed step (its lines are
+  abstract vectors the grader cannot check, so its scored lines are choices); S18's faded step $(-b,-c)$ is still
+  light; the stored `plan` of S16–S18 still describes the generated version, so a later `regenerate --only
+  capstone/questions` reads it.
+  The S17 judge's proposed claim "the chain could start from $(-1)v$ alone and reach $-v$ one law per line (F)" was
+  wrong — $(-1)v=(-1)v+(v+(-v))=\dots=0+(-v)=-v$ needs no uniqueness — a reminder that review findings' fixes are
+  checked before they are applied. Next: S19–S28 (only if the learner asks; the learner's standing choice is about
+  three lessons ahead).
 - S10 (two_routes) is in the real course since 2026-10-09, generated with the faster default (21.5 minutes, $3.94)
   plus a variant rewrite ($0.76) after the spot check: the variant's step 2 explanation named the law of F that step 3
   asked about — now a hard check. Spot-check minor findings left open: Block 4 and Block 10's scored steps are close to

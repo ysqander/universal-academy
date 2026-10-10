@@ -7,6 +7,7 @@ Roles map to (provider, model, reasoning effort) via settings: OpenAI (this modu
 chosen with UA_LLM_PROVIDER and per role with UA_PROVIDER_<ROLE>. Callers take their instruction texts from the same
 provider's prompt set (app.prompts.for_role). With UA_FAKE_LLM=1 every call is answered by
 app.fake_llm.respond(schema, role, instructions, text) instead (offline tests / UI development), whatever the provider.
+With UA_AGENT_DIR set, every call is written as a request file and answered by Claude Code agents (app/agent_llm.py).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import contextvars
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, TypeVar
 
 import openai
@@ -176,6 +178,13 @@ async def structured(
     effort = raise_effort(effort, effort_notches, provider)
     if effort_notches:
         label = f"{label} @{effort}"
+    if settings.agent_dir:  # answered by Claude Code agents (same request, same schema), no API
+        from . import agent_llm
+
+        return await agent_llm.structured(
+            root=Path(settings.agent_dir), role=role, effort=effort, instructions=instructions, text=text, schema=schema,
+            images=images, shared_prefix=shared_prefix, label=label, timeout=settings.agent_timeout,
+        )
     if provider == "anthropic":
         from . import llm_anthropic
 

@@ -137,6 +137,10 @@ class Settings:
 
     # Set UA_FAKE_LLM=1 to run the whole pipeline offline against canned responses (tests / UI dev).
     fake_llm: bool = field(default_factory=lambda: _env("UA_FAKE_LLM", "0") == "1")
+    # Set UA_AGENT_DIR to a folder to have every model call answered by Claude Code agents (app/agent_llm.py) instead
+    # of an API; UA_AGENT_TIMEOUT (seconds) is how long one call may wait for its answer.
+    agent_dir: str = field(default_factory=lambda: _env("UA_AGENT_DIR", ""))
+    agent_timeout: float = field(default_factory=lambda: float(_env("UA_AGENT_TIMEOUT", "5400")))
 
     @property
     def db_path(self) -> Path:
@@ -151,6 +155,9 @@ class Settings:
         return self.data_dir / "courses"
 
     def __post_init__(self) -> None:
+        if self.agent_dir:  # agents answer every call: no API key may be used, whatever .env holds
+            for key in ("openai_api_key", "anthropic_api_key", "nvidia_api_key"):
+                object.__setattr__(self, key, "")
         for role in ROLES:
             provider = self.provider(role)
             if provider not in PROVIDERS:
@@ -187,7 +194,7 @@ class Settings:
     @property
     def llm_ready(self) -> bool:
         """Every provider the roles use has its key (or the fake LLM answers)."""
-        return self.fake_llm or all(self.api_key(p) for p in self.providers_in_use)
+        return self.fake_llm or bool(self.agent_dir) or all(self.api_key(p) for p in self.providers_in_use)
 
     @property
     def has_nvidia(self) -> bool:

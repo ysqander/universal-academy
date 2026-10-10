@@ -369,7 +369,14 @@ Details: [SPEC.md §6.7](SPEC.md).
   could be read off the explanation just shown, and the additive inverse (half the objective) was proved nowhere
   served — were fixed by making the additive inverse the variant (`regenerate --only capstone --note`); five minor
   wording fixes were made by hand in the sandbox before import. Still open there: the learner never does a check
-  themselves, and the numbers case's slot row is shown filled.
+  themselves, and the numbers case's slot row is shown filled. Patched by hand on 2026-10-10 for rule 17 (§2), before
+  the learner started it: the reflect block went (8 blocks), the scope claim "every nonzero complex number has exactly
+  one inverse — not yet" became "the real equation ac − d = 1 alone determines c and d" (false), and knowledge point 2
+  is "What the proof rests on"; its five scored steps re-verified (all agree) and imported.
+- Rule 17 in stored lessons (2026-10-10): S4a k2q1 (a numeric check and a fixed input offered as proofs) rewritten in
+  place ($0.61; claims about the moves a proof may make). S4a's and S13's reflects stay — both lessons are learned and
+  the teaching is not replayed. S10 still has its reflect, a numbers-scope claim and knowledge point 2's k2q1/k2q2 and
+  explanation — fixed together with its variant once the learner decides about the failed attempt.
 - S10 (two_routes) is in the real course since 2026-10-09, generated with the faster default (21.5 minutes, $3.94)
   plus a variant rewrite ($0.76) after the spot check: the variant's step 2 explanation named the law of F that step 3
   asked about — now a hard check. Spot-check minor findings left open: Block 4 and Block 10's scored steps are close to

@@ -88,7 +88,8 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
 - **One coherent outcome per lesson.** The v2 planner's split test asks whether a node holds *separate outcomes* —
   tasks someone could do one of and not the other, each worth doing alone — and may split a skill (S2 → S2a–S2d,
   S3 → S3a–S3b). A step on the way to the outcome stays in the lesson even when it needs its own reasoning. Split parts
-  keep the original's place in the learning order, in the planner's letter order. The lesson opens with the outcome
+  keep the original's place in the learning order, in the planner's letter order. A numbered key splits into letters
+  (S12 → S12a, S12b); a lettered key into numbers (S12a → S12a1, S12a2, S12a3; decided 2026-10-10). The lesson opens with the outcome
   problem and solves it on the main path.
 - **Teach, don't summarise.** "Reduce the number of new ideas the learner handles at once; do not reduce the
   reasoning that connects them." Concrete case before the general formula (for procedures), one running example,
@@ -159,6 +160,25 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
   `EXAMPLE_FEEDBACK` (rule 17, in every planner, writer and reviewer) and `EXAMPLE_POINT_RULE` (the v1 lesson and
   review top-up prompts); `pipeline/lesson_v2.example_point_problems` finds the wordings the stored lessons used and
   sends such a draft to the revision.
+- **Deciding whether something meets a definition** (the learner, 2026-10-10, after S12a: "I don't understand this
+  paragraph nor why ab is only applied to x1"; then a review of the lesson by GPT-6 Pro that the learner endorsed).
+  The lesson teaches the decision process, not only the calculations: what the problem supplies (the proposed
+  operations) and what is tested (the definition's requirements), and what settles the question — an equality that
+  holds needs an argument for every input, one that fails needs one allowed choice, and a structure meets the
+  definition only when every requirement is justified, the operations returning elements of the set included. The
+  supplied operation keeps its own symbol ($a\star v$, $u\oplus v$), its rule is restated where it is used and said in
+  words. Each requirement is first translated into a plain question as two procedures; an equality is compared
+  coordinate by coordinate, naming the law of $\mathbf{F}$ that makes the coordinates agree, and never uses the law
+  being tested. An element that must exist (identity, inverse) is found by solving the equation that defines its role,
+  checked to lie in the set and verified; none exists when that equation has no allowed solution — trying candidates
+  is not the method. Every choice of requirement or inputs gets a reason, and every worked example ends with what it
+  established. One reasoning pattern per lesson — refute by a counterexample, verify for every input, find a required
+  element — as separate short lessons in that order, with a genuine "yes" case; assessment asks for the decisions and
+  transfers to a changed operation whose first natural test passes. Rule text once: `prompts/rules.py`
+  `DEFINITION_CHECK_RULE` (planner, writer and reviewer of both providers; the split test names the three patterns).
+  First applied to S12a → S12a1–S12a3 (plan written by hand from the review, lessons by Claude Code agents). Rule 17
+  still holds: the review's "does (4,0) prove the requirement?" check and "an unsuccessful candidate does not
+  establish nonexistence" went; their content is said positively (verify with letters; solve for the element).
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
 - **Checks inside the teaching sequence.** 1–2 graded inline checks plus one ungraded "why" reflect check, all within

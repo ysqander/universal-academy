@@ -99,7 +99,7 @@ def mentions_caption(text: str, caption: str) -> bool:
 # Sibling references in a split plan's assumed prerequisites ("Builds on" chips)
 # ---------------------------------------------------------------------------
 
-_KEY = r"[A-Z]\d+[a-z]?"  # skill keys (S2, S2a) and foundation keys (A1)
+_KEY = r"[A-Z]\d+(?:[a-z]\d*)?"  # skill keys (S2, S2a, S12a1) and foundation keys (A1)
 _SEP = r"\s*(?:[:—–]|-(?!\w))?\s*"  # the separator after a leading reference ("a (S2a): …", "S2a — …")
 _LEAD_LOCAL_KEY = re.compile(rf"^\s*(?:(?:skill|sibling)\s+)?([a-z])\s*\(\s*({_KEY})\s*\){_SEP}")
 _LEAD_KEY_LOCAL = re.compile(rf"^\s*({_KEY})\s*\(\s*(?:local\s+id\s+)?([a-z])\s*\){_SEP}")
@@ -109,13 +109,18 @@ _INLINE_KEY_LOCAL = re.compile(rf"\b({_KEY})\s*\(\s*(?:local\s+id\s+)?[a-z]\s*\)
 
 def sibling_keys(key: str, keys: Iterable[str]) -> dict[str, str]:
     """Local ids of a split skill's siblings → their keys: 'S2c' in a course with S2a…S2d → {'a': 'S2a', …, 'd': 'S2d'}
-    (the planner names siblings 'a', 'b', … and a split gives them the keys S2a, S2b, … in that order). {} for a
-    skill that is not part of a split."""
+    (the planner names siblings 'a', 'b', … and a split gives them the keys S2a, S2b, … in that order; a lettered key
+    split again numbers them: S12a1, S12a2 → 'a', 'b'). {} for a skill that is not part of a split."""
     m = re.fullmatch(r"(.*\d)([a-z])", key or "")
-    if not m:
-        return {}
-    base = m.group(1)
-    return {k[len(base) :]: k for k in keys if re.fullmatch(re.escape(base) + "[a-z]", k or "")}
+    if m:
+        base = m.group(1)
+        return {k[len(base) :]: k for k in keys if re.fullmatch(re.escape(base) + "[a-z]", k or "")}
+    m = re.fullmatch(r"(.*\d[a-z])(\d+)", key or "")
+    if m:
+        base = m.group(1)
+        numbered = [k for k in keys if re.fullmatch(re.escape(base) + r"\d+", k or "")]
+        return {"abcdefghijklmnopqrstuvwxyz"[int(k[len(base) :]) - 1]: k for k in numbered if 0 < int(k[len(base) :]) <= 26}
+    return {}
 
 
 def normalize_sibling_refs(items: Iterable[Any], local_keys: dict[str, str] | None = None) -> list[str]:

@@ -660,7 +660,7 @@ def _lesson_kps(seed: int, proof: bool, *, v2: bool = False) -> tuple[KnowledgeP
 
 _PLAN_RE = re.compile(r"Plan the teaching of skill (\S+): (.+)")
 _V2_SKILL_RE = re.compile(r"Write the lesson for skill (\S+): (.+)")
-_LISTED_SKILL_RE = re.compile(r"^- (S\d+[a-z]*) · .*?(?:\(encompassing weight ([\d.]+)\))?$")
+_LISTED_SKILL_RE = re.compile(r"^- (S\d+[a-z0-9]*) · .*?(?:\(encompassing weight ([\d.]+)\))?$")
 
 
 def _section(text: str, header: str) -> list[tuple[str, float]]:

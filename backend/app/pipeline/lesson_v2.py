@@ -680,13 +680,14 @@ def describe_plan(plan: TeachingPlan, key: str) -> list[str]:
 
 
 def new_keys(key: str, plan: TeachingPlan, taken: set[str]) -> dict[str, str]:
-    """local id → new skill key: S2 → S2a, S2b, … (skipping keys already taken)."""
+    """local id → new skill key: S2 → S2a, S2b, …; a key that already ends in a letter gets numbers: S12a → S12a1,
+    S12a2, … (skipping keys already taken)."""
     result: dict[str, str] = {}
-    letters = iter("abcdefghijklmnopqrstuvwxyz")
+    suffixes = iter([str(n) for n in range(1, 27)] if key[-1:].isalpha() else list("abcdefghijklmnopqrstuvwxyz"))
     for spec in plan.skills:
-        candidate = f"{key}{next(letters)}"
+        candidate = f"{key}{next(suffixes)}"
         while candidate in taken:
-            candidate = f"{key}{next(letters)}"
+            candidate = f"{key}{next(suffixes)}"
         result[spec.local_id] = candidate
     return result
 
@@ -1803,7 +1804,7 @@ def question_draft(row: dict[str, Any]) -> QuestionDraft:
     )
 
 
-QUESTION_NOTE = re.compile(r"\s*(?:(S\d+[a-z]?)\s*[/ ]\s*)?(k\d+q\d+)\s*[:—–-]\s*(\S.*)", re.IGNORECASE | re.DOTALL)
+QUESTION_NOTE = re.compile(r"\s*(?:(S\d+(?:[a-z]\d*)?)\s*[/ ]\s*)?(k\d+q\d+)\s*[:—–-]\s*(\S.*)", re.IGNORECASE | re.DOTALL)
 
 
 def parse_question_note(note: str) -> tuple[str | None, str, str] | None:

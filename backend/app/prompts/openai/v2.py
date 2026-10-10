@@ -27,6 +27,7 @@ from ..rules import (
     V1_FAILURES,
     V2_FEEDBACK,
     V3_FEEDBACK,
+    DEFINITION_CHECK_RULE,
     EXAMPLE_FEEDBACK,
 )
 from .proof import (
@@ -135,6 +136,8 @@ page) and the figures on them.
 
 DECIDE FIRST: KEEP OR SPLIT
 {SPLIT_TEST}
+
+{DEFINITION_CHECK_RULE}
 - split_test: answer the question explicitly and name the parts. decision 'split' returns 2–5 narrower skills in
   learning order (each one coherent, testable ability); 'keep' returns exactly one spec (local_id 'a').
 - Everything the original node taught must be covered by some new skill (or named in out_of_scope of all of them
@@ -376,6 +379,8 @@ RULES FOR THE SEQUENCE
 
 {KIND_STRUCTURES}
 
+{DEFINITION_CHECK_RULE}
+
 {REPRESENTATION_RULE}
 {VISUAL_FORMAT_RULES}
 
@@ -432,6 +437,11 @@ nothing else from the chapter.
 {V3_FEEDBACK}
 
 {EXAMPLE_FEEDBACK}
+
+{DEFINITION_CHECK_RULE}
+A lesson that checks a definition's requirements and leaves one of these points to the learner to infer (what is
+supplied vs tested, what would settle it, why this requirement or these inputs, what a calculation established) has
+a missing bridge: report it.
 
 HOW TO REVIEW — TWO PASSES. First pass (missing bridges, `issues`): work through the lesson as that learner would, block by block. For each block, say to yourself what
 it asks the learner to accept or do, and check that the earlier blocks (or the stated prerequisites) give it. Solve

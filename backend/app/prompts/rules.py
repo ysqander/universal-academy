@@ -259,10 +259,50 @@ EXAMPLE_POINT_RULE = (
 )
 
 
+# The learner after S12a (2026-10-10), with a review they endorsed: "checking requirements for a definition" is the
+# skill, and the lesson left the learner to infer what each calculation tested, why it was chosen and what it
+# established. Shared by every provider's planner, writer and reviewer.
+DEFINITION_CHECK_RULE = """\
+DECIDING WHETHER SOMETHING MEETS A DEFINITION (the learner, 2026-10-10, after S12a): teach the decision process
+explicitly. This applies to every block, question and capstone whose task is to check a definition's requirements —
+a set with given operations is a vector space, a subset is a subspace, a sum is direct, an operation is defined on a
+set.
+1. Before any calculation, separate what is SUPPLIED from what is TESTED: the given set, scalars and operations (the
+   problem defines them) versus the requirement under investigation (to be tested, never assumed). Say what would
+   settle it: an equality requirement holds when an argument covers every allowed input (letters), and fails when one
+   allowed choice of inputs makes the two sides differ; the object meets the definition only when every requirement
+   is justified — the operations being defined on the set and returning elements of it included — and fails it with
+   one failed requirement.
+2. Keep the supplied operation visible: give an invented operation its own symbol ($a\\star v$, $u\\oplus v$), restate
+   its rule in the block that computes with it, and say in words what it does ("multiplies the first coordinate by
+   $a$ and replaces the second by $0$"). Products and sums inside coordinates are ordinary arithmetic of
+   $\\mathbf{F}$, whose laws may be used there; a law being tested is never assumed for the supplied operation.
+3. Translate each requirement into a plain question before the algebra, as two procedures to compare: "multiply by
+   $b$, then by $a$ — the same vector as multiplying once by $ab$?"
+4. Equality requirement: compute each procedure separately with the supplied rule, compare coordinate by coordinate,
+   name the known law that makes each coordinate agree (or show the coordinate that differs), and end by saying what
+   is established: the requirement holds for every input, or the inputs shown refute it.
+5. Existence requirement (an identity, an inverse): name the unknown, write the equation that defines its role (an
+   identity is ONE element that works for every input; an inverse is found for each element and may depend on it),
+   solve it, check that the solution lies in the set, then verify that it does the job. No element exists when that
+   equation has no allowed solution; trying candidates is not the method.
+6. Choose with a reason: say why this requirement is promising to test (read what the operation does — a rule that
+   erases a coordinate threatens $1v=v$) and why these inputs expose it (a nonzero second coordinate; zeros elsewhere
+   to keep the arithmetic simple). Every worked example ends with one sentence saying what it established and
+   whether the overall question is now settled.
+7. One reasoning pattern per lesson: refuting by a counterexample, verifying an equality for every input and finding
+   a required element are separate tasks, taught in that order in short lessons of their own. A lesson whose outcome
+   is a yes/no decision also meets a genuine "yes" case (the set and the operations together decide).
+8. Assess the decisions, not only the arithmetic: the learner chooses the requirement or the inputs, names the failed
+   requirement and states the verdict, supplies the known law that makes the coordinates agree, and transfers the
+   method to a changed operation whose first natural test passes (so the method is never "check $1v$ and stop")."""
+
+
 SPLIT_TEST = """\
 SPLIT TEST: does this node hold separate OUTCOMES — tasks someone could be able to do one of and not the other, each
 worth doing on its own (multiplying vs. computing powers vs. finding square roots; a computation vs. proving the laws
-it relies on)? If yes, split into those tasks. A step on the way to the node's outcome stays in the lesson, even when
+it relies on; refuting a definition's requirement by a counterexample vs. verifying one for every input vs. finding a
+required element — DECIDING WHETHER SOMETHING MEETS A DEFINITION, point 7)? If yes, split into those tasks. A step on the way to the node's outcome stays in the lesson, even when
 it needs reasoning of its own: computing $\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$, and checking a supplied
 root is how you confirm the roots you found — both are knowledge points (or capstone steps) of the outcome skill,
 not skills of their own. Each new skill must be a meaningful task on its own — "Multiply two complex numbers", never

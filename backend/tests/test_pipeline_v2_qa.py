@@ -60,6 +60,19 @@ def test_sibling_refs_are_rewritten_to_keys():
     ]
 
 
+def test_a_lettered_skill_splits_into_numbered_keys():
+    """S12a split again: S12a1, S12a2, … — never S12aa — and its siblings, chips and question notes still resolve."""
+    from app.llm_schemas import TeachingPlan
+    from app.pipeline.lesson_v2 import QUESTION_NOTE, new_keys
+
+    plan = TeachingPlan.model_construct(skills=[type("S", (), {"local_id": x})() for x in "abc"])
+    assert new_keys("S12a", plan, {"S12b"}) == {"a": "S12a1", "b": "S12a2", "c": "S12a3"}
+    assert new_keys("S2", plan, {"S2b"}) == {"a": "S2a", "b": "S2c", "c": "S2d"}
+    assert sibling_keys("S12a2", ["S12a1", "S12a2", "S12a3", "S12b", "S1"]) == {"a": "S12a1", "b": "S12a2", "c": "S12a3"}
+    assert normalize_sibling_refs(["b (S12a2): verify a requirement"], {"b": "S12a2"}) == ["S12a2: verify a requirement"]
+    assert QUESTION_NOTE.match("S12a3 k2q1: the hint gives the verdict").group(1) == "S12a3"
+
+
 def test_plan_validation_rewrites_sibling_local_ids_in_assumed_prerequisites():
     validated, _ = validate_plan(split_plan(), graph())
     a, b, c = validated.skills

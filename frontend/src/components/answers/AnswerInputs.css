@@ -159,6 +159,16 @@
   color: var(--accent);
 }
 
+/* the subscript key's advice after a press that did nothing: set apart from the help line */
+.math-input__nudge {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
 .math-input__preview {
   display: flex;
   align-items: center;

@@ -4,7 +4,7 @@ export type HotkeyHandler = (event: KeyboardEvent) => boolean | void;
 
 const isTypingTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
+  if (target.isContentEditable || target.closest(".math-input")) return true; // the answer box and its keys
   const tag = target.tagName;
   if (tag === "TEXTAREA" || tag === "SELECT") return true;
   if (tag !== "INPUT") return false;

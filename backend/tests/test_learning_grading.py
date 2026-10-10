@@ -468,8 +468,62 @@ def test_indexed_word_matching_is_linear() -> None:
 def test_letter_indexed_words_split_like_digit_indexed_ones() -> None:
     assert grade("(a*x_k, b*x_k)", "(ax_k, bx_k)").correct
     assert not grade("(a*x_k, b*x_k)", "(bx_k, ax_k)").correct
-    assert "x_ky" in grade("x_k*y", "x_ky").feedback  # x_k·y or x_{ky}? left whole, reported as an unknown name
-    for token in ("a" * 60 + "_", "a_" * 30, "ab_c" * 20 + "_"):  # no exponential backtracking
+    assert grade("x_k*y_k", "x_ky_k").correct
+    # a longer index is one name, as in a key written for SymPy (a matrix entry a_ij) — never a_i times the unit j
+    assert grade("a_ij", "a_{ij}").correct and grade("a_ij", "a_ij").correct
+    assert not grade("a_ij", "a_ii").correct and not grade("a_ij", "a_i j").correct
+    # a name meant as several (x_k·y, x_k·π, x_1·y_k): asked again with the way to write it, not counted
+    for key, typed, hint in [("x_k*y", "x_ky", "x_k * y"), ("pi*x_k", "x_kpi", "x_k * pi"), ("x_k*sin(x)", "x_ksin(x)", "x_k * sin"),
+                             ("x_1*y_k", "x_1y_k", "x_1 * y_k"), ("x_1*y_k", "x1y_k", "x_1 * y_k")]:
+        slip = grade(key, typed)
+        assert slip.invalid and hint in slip.feedback, (key, typed, slip)
+    assert grade("x_k*y", "x_k y").correct
+    assert not grade("x_k*y", "x_kz").invalid  # not the key's symbols: an ordinary wrong answer
+    # braces or a subscript glyph end the index
+    assert grade("x_k*y", "x_{k}y").correct and grade("x_k*y", "xₖy").correct
+    assert grade("a_ij*x_j", "a_{ij}x_j").correct
+    assert grade("x_1*2", "x_{1}2").correct and grade("2*x_1", "x₁2").correct  # a digit after the boundary: a product
+    assert "x_klambda reads as one name" in grade("lamda*x_k", "x_klambda").feedback  # spelled as typed
+    assert "x_k * l" in grade("l*x_k", "x_kell").feedback  # a glued 'ell' is the letter ℓ, as everywhere
+
+
+def test_greek_names_and_unicode_subscripts_keep_their_index() -> None:
+    """The reviewers' cases (2026-10-10): a Greek name with a letter index, lambda before an index, θ₁, ℓ and xₖ."""
+    for key, typed in [("theta_k", "theta_k"), ("2*theta_k", "2theta_k"), ("alpha_k*x_k", "alpha_k x_k"), ("mu_k", "mu_k"),
+                       ("lamda_k", "lambda_k"), ("lambda_k*x_k", "lambda_kx_k"), ("theta_1", "θ₁"), ("l_k", "ell_k"),
+                       ("(a+b)*x_k", "(a+b)xₖ"), ("(a*x_k, b*x_k)", "(axₖ, bxₖ)"), ("a*lamda_k", "alambda_k"),
+                       ("x_k*lamda_k", "x_klambda_k"), ("theta_k", "\\theta_k"), ("2*theta_k", "2\\theta_{k}")]:
+        assert grade(key, typed).correct, (key, typed)
+    assert normalize("lambda_k") == "lamda_k"
+
+
+def test_glued_letters_that_spell_a_keyword_are_letters() -> None:
+    assert grade("a*s+r", "as+r").correct
+    assert grade("a*(r+r2)-b*(s+s2)+(a*(s+s2)+b*(r+r2))*i", "ar+ar2-bs-bs2+(as+as2+br+br2)i").correct
+    assert grade("x", "x if y else z").invalid  # a keyword in a sentence is still refused
+    assert grade("a*s+b*s", "as + bs").correct and grade("i*n*(x+1)", "in(x+1)").correct
+    assert grade("C", "λ in C").invalid and grade("x+1", "x is 5").invalid  # 'in', 'is' between words: a sentence
+    for key, typed in [("-12", "x is -12"), ("-7+5*i", "z is -7+5i"), ("C", "in C"), ("C", "C as"), ("12", "is 12"), ("-7+5*i", "z is\t-7+5i")]:
+        assert grade(key, typed).invalid, typed  # a sentence, also with a sign, at an end, or a tab
+    assert grade("i*a*s-i*b*s", "i as - i bs").correct and grade("a*s", "as").correct
+    for key, typed in [("-12", "x is - 12"), ("-pi", "y is -π"), ("-sqrt(2)", "y is -√2")]:
+        assert grade(key, typed).invalid, typed  # a spaced sign, or a glyph the normaliser spells out: still a value
+
+
+def test_ell_keeps_its_place_and_a_coefficient_may_precede_a_bracket() -> None:
+    assert grade("x**l", "x^{ell}").correct and grade("l/2", "\\frac{ell}{2}").correct  # ℓ in braces is still ℓ
+    assert grade("x_ell", "x_{ell}").correct and grade("l_k", "ell_k").correct  # … and an index after '_' stays one
+    assert grade("2*x*(a+b)", "2x(a+b)").correct and grade("2*x_k*(a+b)", "2x_k(a+b)").correct
+    assert grade("-3/4", "x is - ¾").invalid and grade("-theta_k", "y is -θ_k").invalid  # sentences, asked again
+    assert grade("3+2*i", "3+2J").correct  # a capital J literal still reads as the imaginary unit
+    assert grade("2*J_k", "2J_k").correct  # … but before an index it is a name
+
+
+def test_a_number_before_j_or_x_is_a_coefficient_never_a_python_literal() -> None:
+    assert grade("2*j_k", "2j_k").correct and grade("(2*j_1, 3*j_2)", "(2j1, 3j2)").correct
+    assert grade("2*i", "2j").correct and grade("1e5", "1e5").correct
+    assert not grade("1", "0x_1").correct  # 0·x_1, not the hex literal 0x_1 = 1
+    for token in ("a" * 60 + "_", "a_" * 30, "ab_c" * 20 + "_", "a_" + "a" * 200 + "_"):  # no exponential backtracking
         start = time.perf_counter()
         assert grading._LETTER_INDEXED_WORD.fullmatch(token) is None
         normalize(token)

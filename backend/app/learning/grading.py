@@ -22,8 +22,10 @@ input is reported as "too complex to check" and the worker is killed, so grading
 
 Symbol convention: names starting with z or w are complex (z, w, z_1, w2 ...); every other letter is real.
 This mirrors complex-number texts (z = a + bi with a, b real) and lets |z|^2 and z^2 be told apart.
-Indexed names are canonical: x1, x_1, x_{1} and x₁ are the same symbol x_1. A one-letter index works the same way when
-glued: 'ax_k' is a·x_k and 'a_kx_k' is a_k·x_k.
+Indexed names are canonical: x1, x_1, x_{1} and x₁ are the same symbol x_1 (xₖ is x_k). A one-letter index glued to
+its coefficient splits off the same way: 'ax_k' is a·x_k and 'a_kx_k' is a_k·x_k. A longer index stays one name —
+'a_ij', 'a_{ij}' and 'x_ky' are the symbols a_ij and x_ky, as in an answer key written for SymPy; a response whose
+unknown name would read as the key's symbols with a one-letter index ('x_ky' for x_k·y) is asked again, not counted.
 
 Letter runs: 'xy' is x*y, glued function names are peeled off ('sinx' -> sin(x), 'xsin(x)' -> x*sin(x)),
 're'/'im'/'arg' are functions only when applied to something ('re z', 'arg(z)'; but 're^(iθ)' is r·e^(iθ)), \\Re,
@@ -144,6 +146,9 @@ _SUPERSCRIPTS = {
     "⁻": "-", "⁺": "+", "ⁿ": "n",
 }  # fmt: skip
 _SUBSCRIPT_DIGITS = {chr(0x2080 + d): str(d) for d in range(10)}
+# letter subscripts Unicode has (xₖ is x_k); NFKC would turn them into plain letters (x·k)
+_SUBSCRIPT_LETTERS = dict(zip("ₐₑₒₓₕₖₗₘₙₚₛₜᵢᵣᵤᵥⱼ", "aeoxhklmnpstiruvj"))
+_SUBSCRIPTS_ALL = {**_SUBSCRIPT_DIGITS, **_SUBSCRIPT_LETTERS}
 
 _LATEX_SYMBOLS = {
     "cdot": "*", "times": "*", "ast": "*", "div": "/", "pi": "pi", "lambda": "lamda", "Re": "Re", "Im": "Im",
@@ -244,7 +249,7 @@ def _rewrite_commands(s: str, greek_seen: set[str]) -> str:
             target = _LATEX_SYMBOLS[name]
             if target in ALL_GREEK:
                 greek_seen.add(target)
-            out.append(f" {target} ")
+            out.append(f" {target}" + ("" if s[pos : pos + 1] in tuple("_0123456789") else " "))  # \\theta_k keeps its index
         else:
             raise AnswerParseError(f"Unsupported notation: \\{name}")
     return "".join(out)
@@ -269,8 +274,18 @@ def _replace_superscripts(s: str) -> str:
 
 
 def _replace_subscripts(s: str) -> str:
-    """x₁₂ -> x_12 (before NFKC would turn it into x12)."""
-    return re.sub("[" + "".join(_SUBSCRIPT_DIGITS) + "]+", lambda m: "_" + "".join(_SUBSCRIPT_DIGITS[c] for c in m.group(0)), s)
+    """x₁₂ -> x_12, xₖ -> x_k (before NFKC would turn them into x12, xk); the run ends the index: xₖy is x_k·y."""
+
+    def index(m: re.Match[str]) -> str:
+        after = m.string[m.end() : m.end() + 1]
+        return "_" + "".join(_SUBSCRIPTS_ALL[c] for c in m.group(0)) + ("*" if after.isdigit() else " " if after.isalpha() else "")
+
+    return re.sub("[" + "".join(_SUBSCRIPTS_ALL) + "]+", index, s)
+
+
+def _spaced(name: str):
+    """A name substituted into the text, kept glued to an index that follows it (θ₁ -> theta_1, ell_k -> l_k)."""
+    return lambda m: f" {name}" + ("" if m.string[m.end() : m.end() + 1] in tuple("_0123456789") else " ")
 
 
 _VULGAR_FRACTION = "[\u00bc-\u00be\u2150-\u215e]"  # ¼ ½ ¾ ⅐ … ⅞
@@ -364,16 +379,19 @@ def _star_unknown_calls(s: str) -> str:
         name = m.group(1)
         return m.group(0) if name in _FUNCTIONS else f"{name}*("
 
-    return re.sub(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", repl, s)
+    return re.sub(r"(?<![A-Za-z_])([A-Za-z_][A-Za-z0-9_]*)\s*\(", repl, s)  # also after a number: 2x(a+b), 2x_k(a+b)
 
 
 _TOKEN = re.compile(r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|[A-Za-z_][A-Za-z0-9_]*")
 # letters, then (index, letters)*, then an optional index: unambiguous, so matching is linear (no nested
 # quantifiers: a letter run ending in "_" must not backtrack exponentially).
+_GLUED_KEYWORDS = frozenset({"as", "in", "is"})  # Python keywords that are two glued letters in a math answer
 _INDEXED_WORD = re.compile(r"[A-Za-z]+(?:_?\d+[A-Za-z]+)*(?:_?\d+)?")
 # names with a one-letter index, glued as typed: 'ax_k' (a·x_k), 'a_kx_k' (a_k·x_k). Every segment ends at its index
-# letter, so 'x_ky' (x_k·y or x_{ky}?) is left whole and reported as an unknown name.
+# letter: 'a_ij' or 'x_ky' is one name with a longer index (keys written for SymPy name a matrix entry a_ij).
 _LETTER_INDEXED_WORD = re.compile(r"(?:[A-Za-z]+_[A-Za-z])+")
+# one piece of a name as a learner may have meant it: letters, then a one-letter or digit index ('x_ky' -> x_k, y)
+_INDEXED_PIECE = re.compile(r"([A-Za-z]+)(?:_(\d+|[A-Za-z])|(\d+))?")
 
 
 def _peel(word: str, call: bool, keep_greek: frozenset[str], peel: tuple[str, ...]) -> list[str]:
@@ -398,6 +416,25 @@ def _peel(word: str, call: bool, keep_greek: frozenset[str], peel: tuple[str, ..
     return out
 
 
+# a sign, spaces, then a number or a name the normaliser itself wrote for a glyph ('-π' -> '- pi '): a signed value
+_SIGNED_VALUE = re.compile(r"[+-]\s+(?:\(\s*)*(?:\.?\d|(?:sqrt|Abs|pi|l|" + "|".join(_GREEK) + r")(?:_[A-Za-z0-9]+|\d+)?\b)")
+
+
+def _between_words(s: str, start: int, end: int) -> bool:
+    """Is s[start:end] a word of a sentence ('x is 5', 'x is -12', 'λ in C', 'in C', 'C as') rather than two glued
+    letters ('as+bs', 'as + bs', '2in', 'in(x+1)', 'as' alone)? A word stands apart (whitespace or an end on both
+    sides) and has a word or a number on at least one side — a sign glued to what follows starts a number."""
+    if start and not s[start - 1].isspace() or end < len(s) and not s[end].isspace():
+        return False  # glued to something
+    left, right = s[:start].rstrip(), s[end:].lstrip()
+    word_left = bool(left) and (left[-1].isalnum() or left[-1] in "_)")
+    word_right = bool(right) and (
+        right[0].isalnum() or right[0] in "_(" or (right[0] in "+-." and right[1:2] != "" and (right[1].isalnum() or right[1] in "(."))
+        or bool(_SIGNED_VALUE.match(right))  # 'x is - 12', 'y is -π' (written '- pi '), 'y is -√2'
+    )
+    return (word_left or not left) and (word_right or not right) and (word_left or word_right)
+
+
 def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
     """Make every identifier explicit before SymPy sees it (see the module docstring)."""
     peel = tuple(sorted(set(_PEEL_FUNCTIONS) | {"pi"} | keep_greek, key=len, reverse=True))
@@ -407,7 +444,9 @@ def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
         if not (tok[0].isalpha() or tok[0] == "_"):
             return tok  # a number
         if iskeyword(tok):
-            raise AnswerParseError(f"Unexpected word: {tok}")
+            if tok in _GLUED_KEYWORDS and not _between_words(s, m.start(), m.end()):  # 'as+bs' is a·s + b·s
+                return " ".join(tok)
+            raise AnswerParseError(f"Unexpected word: {tok}")  # 'x is 5', 'λ in C': a sentence, asked again
         rest = s[m.end() :].lstrip()
         call = rest.startswith("(")
         if tok in _PAREN_ONLY and rest[:1] and (rest[0].isalnum() or rest[0] in "(_."):
@@ -424,7 +463,7 @@ def _split_identifiers(s: str, keep_greek: frozenset[str]) -> str:
                 parts.extend(pieces)
             return " ".join(parts)
         if not _INDEXED_WORD.fullmatch(tok):
-            return tok  # x_ab, x_ky, __x ... (checked later)
+            return tok  # a_ij, x_ky, __x ... (checked later)
         parts: list[str] = []
         segments = re.findall(r"([A-Za-z]+)(?:_?(\d+))?", tok)
         for n, (letters, index) in enumerate(segments):
@@ -460,8 +499,8 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     s = _replace_vulgar_fractions(s)
     s = unicodedata.normalize("NFKC", s)  # also turns the script letter ℓ into l
     # ℓ typed as "\ell" or spelled "ell" is the variable l, not e·l·l.
-    s = re.sub(r"\\ell(?![A-Za-z])", " l ", s)
-    s = re.sub(r"(?<![A-Za-z\\])ell(?![A-Za-z])", " l ", s)
+    s = re.sub(r"\\ell(?![A-Za-z])", _spaced("l"), s)
+    s = re.sub(r"(?<![A-Za-z\\_])(?<!_\{)ell(?![A-Za-z])", _spaced("l"), s)  # (x_ell, x_{ell} keep the index 'ell')
     for src, dst in _UNICODE_OPS.items():
         s = s.replace(src, dst)
     s = _EMPTY_SET.sub("{}", s)
@@ -471,7 +510,7 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
         if src in s:
             if dst in ALL_GREEK:
                 greek_seen.add(dst)
-            s = s.replace(src, f" {dst} ")
+            s = re.sub(re.escape(src), _spaced(dst), s)
     s = _replace_sqrt_sign(s)
     # LaTeX delimiters and spacing
     s = s.replace("$", "").replace("\\(", "").replace("\\)", "")
@@ -483,15 +522,19 @@ def normalize(text: str, keep_greek: frozenset[str] | None = None) -> str:
     s = _MATRIX_ENV.sub(_matrix_env_to_brackets, s)
     s = _mark_set_braces(s)
     s = re.sub(r"\^\s*\{", "^{", s)
+    s = re.sub(r"_\{([A-Za-z0-9]+)\}(?=[A-Za-z])", r"_\1 ", s)  # the braces end the index: x_{k}y is x_k·y
+    s = re.sub(r"_\{([A-Za-z0-9]+)\}(?=\d)", r"_\1*", s)  # x_{1}2 is x_1·2
     s = re.sub(r"_\{([A-Za-z0-9]+)\}", r"_\1", s)  # x_{12} -> x_12
     s = _rewrite_commands(s, greek_seen)
     s = s.replace("{", "(").replace("}", ")")
     s = _convert_abs_bars(s)
     s = _strip_assignment(s)
     s = s.replace("^", "**")
-    s = re.sub(r"\blambda\b", "lamda", s)
+    s = s.replace("lambda", "lamda")  # SymPy's spelling, also glued: 'alambda_k', 'lambda1' (lambda is a keyword)
     keep = ALL_GREEK if keep_greek is None else frozenset(keep_greek) | greek_seen
     s = _split_identifiers(s, keep)
+    s = re.sub(r"(\d)(?=j|J(?=_|\d))", r"\1 ", s)  # 2j_k, 2J_k are 2·j_k, 2·J_k; 2j and 2J alone stay 2i (literals)
+    s = re.sub(r"(?<![\w.])0(?=[xXbBoO])", "0 ", s)  # 0x_1 is 0·x_1, not a hex literal
     s = _BARE_ROOT_NUMBER.sub(r"\1(\2)", s)  # 'sqrt2 i' / 'sqrt 2 i' -> sqrt(2) i, like √2 i (not sqrt(2i))
     s = _star_unknown_calls(s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -782,7 +825,7 @@ def _greek_names(node: Node) -> frozenset[str]:
     for scalar in node.scalars():
         assert scalar.expr is not None
         for sym in scalar.expr.free_symbols:
-            base = re.sub(r"_\d+$", "", sym.name)
+            base = re.sub(r"_(?:\d+|[A-Za-z])$", "", sym.name)  # theta_1, theta_k
             if base in ALL_GREEK:
                 names.add(base)
     return frozenset(names)
@@ -1148,6 +1191,44 @@ def _list_arithmetic_feedback(expected: Node, got: Node) -> str | None:
     return None
 
 
+def _pieces(name: str, keep_greek: frozenset[str]) -> list[str] | None:
+    """A name read as the learner may have meant it: one-letter or digit indices, letters split as in a letter run
+    ('x_ky' -> x_k, y; 'x_kpi' -> x_k, pi; 'x_1y_k' -> x_1, y_k). None when it has another shape."""
+    peel = tuple(sorted(set(_PEEL_FUNCTIONS) | {"pi"} | keep_greek, key=len, reverse=True))
+    pieces: list[str] = []
+    pos = 0
+    for m in _INDEXED_PIECE.finditer(name):
+        if m.start() != pos or not m.group(0):
+            return None
+        parts = ["l"] if m.group(1) == "ell" else _peel(m.group(1), False, keep_greek, peel)
+        index = m.group(2) or m.group(3)
+        if index and parts[-1] in _KNOWN_NAMES:
+            parts.append(index)
+        elif index:
+            parts[-1] = f"{parts[-1]}_{index}"
+        pieces += parts
+        pos = m.end()
+    return pieces if pos == len(name) else None
+
+
+def _long_index_feedback(expected: Node, got: Node) -> str | None:
+    """'x_ky' typed for x_k·y reads as one name with the index ky ('x_kpi', 'x_1y_k' alike). When that name is not in
+    the key but its split reading uses only the key's symbols (and numbers, i, j, e, π, functions), the response is
+    asked again with the way to write it — a typing slip, not a wrong answer."""
+    names = lambda node: {s.name for sc in node.scalars() if sc.expr is not None for s in sc.expr.free_symbols}  # noqa: E731
+    known = names(expected)
+    allowed = known | set(_CONSTANTS) | set(_FUNCTIONS)
+    for name in sorted(names(got) - known):
+        pieces = _pieces(name, _greek_names(expected))
+        if pieces and len(pieces) > 1 and all(p in allowed or p.isdigit() for p in pieces):
+            shown = lambda n: n.replace("lamda", "lambda")  # noqa: E731 — as the learner typed it
+            return (
+                f"{shown(name)} reads as one name. An index after _ is one letter or a number — put a space or * after "
+                f"it: {' * '.join(map(shown, pieces))}."
+            )
+    return None
+
+
 def _symbol_feedback(expected: Node, got: Node, response: str) -> str | None:
     """A key that is one symbol, possibly with a number in front ('v', '-v', '2v' — a vector in an abstract space):
     the answer must be that short too. '-(-v)', 'v+0', '1v+v' are the expression still to simplify (the audit found
@@ -1465,7 +1546,7 @@ def _check_math(kind: str, answer: str, tolerance: float | None, response: str |
         if _NUMBER_WITH_UNITS.fullmatch(text):
             return GradeResult(False, "Enter just the number, without units.", invalid=True)
         return GradeResult(False, "A number is expected here.")
-    shape = _pair_form_mismatch(expected, got)
+    shape = _pair_form_mismatch(expected, got) or _long_index_feedback(expected, got)
     if shape:
         return GradeResult(False, shape, invalid=True)
     verdict = _compare(expected, got, abs_tol, tolerance)

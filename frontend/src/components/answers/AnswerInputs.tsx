@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, type KeyboardEvent } from "react";
-import { asciiToLatex } from "../../lib/mathInput";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { asciiToLatex, subscriptRefusal, toggleSubscript, type SubscriptRefusal } from "../../lib/mathInput";
 import { encodeTfMarks, setTfMark, tfKeyAction, type RowResult, type TfLetter, type TfMark } from "../../lib/trueFalseSet";
 import { Icon } from "../Icon";
 import { Markdown } from "../Markdown";
@@ -185,9 +185,27 @@ export function TfKeyList({ answerKey }: { answerKey: TfLetter[] }) {
   );
 }
 
-const PALETTE: { label: string; insert: string; caret?: number; title: string }[] = [
+// keys that act on a focused palette key itself, never typing (Space is handled on its own)
+const NOT_TYPING = new Set(["Tab", "Enter", "Escape", "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn"]);
+
+type PaletteKey = { label: string; title: string; display?: ReactNode } & (
+  | { insert: string; caret?: number }
+  | { action: "subscript" }
+);
+
+const PALETTE: PaletteKey[] = [
   { label: "√", insert: "sqrt()", caret: 5, title: "Square root" },
   { label: "xⁿ", insert: "^", title: "Power" },
+  {
+    label: "xₖ",
+    display: (
+      <>
+        x<sub>k</sub>
+      </>
+    ), // the serif fonts have no ₖ glyph
+    action: "subscript",
+    title: "Subscript: type the letter and its index (xk), then press to make x_k. Press again to undo.",
+  },
   { label: "a⁄b", insert: "/", title: "Fraction" },
   { label: "i", insert: "i", title: "Imaginary unit" },
   { label: "π", insert: "pi", title: "Pi" },
@@ -211,6 +229,24 @@ export function MathInput({ value, onChange, disabled, kind, autoFocus, compact 
   const inputRef = useRef<HTMLInputElement>(null);
   const id = useId();
   const latex = asciiToLatex(value);
+  // the value at which the subscript key did nothing, and why: the nudge shows until the value changes
+  // n counts refused presses, so a second press at the same spot is announced again
+  const [nudgeAt, setNudgeAt] = useState<{ value: string; refusal: SubscriptRefusal; n: number } | null>(null);
+  const keyMade = useRef<string | null>(null); // the value the subscript key last produced
+  const keyedPress = useRef(false); // the subscript key was just pressed from the keyboard (focus stays on it)
+  // submitted (the field disabled): an old nudge does not come back when the field is enabled again
+  const [wasDisabled, setWasDisabled] = useState(disabled);
+  if (wasDisabled !== disabled) {
+    setWasDisabled(disabled);
+    if (disabled) setNudgeAt(null);
+  }
+  const nudge = nudgeAt !== null && nudgeAt.value === value && !disabled ? nudgeAt.refusal : null;
+  const edit = (next: string) => {
+    setNudgeAt(null);
+    onChange(next);
+  };
+  // palette keys keep the field focused (on a phone the keyboard stays open and the caret stays where it was)
+  const keepFocus = (event: MouseEvent) => event.preventDefault();
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus({ preventScroll: true });
@@ -222,11 +258,30 @@ export function MathInput({ value, onChange, disabled, kind, autoFocus, compact 
     const start = input.selectionStart ?? value.length;
     const end = input.selectionEnd ?? value.length;
     const next = value.slice(0, start) + text + value.slice(end);
-    onChange(next);
-    requestAnimationFrame(() => {
-      input.focus();
-      input.setSelectionRange(start + caret, start + caret);
-    });
+    edit(next);
+    input.focus();
+    requestAnimationFrame(() => input.setSelectionRange(start + caret, start + caret));
+  };
+
+  // The index typed just before the caret becomes a subscript: "xk" -> "x_k" (the grader reads "ax_k" as a·x_k).
+  const subscript = (event: MouseEvent) => {
+    const input = inputRef.current;
+    if (!input) return;
+    if (event.detail > 1 && keyMade.current === value) return; // the second click of a double-click: keep the first
+    // a click returns to the field; from the keyboard (detail 0) the focus stays on the key, so Enter presses it
+    // again (undo) instead of submitting the answer
+    if (event.detail > 0) input.focus();
+    else keyedPress.current = true;
+    const start = input.selectionStart ?? value.length;
+    const end = input.selectionEnd ?? value.length;
+    const change = toggleSubscript(value, start, end);
+    if (!change) {
+      setNudgeAt({ value, refusal: subscriptRefusal(value, start, end), n: (nudgeAt?.n ?? 0) + 1 });
+      return;
+    }
+    keyMade.current = change.value;
+    edit(change.value);
+    requestAnimationFrame(() => input.setSelectionRange(change.caret, change.caret));
   };
 
   return (
@@ -239,24 +294,52 @@ export function MathInput({ value, onChange, disabled, kind, autoFocus, compact 
         id={id}
         className="input math-input__field"
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => edit(event.target.value)}
         disabled={disabled}
         placeholder={kind === "numeric" ? "e.g. 2/3 or -1.5" : "e.g. -7 + 22i or (1, -2, 3)"}
         autoComplete="off"
         autoCapitalize="off"
         autoCorrect="off"
         spellCheck={false}
-        aria-describedby={compact ? `${id}-preview` : `${id}-help ${id}-preview`}
+        aria-describedby={[nudge ? `${id}-nudge` : "", compact ? "" : `${id}-help`, `${id}-preview`].filter(Boolean).join(" ")}
       />
       {!disabled && (
         <div className="math-input__palette" role="group" aria-label="Insert symbol">
           {PALETTE.filter((p) => kind === "expression" || ["√", "a⁄b", "π", "xⁿ"].includes(p.label)).map((p) => (
-            <button key={p.label} type="button" className="math-input__key" onClick={() => insert(p.insert, p.caret)} title={p.title}>
-              {p.label}
+            <button
+              key={p.label}
+              type="button"
+              className="math-input__key"
+              onMouseDown={keepFocus}
+              onKeyDown={(event) => {
+                // typing on a key goes on in the field (never to the page's shortcuts: 'h' would take a hint) —
+                // letters, Backspace, arrows, dead keys, AltGr characters; a space only right after a keyboard press of
+                // the subscript key (otherwise Space presses the key). Tab, Enter, Escape and shortcuts stay as they are.
+                const shortcut = event.metaKey || (event.ctrlKey && !event.altKey);
+                const space = event.key === " ";
+                if (shortcut || NOT_TYPING.has(event.key) || (space && !("action" in p && keyedPress.current))) return;
+                inputRef.current?.focus();
+              }}
+              onBlur={() => {
+                keyedPress.current = false;
+              }}
+              onClick={(event) => ("action" in p ? subscript(event) : insert(p.insert, p.caret))}
+              title={p.title}
+              aria-label={"action" in p ? "Subscript" : undefined}
+            >
+              {p.display ?? p.label}
             </button>
           ))}
         </div>
       )}
+      {/* always mounted, so screen readers announce the text when it appears */}
+      <p id={`${id}-nudge`} className={nudge ? "math-input__nudge" : "visually-hidden"} role="status">
+        {nudge && (
+          <span key={nudgeAt?.n}>
+            <SubscriptAdvice refusal={nudge} />
+          </span>
+        )}
+      </p>
       <div id={`${id}-preview`} className="math-input__preview" aria-live="polite">
         <span className="math-input__preview-label">Preview</span>
         {value.trim() === "" ? (
@@ -271,10 +354,105 @@ export function MathInput({ value, onChange, disabled, kind, autoFocus, compact 
         <p id={`${id}-help`} className="field__hint">
           Use <code>i</code> for √−1 and <code>(a, b)</code> for lists. Powers with <code>^</code>, roots with <code>sqrt()</code>,
           and <code>{"{}"}</code> or ∅ for the empty set.
+          {kind === "expression" && (
+            <>
+              {" "}
+              An index: type <code>xk</code> and press the subscript key{" "}
+              <b>
+                x<sub>k</sub>
+              </b>{" "}
+              (or type <code>x_k</code>).
+            </>
+          )}
         </p>
       )}
     </div>
   );
+}
+
+/** Why the subscript key did nothing, and what to do instead (lib/mathInput.ts subscriptRefusal). */
+function SubscriptAdvice({ refusal }: { refusal: SubscriptRefusal }) {
+  const key = (
+    <>
+      the subscript key{" "}
+      <b>
+        x<sub>k</sub>
+      </b>
+    </>
+  );
+  switch (refusal.why) {
+    case "joins":
+      return (
+        <>
+          The index <code>{refusal.index}</code> would run into <code>{refusal.next}</code> and be read as one name.
+          Type a space (or <code>*</code>) after <code>{refusal.index}</code>, put the cursor back right after{" "}
+          <code>{refusal.index}</code> and press {key} again.
+        </>
+      );
+    case "reread":
+      return (
+        <>
+          That would change how <code>{refusal.earlier}</code> is read. Type a space (or <code>*</code>) after{" "}
+          <code>{refusal.earlier}</code>, put the cursor back at the end of <code>{refusal.at}</code> and press {key}{" "}
+          again.
+        </>
+      );
+    case "name":
+      if (refusal.called) {
+        return (
+          <>
+            <code>{refusal.name}</code> is applied as a function here, and a function takes no index.
+          </>
+        );
+      }
+      return refusal.typedAfter ? (
+        <>
+          <code>{refusal.name}</code> is one name. Put the cursor right after the index you typed after it, then press{" "}
+          {key}.
+        </>
+      ) : (
+        <>
+          <code>{refusal.name}</code> is one name: the key turns the letter or number typed right after a name into its
+          index. Type the index after it (for example <code>{refusal.name}k</code>), keep the cursor right after the
+          index and press {key}.
+        </>
+      );
+    case "number":
+      return (
+        <>
+          A digit right after <code>{refusal.name}</code> is read as a number, not as an index.
+        </>
+      );
+    case "partial":
+      return <>That digit is part of a longer number: put the cursor after the whole number, then press {key}.</>;
+    case "backslash":
+      return (
+        <>
+          After a LaTeX command type the index yourself, for example <code>\theta_k</code>.
+        </>
+      );
+    case "braces":
+      return (
+        <>
+          Inside <code>{"_{ }"}</code> the key can't add an index: type it yourself.
+        </>
+      );
+    case "other":
+      return (
+        <>
+          The key can't make an index here: the name would run into the names next to it. Separate them with a space
+          or <code>*</code> (for example <code>x_1 y_k</code>), put the cursor right after the index and press {key}{" "}
+          again.
+        </>
+      );
+    default:
+      return (
+        <>
+          Type the letter and then its index, for example <code>xk</code>, and press {key} right after the index: it
+          becomes <Tex tex="x_k" />.
+        </>
+      );
+  }
 }
 
 interface FreeResponseProps {

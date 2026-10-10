@@ -255,6 +255,10 @@ A step may refer only to earlier steps that exist. Stored lessons: `scripts/rege
   review the next day), the XP of a pass at 80 %, no implicit credit to prerequisites. First used for S4a on
   2026-10-09: the learner had worked through the proof lesson twice and did not want to repeat practice that replayed
   it.
+- **A faulty question found after the attempt** (`scripts/flag_question.py`, app stopped): flagged on the learner's
+  behalf through the same path as the app's Flag button (`engine.flag`), so the attempt is re-scored without it — a
+  failure in a flagged capstone is never the learner's. First used for S10 on 2026-10-10, with the learner's consent:
+  its variant renamed x_k as c and had two ambiguous statements; without it the scored steps gave 90 % (pass, Good).
 
 ## 5b. Quizzes (decided 2026-10-06)
 

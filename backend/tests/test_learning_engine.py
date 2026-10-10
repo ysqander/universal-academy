@@ -1508,6 +1508,47 @@ def test_old_review_state_in_progress_finishes_with_the_new_scoring() -> None:
     assert done.task.outcome == "passed" and done.xp_awarded == 4  # (0 + 2 + 3) / 6 = 0.83 → Good
 
 
+def test_flag_question_script_rescores_a_failed_lesson_like_the_flag_button() -> None:
+    """scripts/flag_question.py: a question the learner reported in conversation is flagged on their behalf through
+    engine.flag — a lesson failed in a faulty capstone passes on what is left, the failure is taken back, and no
+    top-up is requested."""
+    import os
+    import socket
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from app.config import settings
+
+    fx = build_course()
+    task_id, cap, _ = _to_capstone(fx)  # 2 / 2 so far
+    engine.submit_answer(task_id, step_submit(cap, 0, correct=False), T0)
+    stopped = engine.submit_answer(task_id, step_submit(cap, 1, correct=False), T0)
+    assert stopped.task.outcome == "failed" and failures(fx.sid("S1")) == {"cap": 1}
+    key = db.query_one("SELECT key FROM questions WHERE id = ?", (cap,))["key"]
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    script = Path(__file__).resolve().parents[1] / "scripts" / "flag_question.py"
+
+    def run():
+        return subprocess.run(
+            [sys.executable, str(script), "--data-dir", str(settings.data_dir), "--course", fx.course_id, "--skill", "S1",
+             "--question", key, "--reason", "the variant renamed a letter", "--yes", "--no-backup",
+             "--server-url", f"http://127.0.0.1:{port}/api/health"],
+            capture_output=True, text=True, timeout=120, env={**os.environ, "UA_FAKE_LLM": "1"},
+        )  # fmt: skip
+
+    done = run()
+    assert done.returncode == 0 and "passed, score 100%" in done.stdout and "S1 is learned" in done.stdout, done.stdout + done.stderr
+    assert failures(fx.sid("S1")) == {} and status(fx.sid("S1")) == "learned"
+    row = db.query_one("SELECT flagged, flag_reason FROM questions WHERE id = ?", (cap,))
+    assert row["flagged"] == 1 and row["flag_reason"] == "learner: the variant renamed a letter"
+    assert "top-up" not in done.stdout + done.stderr
+    again = run()
+    assert again.returncode == 1 and "already flagged" in again.stdout
+
+
 def test_mark_passed_script_records_the_weakest_pass() -> None:
     """scripts/mark_passed.py: the learner's own decision that a lesson is passed — learned with a Hard card, the XP of
     a pass at 80 %, the active lesson task closed as passed, dependents unlocked, no implicit credit."""

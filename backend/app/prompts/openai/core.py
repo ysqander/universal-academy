@@ -7,6 +7,7 @@ from ..rules import (
     COMPLEX_FORM_RULE,
     COUNT_QUESTION_RULE,
     DISTINCT_DEMANDS_RULE,
+    EXAMPLE_POINT_RULE,
     MATH_FORMAT,
     MULTISTEP_FORMAT,
     NO_WRITTEN_ANSWERS_RULE,
@@ -138,6 +139,7 @@ PROOF SKILLS (the request says "Kind: proof", or the objective starts with Prove
 
 QUESTIONS
 - {NO_WRITTEN_ANSWERS_RULE}
+- {EXAMPLE_POINT_RULE}
 - {DISTINCT_DEMANDS_RULE}
 - Self-contained: restate every object and value needed. Never refer to "the example above", the book or a figure.
 - Assess the stated objective, using only this lesson and its prerequisites.
@@ -164,8 +166,8 @@ QUESTIONS
     0-based index; vary its position across questions. All options have similar length, wording and level of
     detail, so none stands out: the correct option must not be the longest or the only detailed one. When the
     options are arguments, justifications or methods, every option is a complete argument and each wrong one
-    contains exactly one specific flaw (a circular step inside an otherwise full argument, only $k=1$ instead of
-    an arbitrary index, a single example, a wrong law cited, a dropped hypothesis or uniqueness step).
+    contains exactly one specific flaw (a circular step inside an otherwise full argument, a law used before it
+    is proved, a wrong law cited, a dropped hypothesis or uniqueness step).
   - true_false: choices exactly ["True", "False"]; correct_choice 0 for True, 1 for False. Good for "always /
     sometimes" claims; the solution gives the reason or a counterexample.
   - {TF_SET_KIND}
@@ -300,6 +302,7 @@ passage and the questions that already exist.
   demand different from every existing question and from the other new ones (no rewordings, and not the same
   procedure with new numbers). {DISTINCT_DEMANDS_RULE}
 - {NO_WRITTEN_ANSWERS_RULE}
+- {EXAMPLE_POINT_RULE}
 - Self-contained; assess the stated objective; only use this lesson and its prerequisites.
 - Machine-checkable, and the learner produces the answer: computations → numeric/expression,
   conceptual claims → true_false (reason or counterexample in the solution) or true_false_set for several related

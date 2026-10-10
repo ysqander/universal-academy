@@ -381,7 +381,10 @@ class ProofHalf(BaseModel):
 
 
 class ScopeStatement(BaseModel):
-    statement: str = Field(description="'We have proved …' — a claim about what the guided case established.")
+    statement: str = Field(
+        description="A claim about a move of this proof — one it may make, one it may not make (shown as a move), what "
+        "equality needs, which stage proved what. Never about what one example or a fixed input proves."
+    )
     true: bool
 
 
@@ -409,7 +412,7 @@ class ProofPlan(BaseModel):
     guided_key: str = Field(description="SymPy key of that key line, e.g. '-a*d-b*c+(a*c-b*d)*i' (or '' for a choice).")
     general_case: str = Field(description="The full statement, shown as a worked table in the generalize block.")
     scope_statements: list[ScopeStatement] = Field(
-        description="The scored scope check's claims: 3 'We have proved …' claims with both true and false ones, and a 4th that shows a move the proof may not make (false)."
+        description="The scored 'which moves may this proof make' check's claims: 3–4 claims about this proof's moves, both true and false ones (THE PROOF PLAN item 9)."
     )
     practice_statements: list[PracticeStatement] = Field(description="3–6 statements the practice proves; none is the statement, its guided case or a worked example.")
     capstone_statement: str = Field(
@@ -525,7 +528,7 @@ class LessonV2Draft(BaseModel):
     objective: str
     goal_line: str = Field(description="'Your goal:' one sentence in learner language with a concrete example.")
     blocks: list[TeachingBlock] = Field(
-        description="The ordered teaching sequence: at most 9 blocks (10 with a case the learner missed), 1-2 graded checks + 1 reflect check (proof skills: THE PROOF TRACK — 10 blocks, 4-6 scored checks + 1 reflect)."
+        description="The ordered teaching sequence: at most 9 blocks (10 with a case the learner missed), 1-2 graded checks + 1 reflect check (proof skills: THE PROOF TRACK — 9 blocks, 4-6 scored checks, no reflect)."
     )
     notation: list[NotationItem] = Field(description="Only symbols actually used in this lesson, each introduced in the text before use.")
     knowledge_points: list[KnowledgePointDraft] = Field(

@@ -22,6 +22,7 @@ import json
 import logging
 import re
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,6 +121,36 @@ MAX_SHOWN_MISSES = 10  # learner misses on this skill (any lesson version) shown
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
 V2_VIZ = {"format": "none"}  # skills.viz_json of a v2 lesson: its visuals live in the blocks
 _GOAL_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*your goal\s*:?\s*(?:\*\*)?\s*:?\s*", re.IGNORECASE)
+# The learner's rule 17 (2026-10-10, prompts/rules.py EXAMPLE_FEEDBACK): no point that one example, value or special
+# case does not prove or determine the general case. The wordings the stored lessons used (S4a, S4b, S10, S13) — a
+# draft that has one goes to the revision (example_point_problems).
+_EXAMPLE_POINT = re.compile(
+    "|".join(
+        f"(?:{p})"
+        for p in (
+            # "Why does this not yet prove the law?", "Why is this not a proof?", "Why doesn't the check prove it?"
+            r"\bwhy\b[^?.]{0,80}?\bnot\s+yet\s+(?:a\s+proof|prove|proved|enough|establish)",
+            r"\bwhy\b[^?.]{0,80}?(?:\bnot|n't)\s+(?:itself\s+)?(?:a\s+proof|prove)\b",
+            # "Why is knowing h(1/2) = 3 not enough to specify h on [0, 1]?"
+            r"\bnot\s+(?:yet\s+)?(?:enough|sufficient)\s+to\s+(?:prove|specify|determine|establish|pin\s+down)\b",
+            # "one example is not a proof", "a single value does not determine …", "one choice of inputs only shows …"
+            r"\b(?:one|a\s+single|a\s+specific|one\s+specific|a\s+particular|one\s+particular)\s+(?:example|value|choice"
+            r"(?:\s+of\s+(?:inputs|numbers|values))?|numeric(?:al)?\s+(?:check|example|case)|computation|calculation|instance)s?\b"
+            r"[^.;]{0,60}?(?:\b(?:is|are|does|do)\s+not\b|\b(?:isn't|aren't|doesn't|don't|never|cannot|can't)\b|"
+            r"\b(?:proves?|shows?|covers?|checks?)\s+only\b|\bonly\s+(?:proves|shows|checks|covers)\b)"
+            r"[^.;]{0,30}?\b(?:a\s+proof|prove|proof|make\s+a\s+law|establish|determine|specify|generali[sz]e|enough|cover|case)",
+            # "a numerical check covers one case only", "one computation covers only that case"
+            r"\b(?:numeric(?:al)?\s+(?:check|example)|example|computation|calculation|check)s?\s+(?:covers?|proves?|shows?|"
+            r"checks?|settles?)\s+(?:only\s+)?(?:one|a\s+single|that|this)\s+(?:case|choice|example|input|value|pair)\b",
+            r"\bagreement\s+on\s+(?:the\s+)?(?:numbers|one\s+example|an\s+example)\b",
+            # a claim to reject: "the check with x = (1, −3) alone proved it for every x", "this alone proves … for every"
+            r"\b(?:check|calculation|computation|example|numbers|this)\b[^.;]{0,60}?\balone\b[^.;]{0,60}?\bfor\s+(?:every|all|each)\b",
+            r"\b(?:example|special\s+case|numeric(?:al)?\s+check)\s+(?:taken|offered|mistaken|treated)\s+(?:as|for)\s+a\s+proof\b",
+        )
+    ),
+    re.IGNORECASE,
+)
+_NOT_SHOWN = {"job", "new_idea", "key", "answer", "targets", "source_exercise", "kind", "visual", "checklist", "tier"}
 
 
 class InvalidPlan(ValueError):
@@ -942,7 +973,7 @@ def review_request(
         *(["", *plan_lines(spec.proof)] if spec.proof is not None and is_proof_spec(spec) else []),
         "",
         "COUNTS FOR THE DENSITY PASS (from the writer's own labels — judge the content too)",
-        *idea_lines(draft, proof=is_proof_track(spec)),
+        *idea_lines(draft),
         "",
         "LESSON DRAFT",
         render_lesson(draft),
@@ -950,14 +981,10 @@ def review_request(
     return "\n".join(lines)
 
 
-def block_limits(proof: bool) -> tuple[int, int]:
-    """(target, maximum) blocks of a teaching sequence: the proof track has 10 (11 with a planned miss)."""
-    return (TARGET_BLOCKS + 1, MAX_TEACHING_BLOCKS + 1) if proof else (TARGET_BLOCKS, MAX_TEACHING_BLOCKS)
-
-
-def idea_lines(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
-    """The blocks' declared new ideas, counted against the lesson budget (the reviewer's density pass)."""
-    target, maximum = block_limits(proof)
+def idea_lines(draft: LessonV2Draft) -> list[str]:
+    """The blocks' declared new ideas, counted against the lesson budget (the reviewer's density pass). The proof track
+    has the same block limits since its reflect check went (2026-10-10)."""
+    target, maximum = TARGET_BLOCKS, MAX_TEACHING_BLOCKS
     ideas = [(i, b.new_idea.strip()) for i, b in enumerate(draft.blocks, start=1) if b.new_idea.strip()]
     lines = [f"{len(draft.blocks)} blocks; {len(ideas)} declare a new idea (budget: about {IDEA_BUDGET} per lesson)."]
     lines += [f"- block {i}: {idea}" for i, idea in ideas]
@@ -1198,9 +1225,9 @@ async def validate_v2(
         if strict:
             raise InvalidLesson("the teaching sequence has no inline check (1–3 are needed before the practice)")
         notes.append("the teaching sequence has no inline check")
-    elif len(checks) > (7 if proof else 4):  # a proof lesson: 4–6 scored steps and a reflect check
-        notes.append(f"{len(checks)} inline checks ({'5–7' if proof else '1–3'} planned)")
-    if checks and not any(c["kind"] == "reflect" for c in checks):
+    elif len(checks) > (6 if proof else 4):  # a proof lesson: 4–6 scored steps (no reflect check since 2026-10-10)
+        notes.append(f"{len(checks)} inline checks ({'4–6' if proof else '1–3'} planned)")
+    if checks and not proof and not any(c["kind"] == "reflect" for c in checks):
         notes.append("no explanation ('reflect') check")
     if not any(b["kind"] == "faded_example" for b in blocks):
         notes.append("no faded example")
@@ -1280,10 +1307,10 @@ def _counts_as_choice(q: QuestionDraft) -> bool:
 def quality_problems(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
     """Rules a draft must meet before it is stored as is (each one sends it to the revision; a last draft that still
     breaks them is stored anyway): a teaching sequence of at most MAX_TEACHING_BLOCKS blocks and MAX_PROSE_WORDS words
-    of prose, and questions served first that make the learner produce answers — at most one choice question among
-    them and at least one typed answer."""
+    of prose, questions served first that make the learner produce answers — at most one choice question among them
+    and at least one typed answer — and nothing that makes the point of the learner's rule 17."""
     problems = []
-    target, maximum = block_limits(proof)
+    target, maximum = TARGET_BLOCKS, MAX_TEACHING_BLOCKS
     n, words = len(draft.blocks), sum(prose_words(b.body) for b in draft.blocks)
     if n > maximum or words > MAX_PROSE_WORDS:
         problems.append(
@@ -1311,7 +1338,44 @@ def quality_problems(draft: LessonV2Draft, *, proof: bool = False) -> list[str]:
                 else "lead knowledge point 1 with one independent, typed application of the method on fresh numbers"
             )
         )
+    problems += [
+        f"{place} — the point that one example does not prove or determine the general case, which the learner ruled "
+        "out (rule 17): cut it; the letters simply repeat the moves, and a concrete case is shown as an instance of the "
+        "general rule"
+        for place in example_point_problems(draft)
+    ]
     return problems
+
+
+def _shown_texts(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            if k not in _NOT_SHOWN:
+                yield from _shown_texts(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _shown_texts(v)
+
+
+def example_point_problems(draft: LessonV2Draft) -> list[str]:
+    """Where a draft makes the point the learner ruled out on 2026-10-10 (rules.EXAMPLE_FEEDBACK, rule 17): one
+    example, value or special case does not prove or determine the general case. One entry per place (a block, a
+    question by key, a knowledge point's teaching, the capstone), quoting the first match."""
+    d = draft.model_dump()
+    places: list[tuple[str, Any]] = [(f"block {n}", b) for n, b in enumerate(d["blocks"], start=1)]
+    for k, kp in enumerate(d["knowledge_points"], start=1):
+        places.append((f"knowledge point {k}", {f: kp[f] for f in ("title", "explanation", "worked_example")}))
+        places += [(q["key"], q) for q in kp["questions"]]
+    places += [("cap", d["capstone"]), ("goal line", d["goal_line"]), ("deeper", d["deeper"]), ("connection", d["connection"])]
+    found = []
+    for where, value in places:
+        for text in _shown_texts(value):
+            if m := _EXAMPLE_POINT.search(text):
+                found.append(f'{where}: "…{text[max(0, m.start() - 40) : m.end() + 20].strip()}…"')
+                break
+    return found
 
 
 def blocking_count(review: LessonReview) -> int:

@@ -234,6 +234,31 @@ repeat these either
    proof is an outcome."""
 
 
+# The learner after S10 and S13 (2026-10-10). Shared by every provider's planner, writer and reviewer, proof track
+# included; pipeline/lesson_v2.example_point_problems finds the usual wordings and sends the draft to the revision.
+EXAMPLE_FEEDBACK = """\
+WHAT THE LEARNER SAID ON 2026-10-10 (after S10 and S13) — never repeat this either
+17. "One specific example does not make a law" is a fact the learner already knows, and the lessons kept making the
+   point ("Both routes reached −3+i. Why does this not yet prove the law?", "Why is knowing h(1/2) = 3 not enough to
+   specify h on [0, 1]?", a claim to reject such as "the check with x = (1, −3) alone proved it for every x", a
+   bridge "one example is not a proof — letters stand for every input"): "redundant". No block, check, question,
+   claim, option, misconception, summary or 'deeper' note makes that point, in any lesson, and none asks why one
+   value, example or special case does not prove or determine the general case. What matters is the other direction:
+   a concrete case EXEMPLIFIES the general rule. Start from numbers when they show the moves, then make the same moves
+   with letters without a transition speech ("this is only one case, so we replace the numbers by letters"): say
+   "The same moves with letters" and, where it helps, name the numbers as one instance of the letters (α = 2+i is
+   a = 2, b = 1). A definition says positively what determines its object (a function on [0, 1] is given by its value
+   at every point). A counterexample that refutes an "always" claim is a different point and is still taught."""
+
+
+# The same rule in one line, for the prompts without the feedback list (v1 lessons, review top-ups).
+EXAMPLE_POINT_RULE = (
+    "No question, claim, option or argument whose point is that one example, value or special case does not prove "
+    "or determine the general case: the learner knows it and finds the point redundant (2026-10-10). A counterexample "
+    "that refutes an \"always\" claim is still fine."
+)
+
+
 SPLIT_TEST = """\
 SPLIT TEST: does this node hold separate OUTCOMES — tasks someone could be able to do one of and not the other, each
 worth doing on its own (multiplying vs. computing powers vs. finding square roots; a computation vs. proving the laws
@@ -360,12 +385,12 @@ WHAT THE LEARNER SAID ABOUT THE FIRST PROOF LESSON (S4a, "quite convoluted") —
 14. The learner's part was trivial algebra inside someone else's proof: the faded step "rewrite $a(dt)+b(ct)$ with real
    products regrouped" tested nothing about the proof.
 15. Long expansions instead of meaning: 12-term expansions of $(\\alpha\\beta)\\lambda$ in six letters dominated the
-   lesson, and too little said what a proof establishes.
+   lesson.
 16. Symbol overload: on paper the learner "got lost interchanging the symbols" between the two calculations. The
    questions also renamed the letters every time ($p,q,r,s$; $h,k,l,m,n,t$), inflated statements
    ($(\\alpha+8)(\\beta+11i)=(11i+\\beta)(8+\\alpha)$) and asked "which continuation" between long method sentences.
-What they asked for: understand a SMALL proof and construct its calculations yourself — numbers first, then what
-counts as a proof, then a special case you build, then the general proof as a worked solution, then transfer."""
+What they asked for: understand a SMALL proof and construct its calculations yourself — numbers first, then a
+special case you build, then the general proof as a worked solution, then transfer."""
 
 
 PROOF_PATTERNS = """\
@@ -390,7 +415,7 @@ transfer between lessons is then visible; the strategy counts as one new idea):
   pattern table with one row per half, filled before either half is proved; each half uses its own pattern.
 - conditions_or_counterexample, "Check the conditions, or break one": closure for arbitrary members, or one pinned
   counterexample. A membership card per condition: have (named values) | need | link. One counterexample refutes
-  "always"; one example never proves it; a counterexample must meet the hypotheses."""
+  "always"; a counterexample must meet the hypotheses."""
 
 
 REFERENCE_PROOF = """\
@@ -407,28 +432,28 @@ Teaching (S = a scored step: it counts toward the lesson, and the next block com
    learner who mixes up the inputs gets 1−2i or 1+2i. Hint: "x, y come from conj(α), u, v from conj(i)".
 4. check (S, expression, constant key) "Route A, calculated separately": the slot row of αi = (2+i)(0+1i) with both
    results '?'; "enter αi in standard form". Key −1+2i. Explanation: its conjugate is −1−2i — the same destination.
-5. check (reflect): "Both routes reached −1−2i. Why is this not yet a proof?"
-6. demonstrate "Letters stand for every input": keep β = i and write α = a+bi. Route B's first leg: conj(α) = a − bi,
-   conj(i) = 0 − 1i.
-7. faded_example (S): row x = a, y = −b, u = ?, v = ?. Check (expression): "Enter conj(α)·conj(i) in standard form; the
+5. demonstrate "The same moves with letters": keep β = i and write α = a+bi (the numbers above are a = 2, b = 1).
+   Route B's first leg: conj(α) = a − bi, conj(i) = 0 − 1i. No sentence on why letters are needed.
+6. faded_example (S): row x = a, y = −b, u = ?, v = ?. Check (expression): "Enter conj(α)·conj(i) in standard form; the
    coordinates may stay unexpanded." Key -b-a*i.
-8. demonstrate: route A, αi with slots (a, b, 0, 1) gives −b + ai; its conjugate is −b − ai. Comparison table: real
-   −b | −b; imaginary −a | −a. Proved for β = i and every α.
-9. check (S, true_false_set) "We have proved:" conj(αi) = conj(α)·conj(i) for every α (T); conj(αβ) = conj(α)·conj(β)
-   for every α, β (F, not yet); the calculation with α = 2+i proved it for every α (F); "starting from
-   conj(αi) = conj(α)·conj(i) and simplifying both sides would also have been a proof" (F — it assumes the statement).
-10. generalize (S): β = c+di; route A | route B in one table — inner result, then the slots of route B's outer product
+7. demonstrate: route A, αi with slots (a, b, 0, 1) gives −b + ai; its conjugate is −b − ai. Comparison table: real
+   −b | −b; imaginary −a | −a. So conj(αi) = conj(α)·conj(i) for every α.
+8. check (S, true_false_set) "Which moves may this proof make?": reorder real products inside a coordinate (T); start
+   from conj(αi) = conj(α)·conj(i) and simplify both sides (F — it assumes the statement); conclude once the real
+   coordinates agree (F — equality needs both); rewrite αi as iα, commutativity being proved in an earlier lesson (T).
+9. generalize (S): β = c+di; route A | route B in one table — inner result, then the slots of route B's outer product
    as '?' (check: "enter the four slots (x, y, u, v) of conj(α)·conj(β)", key (a, -b, c, -d)); the coordinate rows in
    the check's explanation; the real laws named once; "the letters were arbitrary, so … for all α, β"; the method in
    one line.
 Variant (the capstone slot, weight 2): conj(α·conj(β)) = conj(α)·β — one factor is conjugated before the product: s1
 route A, α·conj(β) then its conjugate, key a*c+b*d+(a*d-b*c)*i; s2 the four slots of route B's product conj(α)·β, key
-(a, -b, c, d); s3 a true_false_set of 3 claims about what the change does (both coordinates are still compared; the
-same two-routes strategy works; a check on α = 2+i alone would prove nothing).
+(a, -b, c, d); s3 a true_false_set of 3 claims about the changed proof (the imaginary coordinates now meet by the real
+law −(bc − ad) = ad − bc (T); conjugating both sides of the variant is a valid first step (F — it assumes it); both
+routes still need only the definitions and real-number laws (T)).
 Practice (not served in the lesson — a retry and the reviews ask it): KP1 Transfer — walkthrough of
 conj((1+i)α) = (1−i)·conj(α): s1 route A, key a-b-(a+b)*i; s2 the slots of route B's product, key (1, -1, a, -b); s3
-the real law for one shown pair (choice). KP2 What a proof establishes — worked example conj(conj(α)) = α; a true_false_set
-of 5 claims."""
+the real law for one shown pair (choice). KP2 What the proof rests on — worked example conj(conj(α)) = α, each line with
+what licenses it; a true_false_set of 5 claims about moves in shown arguments."""
 
 
 # The planner's and writer's header above the skill's misconceptions (a Learner's miss is re-tested on NEW numbers).
@@ -477,10 +502,11 @@ there — never a replay of the proof. So:
   the check's hint, and a right second answer earns ½ (a choice check has one try); "Show answer" earns 0. The app
   sends the lesson only up to the next unanswered scored step, so the block AFTER a scored step may show its answer.
 - 4–6 SCORED STEPS, and they are the proof's real moves, never tidy-ups: the key computation(s) of the concrete case
-  (1–2 steps), the guided case's key line (the faded example), scope (the true_false_set of the plan's scope claims:
-  three about what has been proved, and a fourth that shows a move the proof may not make — false), and one entry of
-  the general case's worked table (a '?' cell: a short slot tuple, a solved coordinate, or a
-  coordinate of at most 4 terms). One 'reflect' check (never scored) still asks why agreement on numbers is not a proof.
+  (1–2 steps), the guided case's key line (the faded example), what the proof rests on (the true_false_set of the
+  plan's 3–4 claims about this proof's moves: a move it may make, a move it may not make — the statement itself or an
+  unproved law, shown as a move — what equality needs, which stage proved what), and one entry of the general case's
+  worked table (a '?' cell: a short slot tuple, a solved coordinate, or a coordinate of at most 4 terms). No reflect
+  check: nothing asks or says why the numbers do not prove the law (rule 17).
 - EACH SCORED STEP: its answer is printed nowhere before the learner answers — not in its own block or prompt, not in
   an earlier block, nor in an earlier check's prompt, explanation or answer (an earlier skill's result recalled in the
   setup counts as printed); never a value the statement forces (the second route's final value, the 1 of a checked
@@ -495,6 +521,6 @@ there — never a replay of the proof. So:
   what the change does (to the proof, or to the result) — a question the text just shown does not answer.
 - A misconception the lesson names, and a "Learner's miss", is tested by a scored step or a variant step whose key
   differs from the misconception's answer.
-- PRACTICE IS FOR LATER. The knowledge points (the transfer walkthrough, "what a proof establishes", their spares) are
+- PRACTICE IS FOR LATER. The knowledge points (the transfer walkthrough, "what the proof rests on", their spares) are
   not served in the lesson: a retry of the lesson and the spaced reviews ask them. Write them as before, with
   target_questions 1."""

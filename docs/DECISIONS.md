@@ -112,9 +112,10 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
   convoluted": a trivial faded step, 12-term expansions, new letters in every question, "got lost interchanging the
   symbols" between the two calculations; design in docs/lesson-v2.md). The teaching proves ONE statement three times:
   on small numbers, with one input fixed where the learner computes one route, and in general as a worked table read
-  once. One named strategy, one letter set for the whole lesson, slot tables before every product, a "why is one
-  example not a proof" reflect and a scope check; practice transfers the strategy to statements the teaching did not
-  prove. Proof skills run one reasoning notch higher on the same model (Sol; the learner chose this over Astra).
+  once. One named strategy, one letter set for the whole lesson, slot tables before every product, a scored check of
+  which moves the proof may make (until 2026-10-10 a "why is one example not a proof" reflect and a scope check —
+  dropped, see "No 'one example does not make a law' point" below); practice transfers the strategy to statements
+  the teaching did not prove. Proof skills run one reasoning notch higher on the same model (Sol; the learner chose this over Astra).
   **Replaced** "the teaching proves 1–2 representative statements in full".
 - **The proved result is never what the learner types** (the learner, 2026-10-08: "obviously the student doesn't need
   to type the expected final result which is what is expected to be proven. The steps before are what matters"). In a
@@ -125,20 +126,36 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
   studying the proof-track S4a: what they disliked was "going through the exercises where we basically repeat the same
   thing again"; "whenever we're working out the proof, we are already scoring points, and then at the end … one
   wrinkle or variant … not repeating the same as before"). A proof lesson's graded inline checks are its **scored
-  steps** — 4–6 of the proof's real moves: the concrete case's key computation(s), the guided case's key line, scope,
-  and one '?' entry of the general table; one reflect check stays unscored — each with a hint shown after a wrong first
+  steps** — 4–6 of the proof's real moves: the concrete case's key computation(s), the guided case's key line, which
+  moves the proof may make, and one '?' entry of the general table — each with a hint shown after a wrong first
   answer. The lesson ends with **one variant** in the capstone slot: a statement the teaching did not prove where the
   same strategy works but one thing changes, 2–3 steps, weight 2, no earlier-skill computation. The knowledge points'
   walkthroughs and true/false sets are still written but not served in the lesson: they are the pool of a retry and of
-  the reviews. Teaching: 10 blocks. Rule text once, for both providers: `prompts/rules.py` `GUIDED_PROOF_RULE`; engine
-  `learning/guided.py`; points §5. **Replaced** "practice transfers the strategy" (the variant does it, once) and the
+  the reviews. Teaching: 9 blocks (10 with the reflect, until 2026-10-10). Rule text once, for both providers:
+  `prompts/rules.py` `GUIDED_PROOF_RULE`; engine `learning/guided.py`; points §5. **Replaced** "practice transfers the strategy" (the variant does it, once) and the
   4-step proof capstone (an earlier skill computes μ → route A → route B → USE). Lessons written before keep their
   old flow (S4a; lesson_json has no `"scoring": "guided"`).
+- **No "one example does not make a law" point** (the learner, 2026-10-10, after S10 and S13: "a student knows this
+  fact: one specific example does not make a law" — "redundant"; "It's more important to understand that a specific
+  example should exemplify a general rule"; the S13 reflect "Why is knowing h(1/2)=3 not enough to specify h on
+  [0,1]?"). No block, check, question, claim, option, misconception or note makes that point, in any lesson, and none
+  asks why one value, example or special case does not prove or determine the general case. Numbers show the moves and
+  the letters repeat them without a transition speech ("The same moves with letters"); the numbers may be named as one
+  instance of the letters (α = 2+i is a = 2, b = 1); a definition says positively what determines its object. A
+  counterexample that refutes "always" is a different point and stays. Proof track: no reflect check (9 blocks); the
+  scope claims "the numbers / a fixed input proved it for every input" went — the scored check after the guided case
+  asks which moves the proof may make (a real law inside a coordinate, the statement itself or an unproved law shown as
+  a move, what equality needs, which stage proved what, where a hypothesis was used); knowledge point 2 is "What the
+  proof rests on"; the misconception "an example taken as a proof" is not planned. Rule text once: `prompts/rules.py`
+  `EXAMPLE_FEEDBACK` (rule 17, in every planner, writer and reviewer) and `EXAMPLE_POINT_RULE` (the v1 lesson and
+  review top-up prompts); `pipeline/lesson_v2.example_point_problems` finds the wordings the stored lessons used and
+  sends such a draft to the revision.
 - **Nothing essential in optional sections.** "Go deeper" may only hold an alternative explanation or a deeper
   derivation. (v1's "Show the missing steps" hid needed reasoning — the original S2 complaint.)
 - **Checks inside the teaching sequence.** 1–2 graded inline checks plus one ungraded "why" reflect check, all within
   the 9 blocks; a faded example's missing step is always machine-checked and is the lesson's key move, not printed
-  arithmetic. Proof lessons: 4–6 scored steps plus the reflect, in 10 blocks (above).
+  arithmetic. The reflect never asks why one example does not prove the general case (above). Proof lessons: 4–6
+  scored steps and no reflect, in 9 blocks (above).
 - **No "Common mistakes" sections** (the learner found them useless). Known misconceptions still feed distractors.
 - **Visuals must earn their place**: "this helps the learner notice ___"; "none" is valid; never 3D or decorative.
 

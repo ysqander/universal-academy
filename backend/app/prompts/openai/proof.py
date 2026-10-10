@@ -66,13 +66,16 @@ read once, as a worked solution.
    (guided_key ''); two_halves: the key line of the easier half; conditions_or_counterexample: the condition value at
    u+w in named values.
 8. general_case — the full statement (one more pair of letters), shown as a worked table.
-9. scope_statements — four claims for the scored scope check. Three "We have proved …" claims: the guided case for all
-   its inputs (true); the general statement (false, not yet); the numeric case for all inputs (false). two_halves: the
-   half proved (true) and both halves (false); law_chain: every vector space (true) and only F² (false);
-   find_then_check: solving the equations proved that no other number works (true), solving alone proved that the
-   candidate works (false — the check did), the guided case's result for every input including the one the
-   hypothesis excludes (false). The fourth shows a move the proof may not make, as a move (false): "starting from the
-   law and simplifying both sides would also prove it", "writing β = 1/α and simplifying is a valid first step".
+9. scope_statements — 3–4 claims for the scored "what the proof rests on" check, both true and false, each about a
+   move of THIS proof that the teaching does not spell out as the claim: a move it may make (a real-number law inside a
+   coordinate, an earlier skill's result — true); a move it may not make, shown as a move (false): "starting from the
+   law and simplifying both sides would also prove it", "writing β = 1/α and simplifying is a valid first step",
+   "expanding (αβ)i term by term with i² = −1" while complex distributivity is unproved; what equality needs ("the
+   routes meet once the real coordinates agree" — false). find_then_check: solving the equations proved that no other
+   number works (true), solving alone proved that the candidate works (false — the check did), where the hypothesis
+   was used (α ≠ 0, to divide by a²+b² — true). two_halves: the half proved (true) and both halves (false);
+   law_chain: the law that licenses a line (true) and a result used before it is proved (false). Never a claim about
+   what the numbers, one example or a fixed input prove (rule 17).
 10. practice_statements — 3–6 statements, each with its knowledge point and role (special_case, general, repair,
    decide, scope). Each differs from the statement, its guided case and every worked example, and is a real member of
    the family or a natural special case (one input fixed at i, 1, 1+i, 2−i, a real t or a specific vector). Never
@@ -84,7 +87,8 @@ read once, as a worked solution.
    - knowledge point 1 "Transfer: prove <the next statement> with <strategy>": one input fixed, at most 4 letters; its
      worked example is a different short statement of the family; its first question (the one a retry serves) is that walkthrough —
      never a repair question (the learner's report or miss is re-tested by a scored step, the variant and a spare);
-   - knowledge point 2 "What a proof establishes": example vs proof, special vs general case, circular steps; its
+   - knowledge point 2 "What the proof rests on": the moves a proof may and may not make — real-number laws inside a
+     coordinate, every coordinate compared, earlier results, circular steps, laws used before they are proved; its
      worked example is the short laws;
    - a third only for a part that needs a different decision (the other direction of an iff, a refutation).
    The knowledge points are not served in the lesson: a retry and the spaced reviews ask them.
@@ -98,20 +102,22 @@ read once, as a worked solution.
    "every nonzero α has exactly one β with αβ = 1": for every λ exactly one β has (1+i)β = λ — the right-hand side
    changes, and the factor is the number 1+i, so the letters stay at 4.)
 13. reasoning_sequence — at most 7 bridges and 4 new ideas: the picture; the slots (identify a definition's inputs
-   before applying it); letters standing for every input; scope. The bridges: (1) the statement read as the pattern,
-   and what may not be used; (2) the slots, on the first leg of the numbers; (3) the learner finishes route B on the
-   numbers and computes route A's first leg — both reach the same value; (4) one example is not a proof — letters stand for every input;
-   (5) the guided case: the learner builds route B's last leg, route A is shown, both coordinates are compared;
-   (6) scope: exactly what has been proved; (7) the general case as a worked table, and the method in one line.
+   before applying it); letters standing for every input; what the proof rests on. The bridges: (1) the statement read
+   as the pattern, and what may not be used; (2) the slots, on the first leg of the numbers; (3) the learner finishes
+   route B on the numbers and computes route A's first leg — both reach the same value; (4) the same moves with
+   letters, the numbers named as one instance of them (α = 1+i is a = 1, b = 1) — no bridge on why letters are needed
+   (rule 17); (5) the guided case: the learner builds route B's last leg, route A is shown, both coordinates are
+   compared; (6) what the proof rests on: the moves it may and may not make; (7) the general case as a worked table,
+   and the method in one line.
    Other patterns replace bridge 2's scaffold with their own and bridge 5's leg with their key line.
 14. representations — the slot table ("helps the learner notice which four numbers enter each product, so the two
    routes' inputs are not mixed"; one row per product, x and y from the first factor, u and v from the second) and
    the comparison table (one row per coordinate: route A | route B | the real law). Both are Markdown tables.
 15. misconceptions — at most 3, each tested by a scored step or the variant: a Learner's miss first; a learner's written report on
-   the skill becomes "Learner's report: …" (S4a: "mixes the two routes' inputs when filling a product's slots"); "an
-   example or a special case taken as a proof of the general law"; "uses the law being proved (expands complex
-   brackets with i² = −1)"; for other patterns "assumes what the direction must show", "a counterexample that does
-   not meet the hypotheses", "compares only one coordinate".
+   the skill becomes "Learner's report: …" (S4a: "mixes the two routes' inputs when filling a product's slots"); "uses
+   the law being proved (expands complex brackets with i² = −1)"; for other patterns "assumes what the direction must
+   show", "a counterexample that does not meet the hypotheses", "compares only one coordinate". Never "an example
+   taken as a proof" (rule 17).
 16. difficulty 3–4; est_minutes 12–15. out_of_scope: later skills' statements; a second proof of the same
    statement; shortcuts that replace the definition (multiplying by i as (x, y) → (−y, x) may go to 'deeper')."""
 
@@ -175,13 +181,13 @@ RULES
    scored steps of the sequence below. A scored step's answer is printed nowhere before the learner answers it: a
    route, table or line that holds it comes in a LATER block (or in the step's explanation). A scored step is never a
    regrouping by a real law, a sign tidy-up, arithmetic printed in the block, or a value the statement forces.
-8. MEANING IS TAUGHT AND TESTED. One reflect check (never scored) asks why agreement on numbers is not a proof, before
-   any text says it. The scored scope check (a true_false_set of the plan's four scope claims: three "We have proved …"
-   claims and a move the proof may not make) follows the guided case. It tests both "an example or special case proves
-   the law" and "the law being proved may be used"; other misconceptions are tested by a scored step or a variant step.
+8. MEANING IS IN THE MOVES. The numbers show the moves and the letters repeat them, with no reflect check and no line
+   on why the numbers do not prove the law (rule 17). The scored "what the proof rests on" check (a true_false_set of
+   the plan's 3–4 claims about this proof's moves) follows the guided case and tests "the law being proved may be
+   used"; other misconceptions are tested by a scored step or a variant step.
 
-THE TEACHING SEQUENCE — 10 blocks, about 350 words of prose, 5 scored steps (S) and one reflect. New ideas: the
-picture, the slots, letters for every input, scope.
+THE TEACHING SEQUENCE — 9 blocks, about 330 words of prose, 5 scored steps (S), no reflect check. New ideas: the
+picture, the slots, letters for every input, what the proof rests on.
 1. setup — the picture: the statement with its number, the routes in words, the definitions displayed, may use / may
    not use. new_idea: the picture.
 2. demonstrate — "First, fill the slots": the slot template in one sentence; the numbers; route B's first leg in a
@@ -192,43 +198,43 @@ picture, the slots, letters for every input, scope.
 4. check (S; constant key) — "Route A, calculated separately": its first product as a slot row with both results '?';
    the learner enters route A's first leg (αβ) in standard form. The explanation finishes route A and shows it
    reaching the same number as route B.
-5. check (reflect) — "Both routes reached −3+i. Why does this not yet prove the law?" Model answer: one choice of
-   inputs; the law claims every choice, so we need inputs that stand for every number at once.
-6. demonstrate — "Letters stand for every input": keep the simple input (λ = i); give the other inputs the plan's
-   letters; route B's first leg in a slot row. new_idea: letters for every input.
-7. faded_example (S) — route B's last leg in letters: the row x = a, y = b, u = ?, v = ?, results ?. The check
+5. demonstrate — "The same moves with letters": keep the simple input (λ = i); give the other inputs the plan's
+   letters and name the numbers as one instance of them in a clause (α = 1+i is a = 1, b = 1); route B's first leg in a
+   slot row. No sentence on why letters are needed. new_idea: letters for every input.
+6. faded_example (S) — route B's last leg in letters: the row x = a, y = b, u = ?, v = ?, results ?. The check
    (expression) asks for that leg's result in standard form (the plan's guided_key). A slot mix-up gives a different
    value.
-8. demonstrate — route A in slot rows, then the comparison table, then the conclusion: "for every a, b, c, d — so
+7. demonstrate — route A in slot rows, then the comparison table, then the conclusion: "for every a, b, c, d — so
    (αβ)i = α(βi) for all α, β".
-9. check (S; true_false_set, the plan's 4 scope statements) — "What has been proved so far?" new_idea: scope.
-10. generalize (S) — the general case as ONE two-column worked table (not a slot table with a row per product):
+8. check (S; true_false_set, the plan's 3–4 scope_statements) — "Which moves may this proof make?" new_idea: what the
+   proof rests on.
+9. generalize (S) — the general case as ONE two-column worked table (not a slot table with a row per product):
    columns route A | route B; rows inner result, slots of the outer product, real coordinate expanded, imaginary
    coordinate expanded (equal terms in the same order on both routes). ONE cell is '?' and the block's check asks for
    it — a short entry the rows above it do not give away (the slots of route B's outer product, or route A's inner
    result); the rows below it go in the check's explanation. Then one sentence naming the real laws once; "the
    letters were arbitrary, so … for all …"; the method in one line. There is NO separate summary block.
-An 11th block only for a planned Learner's miss. 'deeper' may hold a shortcut such as "multiplying by i sends (x, y)
+A 10th block only for a planned Learner's miss. 'deeper' may hold a shortcut such as "multiplying by i sends (x, y)
 to (−y, x)", never the main path.
-OTHER PATTERNS keep the ten slots — concrete case (scored) → why that is not a proof → the guided case where the
-learner builds the key line (scored) → scope (scored) → the general case read as a worked solution with one scored
-entry — and change what a route and the guided case are:
+OTHER PATTERNS keep the nine slots — concrete case (scored) → the same moves with letters: the guided case where the
+learner builds the key line (scored) → what the proof rests on (scored) → the general case read as a worked solution
+with one scored entry — and change what a route and the guided case are:
 - find_then_check: block 2 turns the condition on one instance into its two real equations (shown, in the unknown |
   condition | real equations | solved table, "solved" still '?'); block 3 (S) the learner eliminates one unknown and
   enters it; block 4 (S) the learner enters the only candidate (or the other coordinate) — the check that it works
   is shown in block 4's explanation, never scored (its result, 1 or 0, is forced); the instance is one whose result no
   earlier lesson printed. Guided case = the same equations in letters with one coordinate fixed, the learner enters a
-  solved coordinate (S); scope = solving proved "only this can work" (uniqueness), the check proved "it works"
-  (existence), and which hypothesis was used (α ≠ 0); the general table's '?' cell is a solved coordinate or what one
+  solved coordinate (S); what the proof rests on = solving proved "only this can work" (uniqueness), the check proved
+  "it works" (existence), and where the hypothesis was used (α ≠ 0); the general table's '?' cell is a solved coordinate or what one
   elimination gives.
 - suppose_two: name both candidates with their defining equations; evaluate one expression two ways; the guided case
   leaves one line or its reason for the learner (a choice among single equations or short law names).
-- law_chain: the concrete case is the same chain on a vector of F² with numbers; the reflect asks why that does not
-  prove it in every vector space; motivate the purposeful move before making it; the proof is a line | the one law
+- law_chain: the concrete case is the same chain on a vector of F² with numbers; motivate the purposeful move before
+  making it; the proof is a line | the one law
   table; the guided case leaves the key line's law or the next line (a choice); no typed vector lines in an abstract
   space (the grader's algebra turns 0v into 0).
-- two_halves: an assume | show table with one row per direction; the guided case is the easier half; scope asks which
-  half is proved and which remains; the general case is the other half.
+- two_halves: an assume | show table with one row per direction; the guided case is the easier half; the scored check
+  asks which half is proved and which remains; the general case is the other half.
 - conditions_or_counterexample: a membership card have | need | link; the numbers test a concrete pair (a failing pair
   is the counterexample, pinned so that exactly one answer is right); the guided case is closure under addition, with
   the condition value typed in named values (named with the plan's letters).
@@ -245,13 +251,13 @@ lesson's letters everywhere.
   report or miss is the job of a scored step, the variant and a spare. Spares: a recovery walkthrough of another practice statement
   with the same demand; a single-answer typed question (spot the slot error in a shown route leg, the error not named
   → the corrected value).
-- Knowledge point 2 "What a proof establishes" (target_questions 1 — the transfer proofs belong to knowledge point 1
-  and the variant, not here): worked_example = the short laws, with a scope
-  sentence and the contrast with a numeric check (S4a: (α+β)+λ = α+(β+λ); λ·1 = λ with slots g, h, 1, 0). First
-  question: a true_false_set of 4–5 short claims, both true and false, each about a shown argument — a numeric check
-  offered as a proof; letters for every coordinate with both coordinates compared; a fixed input generalized; a
-  circular step (the law itself, or expanding complex brackets with i² = −1); a real-number law used inside a
-  coordinate — at least two true and two false. A circular claim SHOWS the move so that the learner sees it is
+- Knowledge point 2 "What the proof rests on" (target_questions 1 — the transfer proofs belong to knowledge point 1
+  and the variant, not here): worked_example = the short laws, each line with what licenses it (S4a:
+  (α+β)+λ = α+(β+λ); λ·1 = λ with slots g, h, 1, 0). First question: a true_false_set of 4–5 short claims, both true
+  and false, each about a move in a shown argument — letters for every coordinate with both coordinates compared; only
+  one coordinate compared; a circular step (the law itself, or expanding complex brackets with i² = −1); a real-number
+  law used inside a coordinate; an earlier result, or a law used before it is proved — at least two true and two
+  false. Never a claim that a numeric check or a fixed input proves the law (rule 17). A circular claim SHOWS the move so that the learner sees it is
   circular ("in proving i(α+β) = iα+iβ, expanding i((a+c)+(b+d)i) term by term and replacing i² by −1 is a valid first
   step" — false), never one that announces it ("a proof may begin by invoking that same law"), which refutes itself. Spares: a second true_false_set with NEW claims (never a claim of the
   first one again); a decide question (a proposed identity that fails: both sides typed,
@@ -315,7 +321,7 @@ step that needs an earlier skill's computation, or a last step that only subtrac
 answers a later step: the comparison and the law of the scalars that makes the routes meet go in the LAST step's
 explanation and the solution — the last step is where the learner decides them.
 
-EXCEPTIONS (proof skills only, on purpose): 10 blocks with 5 scored steps; the faded example continues the running
+EXCEPTIONS (proof skills only, on purpose): 9 blocks with 5 scored steps and no reflect check; the faded example continues the running
 statement; the generalize block holds a scored '?' cell; the block after a scored step may show its answer (the app
 sends the next block only once the step is answered); the setup is the only place for the circularity warning;
 knowledge point 2 leads with a true_false_set; the knowledge points are not served in the lesson; a slot tuple
@@ -334,8 +340,7 @@ learner would. At every product, ask whether its four inputs can be named from w
 belong to this route. Count the letters and terms the learner must hold in mind. When an issue repeats one of the
 learner's complaints, cite it: 14 (trivial learner part), 15 (long expansions), 16 (symbol overload).
 BLOCKING
-1. Order: the first calculation uses letters (no numbers pass); the general case comes before the guided case; no
-   reflect check between them asking why agreement on numbers is not a proof.
+1. Order: the first calculation uses letters (no numbers pass); the general case comes before the guided case.
 2. Picture: block 1 does not name the plan's strategy and its routes (halves, stages, chain) or does not say what may
    and may not be used; a knowledge point or walkthrough uses another method or another name.
 3. Slots, up to the faded example: a definition applied without its inputs identified in a slot row; a route's next
@@ -362,9 +367,11 @@ BLOCKING
    "which continuation" choice among method descriptions, a bank of lines, an option much longer than the others, or a
    distractor the prompt itself forbids; a step that asks for two things; a witness or counterexample step with more
    than one correct answer.
-9. Meaning: no scope check in the teaching; "an example or special case proves the law" or "the law being proved may
-   be used" not tested by a scored step or a variant step; a mixing-the-routes misconception not tested by a scored
-   typed step whose key differs from the mixed answer.
+9. Meaning: no "what the proof rests on" check in the teaching; "the law being proved may be used" not tested by a
+   scored step or a variant step; a mixing-the-routes misconception not tested by a scored typed step whose key differs
+   from the mixed answer; a block, check, claim, option or misconception whose point is that the numbers, one example
+   or a fixed input do not prove the law (rule 17 — the S10 and S13 reflects; repair: cut it, the letters simply
+   repeat the moves).
 10. Variant (the capstone): not the plan's variant statement; the teaching's statement again with other numbers;
    nothing changes; more than 3 steps; a step that needs an earlier skill's computation; a forced step; a choice among
    proofs; a replay of a knowledge point's walkthrough.
@@ -374,9 +381,10 @@ MINOR: a warning ("without assuming …") repeated after the setup; more than on
 variant prompts that still show slot rows or "reset the slots"; the comparison asserted without naming the real law
 once, or a law named in every line; the general table not aligned (equal terms in different orders without a word
 about it); a knowledge point with no single-answer question (quizzes never serve multistep questions); a reflect
-check that asks for a value or whose model answer repeats the text just shown; a method line that names this
+check (the proof track has none: its meaning is tested by the scored steps); a method line that names this
 statement's letters instead of steps usable on a new statement.
-DENSITY (second pass): the new ideas of a proof lesson are the picture, the slots, letters for every input, and scope.
+DENSITY (second pass): the new ideas of a proof lesson are the picture, the slots, letters for every input, and what
+the proof rests on.
 A fifth idea is surplus: move it to 'deeper' or cut it (a helper shortcut such as "multiplying by i sends (x, y) to
 (−y, x)", a second strategy, a second statement in the teaching, named inner results). A teaching sequence that spends
 more blocks on expansions than on the routes and their comparison is blocking.
@@ -385,7 +393,8 @@ explanation instead of scored — the statement forces it, so it is never typed 
 comparison is scored at most once, by the walkthrough's "which real law" choice or true_false_set step; a variant
 without a comparison step or without an earlier skill (its 2–3 steps are the strategy's moves on the changed
 statement); the knowledge points not being served in the lesson (a retry and the reviews ask them); a block that shows
-the answer of the scored step just before it (the app sends it only once that step is answered); 10 blocks; a faded
+the answer of the scored step just before it (the app sends it only once that step is answered); 9 blocks; no reflect
+check; a faded
 example that continues the running statement; a faded check
 whose answer equals route A's result when route A is shown only after it; a general case given only as a table; a
 generalize block that ends with the method instead of a summary block; knowledge point 2 leading with a

@@ -100,13 +100,13 @@ def test_new_letters_and_long_expansions_are_found():
 def test_the_learners_part_must_be_a_route_leg_not_printed_and_after_numbers():
     draft = lesson()
     blocks = list(draft.blocks)
-    faded = blocks[6]
+    faded = blocks[5]
     regroup = faded.model_copy(update={"check": faded.check.model_copy(update={"answer": "-3+i"})})  # a number, not route B
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:6], regroup, *blocks[7:]]}))
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], regroup, *blocks[6:]]}))
     assert any("fewer than 2 letters" in p for p in hard)
-    printed = blocks[5].model_copy(update={"body": blocks[5].body + "\n\nRoute B will give $(-ad-bc)+(ac-bd)i$."})
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], printed, *blocks[6:]]}))
-    assert any("block 7: the scored check's answer" in p and "printed before the learner answers it" in p for p in hard)
+    printed = blocks[4].model_copy(update={"body": blocks[4].body + "\n\nRoute B will give $(-ad-bc)+(ac-bd)i$."})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:4], printed, *blocks[5:]]}))
+    assert any("block 6: the scored check's answer" in p and "printed before the learner answers it" in p for p in hard)
     letters_first = blocks[2].model_copy(update={"check": blocks[2].check.model_copy(update={"answer": "-a*d-b*c+(a*c-b*d)*i"})})
     hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:2], letters_first, *blocks[3:]]}))
     assert any("numbers first" in p for p in hard)
@@ -123,16 +123,16 @@ def test_inflated_statements_method_options_and_missing_scope_are_found():
     inflated = inflated.model_copy(update={"steps": steps})
     kps = [draft.knowledge_points[0].model_copy(update={"questions": [inflated, *draft.knowledge_points[0].questions[1:]]}),
            draft.knowledge_points[1]]
-    # no scored step and no variant step about what a proof establishes (statement sets that are all true test nothing)
+    # no scored step and no variant step about what the proof rests on (statement sets that are all true test nothing)
     blocks = list(draft.blocks)
-    blocks[8] = blocks[8].model_copy(update={"check": blocks[8].check.model_copy(update={"answer": "TTT"})})
+    blocks[7] = blocks[7].model_copy(update={"check": blocks[7].check.model_copy(update={"answer": "TTT"})})
     cap_steps = list(draft.capstone.steps)
     cap_steps[2] = cap_steps[2].model_copy(update={"answer": "TTT"})
     cap = draft.capstone.model_copy(update={"steps": cap_steps})
     hard, _ = problems(draft.model_copy(update={"knowledge_points": kps, "blocks": blocks, "capstone": cap}))
     assert any("shifted by a constant" in p for p in hard)
     assert any("describes a method" in p for p in hard)
-    assert any("tests what a proof establishes" in p for p in hard)
+    assert any("tests what the proof rests on" in p for p in hard)
 
 
 def test_the_variant_is_short_and_drops_the_scaffold():
@@ -164,14 +164,14 @@ def test_scored_steps_need_hints_and_may_not_be_readable_before_they_are_answere
         "explanation": blocks[2].check.explanation + " Route A starts with $\\alpha\\beta=1+3i$."})})
     hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:2], explained, *blocks[3:]]}))
     assert any("block 4: the scored check's answer $1+3i$ is printed before" in p for p in hard)
-    coin = blocks[8].model_copy(update={"check": blocks[8].check.model_copy(update={
+    coin = blocks[7].model_copy(update={"check": blocks[7].check.model_copy(update={
         "kind": "true_false", "choices": ["True", "False"], "correct_choice": 0, "answer": ""})})
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:8], coin, *blocks[9:]]}))
-    assert any("block 9: a scored true_false check is a coin flip" in p for p in hard)
-    unscored = [b.model_copy(update={"check": None}) if n in (3, 9) else b for n, b in enumerate(blocks)]
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:7], coin, *blocks[8:]]}))
+    assert any("block 8: a scored true_false check is a coin flip" in p for p in hard)
+    unscored = [b.model_copy(update={"check": None}) if n in (3, 8) else b for n, b in enumerate(blocks)]
     hard, soft = problems(draft.model_copy(update={"blocks": unscored}))
     assert any("the teaching has 3 scored steps" in p for p in hard)
-    assert any("block 10: the general case has no scored '?' entry" in p for p in soft)
+    assert any("block 9: the general case has no scored '?' entry" in p for p in soft)
 
 
 def test_the_variant_is_its_own_statement():
@@ -277,7 +277,7 @@ def test_a_proof_skill_is_replanned_on_the_proof_track(tmp_path, monkeypatch):
     # the checks are scored steps with their hints, every one verified; the variant fills the capstone slot
     from app.learning import guided
 
-    assert stored["scoring"] == "guided" and guided.scored_indices(stored) == [2, 3, 6, 8, 9]
+    assert stored["scoring"] == "guided" and guided.scored_indices(stored) == [2, 3, 5, 7, 8]
     assert all(stored["blocks"][i]["check"]["hint"] for i in guided.scored_indices(stored))
     assert [r["status"] for r in stored["guided_verify"]] == ["agree"] * 5, stored["guided_verify"]
     cap = db.query_one("SELECT steps_json FROM questions WHERE skill_id = ? AND role = 'capstone'", (result.skill_id,))
@@ -292,8 +292,8 @@ def test_a_proof_skill_is_replanned_on_the_proof_track(tmp_path, monkeypatch):
 def test_the_faded_row_leaves_route_bs_inputs_to_the_learner():
     draft = lesson()
     blocks = list(draft.blocks)
-    filled = blocks[6].model_copy(update={"body": blocks[6].body.replace("| $a$ | $b$ | ? | ? | ? | ? |", "| $a$ | $b$ | $-d$ | $c$ | ? | ? |")})
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:6], filled, *blocks[7:]]}))
+    filled = blocks[5].model_copy(update={"body": blocks[5].body.replace("| $a$ | $b$ | ? | ? | ? | ? |", "| $a$ | $b$ | $-d$ | $c$ | ? | ? |")})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:5], filled, *blocks[6:]]}))
     assert any("faded slot row prints the inputs" in p for p in hard)
 
 
@@ -364,24 +364,85 @@ def test_forced_and_tuple_answers_of_scored_steps_are_found():
         "check": blocks[3].check.model_copy(update={"answer": "1", "answer_display": "$1$"})})
     hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:3], forced, *blocks[4:]]}))
     assert any("block 4: the scored check's answer $1$ is forced" in p for p in hard), hard
-    tup = blocks[9].model_copy(update={"check": blocks[9].check.model_copy(update={
+    tup = blocks[8].model_copy(update={"check": blocks[8].check.model_copy(update={
         "answer": "(a, b, c*g-d*h, c*h+d*g)", "answer_display": "$(a,b,cg-dh,ch+dg)$"})})
-    printed = blocks[7].model_copy(update={"body": blocks[7].body + "\n\nThe outer slots will be $(a, b, cg-dh, ch+dg)$."})
-    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:7], printed, blocks[8], tup]}))
-    assert any("block 10: the scored check's tuple" in p for p in hard), hard
+    printed = blocks[6].model_copy(update={"body": blocks[6].body + "\n\nThe outer slots will be $(a, b, cg-dh, ch+dg)$."})
+    hard, _ = problems(draft.model_copy(update={"blocks": [*blocks[:6], printed, blocks[7], tup]}))
+    assert any("block 9: the scored check's tuple" in p for p in hard), hard
 
 
-def test_the_proof_prompts_drop_the_old_capstone_and_block_limits():
+def test_the_proof_prompts_drop_the_old_capstone_and_keep_the_general_block_limits():
     from app.prompts import anthropic, openai
 
     for texts in (openai, anthropic):
         writer = texts.PROOF_WRITER_INSTRUCTIONS
-        assert "It CHAINS this lesson's idea" not in writer and "At most 9 blocks" not in writer
+        assert "It CHAINS this lesson's idea" not in writer and "10 blocks (THE PROOF TRACK" not in writer
         assert "earlier skill does real work" not in texts.PROOF_CAPSTONE_REPAIR_NOTE
-        assert "within the proof track's 10 blocks" in texts.PROOF_REVISION_NOTE
-        assert "more than 11 blocks" in texts.PROOF_REVIEWER_INSTRUCTIONS
+        # 9 blocks (10 with a planned miss) since the reflect check went (2026-10-10)
+        assert "At most 9 blocks" in writer and texts.PROOF_REVISION_NOTE == texts.REVISION_NOTE
+        assert "more than 10 blocks" in texts.PROOF_REVIEWER_INSTRUCTIONS
         assert "no earlier skill doing real work" not in texts.PROOF_REVIEWER_INSTRUCTIONS
         assert "It CHAINS this lesson's idea" in texts.WRITER_INSTRUCTIONS  # the general texts keep theirs
+
+
+def test_no_prompt_asks_for_the_point_that_one_example_proves_nothing():
+    """The learner, 2026-10-10 (rules.EXAMPLE_FEEDBACK, rule 17): "one specific example does not make a law" is known
+    and redundant — no reflect on it, no claim to reject, no bridge; a concrete case exemplifies the general rule."""
+    from app.prompts import anthropic, openai
+    from app.prompts.rules import EXAMPLE_FEEDBACK, EXAMPLE_POINT_RULE, GUIDED_PROOF_RULE, REFERENCE_PROOF
+
+    roles = ("PLANNER_INSTRUCTIONS", "WRITER_INSTRUCTIONS", "REVIEWER_INSTRUCTIONS", "PROOF_PLANNER_INSTRUCTIONS",
+             "PROOF_WRITER_INSTRUCTIONS", "PROOF_REVIEWER_INSTRUCTIONS")
+    for texts in (openai, anthropic):
+        assert all(EXAMPLE_FEEDBACK in getattr(texts, name) for name in roles)
+        assert EXAMPLE_POINT_RULE in texts.TOPUP_INSTRUCTIONS and EXAMPLE_POINT_RULE in texts.LESSON_INSTRUCTIONS
+        track = texts.PROOF_PLANNER_INSTRUCTIONS + texts.PROOF_WRITER_INSTRUCTIONS + texts.PROOF_REVIEWER_INSTRUCTIONS
+        track = track.replace(EXAMPLE_FEEDBACK, "")  # (the rule quotes the old wordings)
+        for gone in ("why agreement on numbers is not a proof", "one example is not a proof", "What a proof establishes",
+                     "an\n   example or a special case taken as a proof", "a single example, a wrong law"):
+            assert gone not in track + texts.LESSON_INSTRUCTIONS, gone
+        assert "9 blocks, about 330 words of prose, 5 scored steps (S), no reflect check" in track
+        assert "Outside a proof skill, include one explanation question" in texts.PROOF_WRITER_INSTRUCTIONS
+        assert "a proof lesson has no explanation ('reflect') check" in texts.PROOF_REVIEWER_INSTRUCTIONS
+    assert "reflect" not in REFERENCE_PROOF and "One 'reflect' check" not in GUIDED_PROOF_RULE
+
+
+def test_a_draft_that_makes_the_example_point_goes_to_the_revision():
+    """The wordings the stored lessons used (S4a, S10, S13) are found anywhere the learner sees them; the S8a/S8b
+    "why" reflects, a stage claim of find_then_check and a one-coordinate claim are other points."""
+    from app.pipeline.lesson_v2 import example_point_problems, quality_problems
+
+    draft = lesson()
+    assert example_point_problems(draft) == []
+    made = [
+        "Both routes reached $-3+i$. Why does this not yet prove $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$?",
+        "Why is knowing $h(\\frac12)=3$ not enough to specify $h$ on $[0,1]$?",
+        "We have proved, by the check with $x=(1,-3)$ and $y=(2,1)$ alone, that $2(x+y)=2x+2y$ for every $x,y$.",
+        "One computation covers one case only. A proof must cover every allowed input.",
+        "A numerical check covers one case only, and a fixed length proves only that length.",
+        "Computing $(2+i)(1-3i)$ gives $1-5i$; this alone proves commutativity for every complex pair.",
+    ]
+    other = [
+        "Why is a real residual not enough to conclude that the corresponding unknown coordinate is real?",
+        "Why does the coordinate equation $\\lambda\\cdot0=0$ leave $\\lambda$ unrestricted?",
+        "We have proved, by solving the two real equations alone, that the candidate does satisfy $(a+i)\\beta=1$.",
+        "Comparing coordinate 1 alone proves the law.",
+        "One counterexample refutes an \"always\" claim.",
+        "Why is $6i^2$ not yet in standard form?",
+    ]
+    for text in made + other:
+        blocks = list(draft.blocks)
+        blocks[4] = blocks[4].model_copy(update={"body": blocks[4].body + "\n\n" + text})
+        found = example_point_problems(draft.model_copy(update={"blocks": blocks}))
+        assert bool(found) == (text in made), (text, found)
+        if found:
+            assert found[0].startswith("block 5:")
+    kps = list(draft.knowledge_points)
+    q = kps[1].questions[0]
+    kps[1] = kps[1].model_copy(update={"questions": [q.model_copy(update={"choices": [*q.choices[:4], made[2]]}),
+                                                     *kps[1].questions[1:]]})
+    problems = quality_problems(draft.model_copy(update={"knowledge_points": kps}), proof=True)
+    assert any(p.startswith("k2q1:") and "rule 17" in p for p in problems), problems
 
 
 def test_a_proof_lesson_revises_once_and_its_final_review_runs_lighter(tmp_path, monkeypatch):

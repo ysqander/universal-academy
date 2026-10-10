@@ -1,6 +1,6 @@
 """Offline proof-track fixtures for the fake LLM (UA_FAKE_LLM=1) and the tests: a proof plan and a lesson that follow
 THE PROOF TRACK (app/prompts/<provider>/proof.py) — the S4a design ("Prove complex arithmetic laws by comparing coordinates") with
-every key checked in SymPy: 10 blocks with 5 scored steps (each with its hint) and a variant in the capstone slot. The
+every key checked in SymPy: 9 blocks with 5 scored steps (each with its hint) and a variant in the capstone slot. The
 lesson passes every check of pipeline/proof_track.py; tests break it on purpose."""
 
 from __future__ import annotations
@@ -26,6 +26,15 @@ def _scored(**fields) -> InlineCheck:
 
 
 SLOT_HEADER = "| product | $x$ | $y$ | $u$ | $v$ | real $xu-yv$ | imaginary $xv+yu$ |\n|---|---|---|---|---|---|---|\n"
+# The scored "which moves may this proof make" check (the plan's scope_statements): real laws and Definition 1.1 may be
+# used; complex distributivity (another law of 1.3) may not; equality needs both coordinates.
+MOVES = [
+    "Reorder the real product $bc$ as $cb$ inside a coordinate",
+    "Expand $(\\alpha\\beta)i$ term by term, replacing $i^2$ by $-1$",
+    "Conclude that the routes meet once their real coordinates agree",
+    "Write $i$ as $0+1i$ so that it fills the slots $u$ and $v$",
+]
+MOVES_KEY = "TFFT"
 
 
 def proof_plan() -> ProofPlan:
@@ -46,10 +55,7 @@ def proof_plan() -> ProofPlan:
         guided_key="-a*d-b*c+(a*c-b*d)*i",
         general_case="λ = g+hi, as one route table",
         scope_statements=[
-            ScopeStatement(statement="$(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$", true=True),
-            ScopeStatement(statement="$(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every $\\alpha,\\beta,\\lambda$", true=False),
-            ScopeStatement(statement="the calculation with $\\alpha=1+i$, $\\beta=2+i$ proved it for every $\\alpha,\\beta$", true=False),
-            ScopeStatement(statement="expanding $(\\alpha\\beta)i$ term by term with $i^2=-1$ would also have been a valid proof", true=False),
+            ScopeStatement(statement=claim, true=mark == "T") for claim, mark in zip(MOVES, MOVES_KEY, strict=True)
         ],
         practice_statements=[
             PracticeStatement(statement="$(1+i)(\\alpha+\\beta)=(1+i)\\alpha+(1+i)\\beta$", knowledge_point=1, role="special_case"),
@@ -105,18 +111,9 @@ def _blocks() -> list:
                          hint="Fill the row: $x,y$ from $\\alpha=1+i$, $u,v$ from $\\beta=2+i$."),
         ),
         _block(
-            "check", "Same destination — is that a proof?",
-            "Both routes reached the same number.",
-            check=_check(kind="reflect",
-                         prompt="Both routes reached $-3+i$. Why does this not yet prove $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$?",
-                         answer_display="It checks one choice of the three numbers; the law claims every choice, so we need "
-                         "inputs that stand for every number at once.",
-                         explanation="One example shows the law for one choice of inputs only."),
-        ),
-        _block(
-            "demonstrate", "Letters stand for every input",
-            "Keep $\\lambda=i$ and write $\\alpha=a+bi$, $\\beta=c+di$, where $a,b,c,d$ are any real numbers: one calculation "
-            "then covers every $\\alpha$ and $\\beta$. Route B starts with $\\beta i$.\n\n" + SLOT_HEADER
+            "demonstrate", "The same moves with letters",
+            "Keep $\\lambda=i$ and write $\\alpha=a+bi$, $\\beta=c+di$ with $a,b,c,d$ real — the numbers above are $a=1$, "
+            "$b=1$, $c=2$, $d=1$. Route B starts with $\\beta i$.\n\n" + SLOT_HEADER
             + "| $\\beta i=(c+di)(0+1i)$ | $c$ | $d$ | $0$ | $1$ | $-d$ | $c$ |\n\nSo $\\beta i=-d+ci$.",
         ),
         _block(
@@ -140,16 +137,15 @@ def _blocks() -> list:
             "Both coordinates agree for every $a,b,c,d$, so $(\\alpha\\beta)i=\\alpha(\\beta i)$ for all $\\alpha,\\beta\\in\\mathbf{C}$.",
         ),
         _block(
-            "check", "What has been proved?", "Before the general case, say exactly what the letters covered.",
-            check=_scored(kind="true_false_set", prompt="What has been proved so far? Mark each statement true or false.",
-                         choices=["$(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta\\in\\mathbf{C}$",
-                                  "$(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every $\\alpha,\\beta,\\lambda\\in\\mathbf{C}$",
-                                  "The calculation with $\\alpha=1+i$, $\\beta=2+i$ proved $(\\alpha\\beta)i=\\alpha(\\beta i)$ for every $\\alpha,\\beta$",
-                                  "Expanding $(\\alpha\\beta)i$ term by term with $i^2=-1$ would also have been a valid proof"],
-                         answer="TFFF", answer_display="True, false, false, false",
-                         explanation="The letters covered every $\\alpha,\\beta$ with $\\lambda=i$ fixed; the numbers covered one "
-                         "case; expanding complex brackets uses complex distributivity, another law of 1.3.",
-                         hint="Which inputs did the letters range over, and which stayed fixed?"),
+            "check", "Which moves may this proof make?", "Before the general case, sort the moves this proof may make from "
+            "those it may not.",
+            check=_scored(kind="true_false_set",
+                         prompt="Which of these moves may a proof of $(\\alpha\\beta)i=\\alpha(\\beta i)$ make? Mark each "
+                         "true (allowed) or false (not allowed).",
+                         choices=MOVES, answer=MOVES_KEY, answer_display="True, false, false, true",
+                         explanation="Real-number laws and Definition 1.1 may be used; expanding complex brackets uses complex "
+                         "distributivity, another law of 1.3 not yet proved; equal complex numbers need both coordinates equal.",
+                         hint="What does the setup allow, and what does equality of complex numbers need?"),
         ),
         _block(
             "generalize", "Every λ: one more pair of letters",
@@ -217,9 +213,11 @@ def _transfer_point() -> KnowledgePointDraft:
             _step("true_false_set", "Mark each statement about this proof true or false.",
                   choices=["Both coordinates agree for every $a,b,c,d$, so the law holds for all $\\alpha,\\beta$",
                            "Comparing the real coordinates alone would prove it",
-                           "It also proves $(\\alpha+\\beta)\\lambda=\\alpha\\lambda+\\beta\\lambda$ for every $\\lambda$"],
-                  answer="TFF", display="True, false, false", hint="What did the letters range over?",
-                  explanation="Equality needs both coordinates, and only the fixed factor $2-i$ was covered."),
+                           "Route B's real coordinate $(2a+b)+(2c+d)$ equals route A's $2(a+c)+(b+d)$ by laws of real numbers alone"],
+                  answer="TFT", display="True, false, true",
+                  hint="What does equality of complex numbers need, and which laws may be used inside a coordinate?",
+                  explanation="Equality needs both coordinates; inside them real-number laws (distributing, regrouping) "
+                  "may be used."),
         ],
         tier=2, display="$(\\alpha+\\beta)(2-i)=\\alpha(2-i)+\\beta(2-i)$",
         solution="Both routes give $(2a+b+2c+d)+(2b-a+2d-c)i$.", targets="transfer on another statement (recovery)",
@@ -255,18 +253,20 @@ def _transfer_point() -> KnowledgePointDraft:
 def _scope_point() -> KnowledgePointDraft:
     served = _question(
         key="k2q1", tier=2, kind="true_false_set",
-        prompt="Mark each claim about an argument true or false." + _marker(None, "FTFFT"),
+        prompt="Mark each claim about a move in a proof true or false." + _marker(None, "TFTFT"),
         choices=[
-            "Computing $(2+i)(1-3i)$ and $(1-3i)(2+i)$ and getting the same number proves $\\alpha\\beta=\\beta\\alpha$ for all complex $\\alpha,\\beta$.",
             "Computing $\\alpha\\beta$ and $\\beta\\alpha$ from Definition 1.1 with $\\alpha=a+bi$, $\\beta=c+di$ for arbitrary real $a,b,c,d$, and finding equal coordinates, proves $\\alpha\\beta=\\beta\\alpha$.",
-            "Proving $(\\alpha\\beta)i=\\alpha(\\beta i)$ for all $\\alpha,\\beta$ also proves $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ for every complex $\\lambda$.",
             "A proof of $\\lambda(\\alpha+\\beta)=\\lambda\\alpha+\\lambda\\beta$ may expand the brackets term by term and replace $i^2$ by $-1$.",
             "In that proof, with $\\lambda=g+hi$, the real number $g(a+c)$ may be rewritten as $ga+gc$.",
+            "A proof of $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$ may use $\\lambda(\\alpha+\\beta)=\\lambda\\alpha+\\lambda\\beta$ before that law is proved.",
+            "In route B of $(\\alpha\\beta)\\lambda=\\alpha(\\beta\\lambda)$, the slots $u,v$ of the last product are the coordinates of $\\beta\\lambda$.",
         ],
-        answer="FTFFT", answer_display="False, true, false, false, true",
-        hints=["Which claims cover every input?", "A fixed input or a numeric check covers less.", "Expanding complex brackets uses the law itself."],
-        solution="1 checks one case; 2 covers all inputs; 3 generalizes a fixed input; 4 is circular; 5 is a real law.",
-        targets="what a proof establishes",
+        answer="TFTFT", answer_display="True, false, true, false, true",
+        hints=["Which moves use only definitions and real-number laws?", "A law may not be used before it is proved.",
+               "Expanding complex brackets uses complex distributivity."],
+        solution="1 compares both coordinates for arbitrary letters; 2 uses complex distributivity, the law itself; 3 is a "
+        "real law; 4 uses a law not yet proved; 5 route B multiplies $\\alpha$ by $\\beta\\lambda$.",
+        targets="what the proof rests on",
     )
     second = _question(
         key="k2q2", tier=2, kind="true_false_set",
@@ -280,7 +280,7 @@ def _scope_point() -> KnowledgePointDraft:
         answer="FTFT", answer_display="False, true, false, true",
         hints=["Equality needs every coordinate.", "Real laws are allowed.", "Starting from the claim assumes it."],
         solution="1 compares one coordinate; 2 covers all $\\lambda$; 3 assumes the claim; 4 is a real law.",
-        targets="what a proof establishes (recovery)",
+        targets="what the proof rests on (recovery)",
     )
     decide = _multistep(
         "k2q3",
@@ -301,9 +301,9 @@ def _scope_point() -> KnowledgePointDraft:
         tier=3, display="No", solution="The coordinates differ, e.g. at $\\alpha=\\beta=1$.", targets="decide a proposed identity",
     )
     return KnowledgePointDraft(
-        title="What a proof establishes",
-        explanation="A proof covers exactly the inputs its letters range over: a fixed input proves only that case, and a "
-        "numeric check proves only itself. Definitions and real-number laws may be used; the law being proved may not.",
+        title="What the proof rests on",
+        explanation="A proof may use the definitions, laws of real numbers inside the coordinates and results already "
+        "proved — never the law being proved; two complex numbers are equal when both coordinates agree.",
         worked_example=WorkedExample(
             problem="Prove $(\\alpha+\\beta)+\\lambda=\\alpha+(\\beta+\\lambda)$ and $\\lambda\\cdot 1=\\lambda$ for all "
             "$\\alpha=a+bi$, $\\beta=c+di$, $\\lambda=g+hi$.",
@@ -312,9 +312,10 @@ def _scope_point() -> KnowledgePointDraft:
                            why="Definition 1.1 on each route; the coordinates agree by real associativity."),
                 WorkedStep(math="$\\lambda\\cdot 1$: slots $g,h,1,0$ give $(g\\cdot1-h\\cdot0)+(g\\cdot0+h\\cdot1)i$",
                            why="Write $1=1+0i$ and apply Definition 1.1."),
-                WorkedStep(math="$a,b,c,d,g,h$ were arbitrary", why="Checking $\\alpha=1$, $\\beta=i$, $\\lambda=2$ would show the laws only for those numbers."),
+                WorkedStep(math="$a,b,c,d,g,h$ were arbitrary", why="Every coordinate agreed for all real letters, so both "
+                           "laws hold for all $\\alpha,\\beta,\\lambda$."),
             ],
-            takeaway="A proof covers exactly the inputs its letters range over.",
+            takeaway="Compute from the definitions, use real laws inside the coordinates, compare every coordinate.",
         ),
         target_questions=1,
         questions=[served, second, decide],
@@ -343,9 +344,10 @@ def _proof_capstone() -> QuestionDraft:
             _step("true_false_set", "Mark each statement about this proof true or false.",
                   choices=["The coordinates agree once real sums are reordered",
                            "Comparing the real coordinates alone would prove the law",
-                           "The calculation covers every $\\alpha,\\beta$ with $\\mu=3+i$ fixed"],
-                  answer="TFT", display="True, false, true", hint="What does equality of complex numbers need, and what did the letters range over?",
-                  explanation="Equality needs both coordinates; the letters covered every $\\alpha,\\beta$, with $\\mu$ fixed."),
+                           "Starting from $(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$ and simplifying both sides would also have been a proof"],
+                  answer="TFF", display="True, false, false",
+                  hint="What does equality of complex numbers need, and may a proof start from what it proves?",
+                  explanation="Equality needs both coordinates, and starting from the equation assumes what is to be proved."),
         ],
         tier=3, display="$(\\alpha\\beta)\\mu=(\\alpha\\mu)\\beta$",
         solution="Route A gives $(3ac-3bd-ad-bc)+(ac-bd+3ad+3bc)i$. Route B: $\\alpha\\mu=(3a-b)+(a+3b)i$, then "

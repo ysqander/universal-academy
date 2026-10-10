@@ -98,8 +98,9 @@ with inline checks and faded examples, then practice knowledge points) → revie
 only for blocking issues or validation problems left (`MAX_REVISIONS`). A proof lesson revises once
 (`PROOF_MAX_REVISIONS`), its final review runs without the proof effort notch, and the teaching blocks that review
 still blocks get one block repair (`patch_blocks`). Validation sends a draft back when the
-teaching sequence has more than 10 blocks or 420 words of prose, or when the questions served first hold more than one
-choice question or no typed answer. Questions the final review still blocks — or whose answer can be read
+teaching sequence has more than 10 blocks or 420 words of prose, when the questions served first hold more than one
+choice question or no typed answer, or when any text the learner sees makes the point that one example does not prove
+or determine the general case (`example_point_problems`; the learner's rule 17, DECISIONS §2). Questions the final review still blocks — or whose answer can be read
 (`answer_known_problems`) — are left out while each knowledge point keeps a spare; such a question served first is
 rewritten in its slot instead (`rewrite_question`). `scripts/regenerate.py --only questions` does the same for stored
 lessons. Stored as

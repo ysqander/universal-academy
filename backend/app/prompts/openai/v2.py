@@ -27,6 +27,7 @@ from ..rules import (
     V1_FAILURES,
     V2_FEEDBACK,
     V3_FEEDBACK,
+    EXAMPLE_FEEDBACK,
 )
 from .proof import (
     PROOF_CAPSTONE_REPAIR,
@@ -127,6 +128,8 @@ page) and the figures on them.
 {V2_FEEDBACK}
 
 {V3_FEEDBACK}
+
+{EXAMPLE_FEEDBACK}
 
 {OUTCOME_RULE}
 
@@ -256,6 +259,8 @@ neighbours in the graph and the figures you may use.
 
 {V3_FEEDBACK}
 
+{EXAMPLE_FEEDBACK}
+
 THE TEACHING SEQUENCE (`blocks`)
 An ordered sequence of blocks, each with ONE job — not filled-in headings. At most 9 blocks (10 only when the spec
 plans a case the learner missed) and about 350 words of prose outside the math; each block is short (2–6 sentences,
@@ -348,7 +353,8 @@ RULES FOR THE SEQUENCE
   the progression complete example → partially completed example (a faded_example) → independent practice. The
   first check comes early, inside the demonstration: one small step on the running example the learner can now do
   (like "what does $6i^2$ become?"). Include one explanation question as a 'reflect' check: it asks WHY — a reason
-  the learner must supply — never for a value they could compute (that is a graded check). Ask it before the text
+  the learner must supply — never for a value they could compute (that is a graded check), and never why one value,
+  example or special case does not prove or determine the general case (rule 17). Ask it before the text
   spells out the reason, or ask why a tempting alternative fails (e.g. "Why did the bottom-right entry become a real
   number?", "Why is $2-3i$ not itself the reciprocal of $2+3i$?"); its model answer must not repeat a line the learner
   has just read. A graded check asks for the value or decision that a preceding block's new idea produces; neither
@@ -424,6 +430,8 @@ nothing else from the chapter.
 {V2_FEEDBACK}
 
 {V3_FEEDBACK}
+
+{EXAMPLE_FEEDBACK}
 
 HOW TO REVIEW — TWO PASSES. First pass (missing bridges, `issues`): work through the lesson as that learner would, block by block. For each block, say to yourself what
 it asks the learner to accept or do, and check that the earlier blocks (or the stated prerequisites) give it. Solve
@@ -511,6 +519,11 @@ Look specifically for:
   possible; an answer format the prompt does not state clearly (e.g. several roots "in any order" whose stored answer
   is an ordered tuple instead of a set {{…}}), or a complex number asked for as a coordinate pair instead of in the
   form $a+bi$;
+- a block, check, question, claim, option, misconception or 'deeper' note whose point is that one example, value or
+  special case does not prove or determine the general case ("Why does this not yet prove the law?", "Why is knowing
+  $h(\\frac12)=3$ not enough to specify $h$?", a claim to reject such as "the check with these numbers alone proved
+  it for every input") → issue (blocking; rule 17); repair: cut it, or make the positive point the lesson needs (the
+  numbers as one instance of the letters; what determines the object);
 - the one explanation ('reflect') check is wanted: it is ungraded on purpose and asks WHY. Report it (minor) only when
   it asks for a value or result the learner could compute, or when its model answer repeats a sentence shown just
   before it; repair: ask for the reason before the text states it, or ask why a tempting alternative fails — never
@@ -639,8 +652,9 @@ PROOF_PLANNER_INSTRUCTIONS = _swap(
 
 
 PROOF_KIND_STRUCTURE = (
-    "- proof: follow THE PROOF TRACK below — one statement; numbers → why that is not a proof → a guided special case\n"
-    "  the learner builds → what was proved → the general case as a worked table; the steps are scored, then a variant."
+    "- proof: follow THE PROOF TRACK below — one statement; numbers → the same moves with letters in a guided special\n"
+    "  case the learner builds → what the proof rests on → the general case as a worked table; the steps are scored,\n"
+    "  then a variant."
 )
 
 
@@ -664,8 +678,8 @@ _GENERAL_MISCONCEPTION_TEST = (
 )
 _PROOF_MISCONCEPTION_TEST = (
     "learner is actually served — in a proof skill a scored step of the teaching or a variant step — whose key differs\n"
-    "  from the answer a learner holding the misconception would give (a reflect check or a knowledge-point question,\n"
-    "  which only a retry and the reviews serve, does not count)."
+    "  from the answer a learner holding the misconception would give (a knowledge-point question, which only a retry\n"
+    "  and the reviews serve, does not count)."
 )
 _GENERAL_MISCONCEPTION_REVIEW = (
     "that no\n"
@@ -677,23 +691,26 @@ _GENERAL_MISCONCEPTION_REVIEW = (
 _PROOF_MISCONCEPTION_REVIEW = (
     "that no\n"
     "  scored step of the teaching or variant step tests with a key that differs from the misconception's answer (a\n"
-    "  reflect check or a knowledge-point question does not count — a retry and the reviews serve those); a \"Learner's\n"
+    "  knowledge-point question does not count — a retry and the reviews serve those); a \"Learner's\n"
     "  miss\" re-tested only on its original numbers, a typed miss re-tested only as a choice option, or a miss re-tested\n"
     "  only in a knowledge-point question → blocking;"
 )
 
 
-# The proof track's own limits and capstone (the variant) replace the general ones where they would contradict it.
+# The proof track's checks and capstone (the variant) replace the general ones where they would contradict it; its
+# block limits are the general ones (9, or 10 with a planned miss) since its reflect check went (2026-10-10).
 _PROOF_WRITER_SWAPS = [
-    ("At most 9 blocks (10 only when the spec\nplans a case the learner missed)",
-     "In a proof skill: 10 blocks (THE PROOF TRACK; 11 only when the spec\nplans a case the learner missed)"),
-    ("split it only while the sequence stays within 9 blocks", "split it only while the sequence stays within the proof track's 10 blocks"),
+    ("1–2 graded inline checks plus the one reflect check, each right\n  after the step it tests",
+     "the proof track's scored steps and no reflect check, each right\n  after the step it tests"),
+    ("Include one explanation question as a 'reflect' check:",
+     "Outside a proof skill, include one explanation question as a 'reflect' check:"),
     (CAPSTONE_RULE, "CAPSTONE (`capstone`) — in a proof skill this field holds THE VARIANT: follow THE VARIANT in THE PROOF TRACK\n"
                     "below (the general capstone rules — an earlier skill producing the input, 2–4 steps — do not apply)."),
 ]
 _PROOF_REVIEWER_SWAPS = [
-    ("(splitting only while the sequence stays within 9 blocks)", "(splitting only while the sequence stays within the proof track's 10 blocks)"),
-    ("blocking when the sequence has more than 10 blocks", "blocking when the sequence has more than 11 blocks (a proof lesson has 10)"),
+    ("- the one explanation ('reflect') check is wanted: it is ungraded on purpose and asks WHY.",
+     "- a proof lesson has no explanation ('reflect') check (THE PROOF TRACK); in other lessons the one reflect check is\n"
+     "  wanted: it is ungraded on purpose and asks WHY."),
     ("- the capstone: missing, not multistep,", "- the capstone (in a proof skill: the variant): missing, not multistep,"),
     ("no earlier skill doing real work in a\n  step of its own (only the arithmetic already inside this lesson's procedure), ", ""),
     ("repair: the capstone pattern (an earlier skill produces the input → this lesson's method once → a different move\n"
@@ -769,8 +786,4 @@ PROOF_CAPSTONE_REPAIR_NOTE = _swaps(
 )
 
 
-PROOF_REVISION_NOTE = _swap(
-    REVISION_NOTE,
-    "split one only while the sequence stays within 9 blocks",
-    "split one only while the sequence stays within the proof track's 10 blocks",
-)
+PROOF_REVISION_NOTE = REVISION_NOTE  # the proof track keeps the general block limits (2026-10-10)

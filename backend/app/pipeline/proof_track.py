@@ -134,8 +134,8 @@ def plan_problems(plan: ProofPlan, n_practice_steps: int) -> list[str]:
         problems.append("proof.capstone_statement (the variant) repeats the teaching's statement, its guided case or a practice statement")
     marks = {s.true for s in plan.scope_statements}
     if not 3 <= len(plan.scope_statements) <= 4 or marks != {True, False}:
-        problems.append("proof.scope_statements needs 3 'We have proved …' claims, both true and false ones, and a 4th "
-                        "that shows a move the proof may not make")
+        problems.append("proof.scope_statements needs 3–4 claims about this proof's moves (a move it may make, one it "
+                        "may not make, what equality needs, which stage proved what), both true and false ones")
     if plan.guided_key.strip():
         names = _symbol_names(plan.guided_key)
         if names is None:
@@ -172,7 +172,7 @@ def plan_lines(plan: ProofPlan) -> list[str]:
         f"Numbers: {plan.numbers}",
         f"Guided case: {plan.guided_case}" + (f" — key line {plan.guided_key}" if plan.guided_key else ""),
         f"General case (the worked table): {plan.general_case}",
-        "Scope statements (the true_false_set after the guided case):",
+        "Scope statements (the scored 'which moves may this proof make' true_false_set after the guided case):",
         *[f"- {s.statement} — {'T' if s.true else 'F'}" for s in plan.scope_statements],
         "Practice statements:",
         *[f"- knowledge point {s.knowledge_point} ({s.role}): {s.statement}" for s in plan.practice_statements],
@@ -344,17 +344,19 @@ def _arc_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], lis
     general = [n for n, b in enumerate(blocks) if b.kind == "generalize"]
     if blocks and blocks[0].kind != "setup":
         soft.append("block 1 is not the setup: open with the strategy's name, the routes and what may and may not be used")
-    if len(reflect) != 1:
-        soft.append(f"the teaching has {len(reflect)} reflect checks; exactly one — why agreement on numbers is not a proof")
+    for n in reflect:  # (the learner's rule 17: the S4a–S10 reflect only said why the numbers do not prove the law)
+        soft.append(f"block {n + 1}: a reflect check — the proof track has none; its meaning is tested by the scored steps")
     if not scope:
-        soft.append("no scope check in the teaching: after the guided case, a true_false_set of the plan's 3 'We have proved …' claims")
-    order = [("a graded check on numbers", first), ("the reflect check", reflect[0] if reflect else None),
-             ("the faded example", faded[0] if faded else None), ("the scope check", scope[0] if scope else None),
+        soft.append("no 'which moves may this proof make' check in the teaching: after the guided case, a true_false_set "
+                    "of the plan's scope claims")
+    order = [("a graded check on numbers", first), ("the faded example", faded[0] if faded else None),
+             ("the 'which moves' check", scope[0] if scope else None),
              ("the generalize block", general[0] if general else None)]
     present = [(name, n) for name, n in order if n is not None]
     for (a, x), (b, y) in zip(present, present[1:]):
         if x >= y:
-            soft.append(f"arc order: {a} (block {x + 1}) comes after {b} (block {y + 1}); the order is numbers → reflect → faded example → scope → generalize")
+            soft.append(f"arc order: {a} (block {x + 1}) comes after {b} (block {y + 1}); the order is numbers → faded "
+                        "example → which moves the proof may make → generalize")
             break
     return hard, soft
 
@@ -608,7 +610,7 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
             if q.kind in ("numeric", "expression") or (q.kind == "true_false_set" and _tf_set_ok(q.choices, q.answer)):
                 single = True
             law_choices += sum(_law_choice(p) for p in _parts(q))
-            if position < target:  # (what a proof establishes is tested in the lesson: the scope check, the variant)
+            if position < target:  # (what the proof rests on is tested in the lesson: the scored check, the variant)
                 marks = (parse_true_false_set(q.answer) or "") if q.kind == "true_false_set" else ""
                 if len(marks) >= 4 and min(marks.count("T"), marks.count("F")) < 2:
                     soft.append(f"{q.key}: {marks} — at least two true and two false claims, so marking everything one way fails")
@@ -624,12 +626,12 @@ def proof_problems(draft: LessonV2Draft, plan: ProofPlan) -> tuple[list[str], li
             soft.append(f"cap: \\{name} names a computed number here but an arbitrary input elsewhere — give the fixed input a new letter (\\mu)")
     served_scope |= any(s.kind == "true_false_set" and _tf_set_ok(s.choices, s.answer) for s in cap.steps)
     served_scope |= any(_graded(b.check) and b.check.kind == "true_false_set" and _tf_set_ok(b.check.choices, b.check.answer)
-                        for b in draft.blocks)  # type: ignore[union-attr]  # the scored scope check
+                        for b in draft.blocks)  # type: ignore[union-attr]  # the scored 'which moves' check
     law_choices += sum(_law_choice(s) for s in cap.steps) + sum(_law_choice(b.check) for b in draft.blocks if b.check)
     if not served_scope:
         hard.append(
-            "no scored step and no variant step tests what a proof establishes: the scope check after the guided case is "
-            "a true_false_set of the plan's three 'We have proved …' claims"
+            "no scored step and no variant step tests what the proof rests on: the check after the guided case is a "
+            "true_false_set of the plan's 3–4 claims about the moves this proof may and may not make"
         )
     if law_choices > 1:
         soft.append(f"{law_choices} 'which law' choices in the lesson; at most one")

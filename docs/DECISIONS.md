@@ -352,7 +352,8 @@ Details: [SPEC.md §6.7](SPEC.md).
 - Generation-time check for "more than one correct option" (§3).
 - Questions in the real course whose prompt prints the answer (bypass audit 2026-10-08): ~~S8b k3q3~~ (rewritten the
   same day), S1 k1q4, S11 k2q1, S24 k1q1 (v1 lessons — fixed when re-planned);
-  inline checks S3b block 8 and S8b block 9 ask for a value their block prints.
+  inline checks S3b block 8 and ~~S8b block 9~~ ask for a value their block prints (S8b's fixed by hand on
+  2026-10-10, before the learner started it: the block no longer computes the candidate).
 - The Library had no way to delete a course or a book (course deletion sat only at the very bottom of the course
   page; books had none). Added 2026-10-07: a delete button on every course card and book row, each with a
   confirmation; a book can be deleted once no course is built from it.

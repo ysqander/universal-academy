@@ -10,3 +10,6 @@ frontend/dist/
 .claude/
 backups/
 data-moved-*/
+# Book PDFs (UA_BOOKS_DIR): kept in the project folder, not in git — only the folder's README is tracked
+books/*
+!books/README.md

@@ -7,6 +7,7 @@ through asyncio.to_thread). Page indexes are 0-based PDF indexes; geometry is in
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -23,8 +24,8 @@ from typing import Any, Literal
 import pymupdf
 from pydantic import BaseModel, Field
 
-from .. import llm, prompts
-from ..config import settings
+from .. import db, llm, prompts
+from ..config import default_books_dir, settings
 from ..schemas import OutlineNode
 from .nemotron import Block
 
@@ -49,7 +50,8 @@ class PdfError(ValueError):
 
 
 # ---------------------------------------------------------------------------
-# Stored paths: rows keep paths relative to settings.data_dir, so a moved or copied data dir keeps working
+# Stored paths: course files are kept relative to settings.data_dir and book PDFs relative to settings.books_dir, so
+# either folder can move (or live on a server) and keep working
 # ---------------------------------------------------------------------------
 
 
@@ -69,11 +71,153 @@ def resolve_stored(value: str) -> Path:
     return path if path.is_absolute() else settings.data_dir / path
 
 
+def stored_book_path(book_id: str) -> str:
+    """The form books.pdf_path is stored in: relative to settings.books_dir."""
+    return f"{book_id}/book.pdf"
+
+
+def book_pdf_candidates(book_id: str, stored: str) -> list[Path]:
+    """Where a book's PDF may be, in order: <books_dir>/<id>/book.pdf, the project's books folder (a sandbox on a copy of
+    the database reads the real PDFs there, read-only), then where older versions kept it — <data>/books/<id>/book.pdf,
+    or the recorded path ('books/<id>/book.pdf' relative to the data dir, or absolute)."""
+    candidates = [settings.books_dir / book_id / "book.pdf", default_books_dir() / book_id / "book.pdf",
+                  settings.legacy_books_dir / book_id / "book.pdf"]
+    if stored:
+        recorded = Path(stored)
+        if recorded.is_absolute():
+            candidates.append(recorded)
+        elif recorded.parts[:1] == ("books",):
+            candidates.append(settings.data_dir / recorded)
+        else:
+            candidates.append(settings.books_dir / recorded)
+    return list(dict.fromkeys(candidates))
+
+
 def book_pdf_path(book_id: str, stored: str) -> Path:
-    """A book's PDF, located by id (data/books/<id>/book.pdf) so a moved data dir keeps working; the recorded path is
-    only a fallback (books imported by older versions recorded an absolute path)."""
-    by_id = settings.books_dir / book_id / "book.pdf"
-    return by_id if by_id.exists() else resolve_stored(stored)
+    """The first candidate that exists (book_pdf_candidates); the canonical location when none does."""
+    candidates = book_pdf_candidates(book_id, stored)
+    return next((p for p in candidates if p.is_file()), candidates[0])
+
+
+_INTACT: dict[tuple[str, int, int], bool] = {}
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        while chunk := fh.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def known_book_shas(book_id: str) -> set[str]:
+    """The sha256 of every file recognised as this book (recorded at import: kv book_sha256:<sha> → id)."""
+    rows = db.query("SELECT key FROM kv WHERE key LIKE 'book_sha256:%' AND value = ?", (book_id,))
+    return {r["key"].removeprefix("book_sha256:") for r in rows}
+
+
+def book_file_intact(path: Path, known: set[str], page_count: int) -> bool:
+    """The file is one of the book's recorded files (sha256), or — for a book with none recorded — opens with the book's
+    page count. A copy cut short by a sync still opens (MuPDF repairs it) but has lost fonts and images: only the
+    hash tells. Cached per (path, mtime, size)."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return False
+    key = (str(Path(path).resolve()), stat.st_mtime_ns, stat.st_size)
+    if key not in _INTACT:
+        try:
+            _INTACT[key] = sha256_file(path) in known if known else book_pdf_usable(path, page_count)
+        except OSError:
+            return False
+    return _INTACT[key]
+
+
+def locate_book_pdf(book_id: str, stored: str, page_count: int) -> tuple[Path, bool]:
+    """(the PDF to use, whether it is intact): the first intact candidate; else the first that exists (damaged); else
+    the canonical location (missing)."""
+    known = known_book_shas(book_id)
+    existing = [p for p in book_pdf_candidates(book_id, stored) if p.is_file()]
+    for path in existing:
+        if book_file_intact(path, known, page_count):
+            return path, True
+    return (existing[0] if existing else settings.books_dir / book_id / "book.pdf"), False
+
+
+# Book identity beyond identical bytes: the same book saved again (another download, a re-save in Preview, notes added)
+# keeps its pages' words even when its bytes, metadata, font encodings, stamps or annotations change.
+_SIGNATURE_MIN_LETTERS = 40  # a page with fewer letters (blank, a figure, a chapter title) is not compared
+_OWN_TEXT_ANNOTS = (pymupdf.PDF_ANNOT_FREE_TEXT, pymupdf.PDF_ANNOT_STAMP)  # annotations that add text of their own
+SAME_BOOK_SHARE = 0.9  # share of the text pages whose signatures must agree
+
+
+class UnreadablePdf(RuntimeError):
+    """The file could not be read just now (missing, cloud placeholder, permissions): try again later."""
+
+
+def page_letters(text: str) -> str:
+    """A page's identity text: ASCII letters only, case-folded. A re-save can change how math symbols and digits come
+    out of a font (macOS PDFKit drops their Unicode maps: 𝑛 → ֙, 2 → ӝ) but not the letters of the words."""
+    return re.sub(r"[^a-z]", "", text.casefold())
+
+
+def _page_lines(page: pymupdf.Page) -> list[str]:
+    """The page's text lines without the words of its FreeText/Stamp annotations (only their own words: the book's
+    text under a note stays)."""
+    notes: list[tuple[pymupdf.Rect, Counter]] = []
+    for annot in page.annots():
+        if annot.type[0] in _OWN_TEXT_ANNOTS:
+            notes.append((annot.rect, Counter(w[4] for w in annot.get_text("words"))))
+    lines: dict[tuple[int, int], list[str]] = {}
+    for x0, y0, x1, y1, word, block, line, _ in page.get_text("words"):
+        centre = pymupdf.Point((x0 + x1) / 2, (y0 + y1) / 2)
+        note = next((own for rect, own in notes if rect.contains(centre) and own[word] > 0), None)
+        if note is not None:
+            note[word] -= 1
+            continue
+        lines.setdefault((block, line), []).append(word)
+    return [" ".join(words) for words in lines.values()]
+
+
+def page_signatures(pdf_path: Path) -> list[str] | None:
+    """One short hash per page of its letters, leaving out the text of FreeText/Stamp annotations and any line that
+    repeats on most pages (digits masked: download stamps, licence lines, running headers). '' for a page with too
+    little text. None without a real text layer (a scan, or only stamps), whose copies only match byte for byte.
+    Raises UnreadablePdf when the file cannot be read."""
+    try:
+        with MUPDF_LOCK:  # a private handle, locked page by page: a long book never blocks page renders for long
+            doc = pymupdf.open(str(pdf_path))
+        try:
+            pages: list[list[str]] = []
+            for index in range(doc.page_count):
+                with MUPDF_LOCK:
+                    pages.append(_page_lines(doc[index]))
+        finally:
+            with MUPDF_LOCK:
+                doc.close()
+    except (OSError, RuntimeError, ValueError) as e:
+        raise UnreadablePdf(str(e)) from e
+    if not pages:
+        return None
+    masked = [{re.sub(r"\d", "#", line) for line in lines} for lines in pages]
+    seen = Counter(m for page in masked for m in page)
+    boilerplate = {m for m, n in seen.items() if len(pages) >= 4 and n > len(pages) / 2}
+    signatures = []
+    for lines in pages:
+        letters = page_letters(" ".join(line for line in lines if re.sub(r"\d", "#", line) not in boilerplate))
+        signatures.append(hashlib.sha256(letters.encode()).hexdigest()[:16] if len(letters) >= _SIGNATURE_MIN_LETTERS else "")
+    text_pages = sum(1 for sig in signatures if sig)
+    return signatures if text_pages >= max(3, len(pages) // 2) else None
+
+
+def same_book(a: Sequence[str], b: Sequence[str]) -> bool:
+    """Two files are one book: as many pages, and the signatures of at least 90 % of the text pages agree (a cover
+    stamp, a few pages of notes or a corrected typo still match; another book or another edition does not)."""
+    if len(a) != len(b):
+        return False
+    text_pages = max(sum(1 for s in a if s), sum(1 for s in b if s))
+    agree = sum(1 for x, y in zip(a, b) if x and x == y)
+    return text_pages >= 3 and agree >= SAME_BOOK_SHARE * text_pages
 
 
 @contextmanager
@@ -120,6 +264,14 @@ def _open_checked(pdf_path: Path, display_name: str | None = None) -> pymupdf.Do
         doc.close()
         raise PdfError(f"{name} has no pages.")
     return doc
+
+
+def book_pdf_usable(pdf_path: Path, page_count: int) -> bool:
+    """The stored PDF is there and is the book: it opens and has the book's page count (not a truncated or 0-byte copy)."""
+    try:
+        return Path(pdf_path).is_file() and validate_pdf(pdf_path) == page_count
+    except (PdfError, OSError, RuntimeError):
+        return False
 
 
 def validate_pdf(pdf_path: Path, display_name: str | None = None) -> int:
@@ -595,8 +747,9 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 
 def cached_page_png(book_id: str, pdf_path: Path, page_index: int, dpi: int) -> Path:
-    """Render once and cache at settings.books_dir/<book_id>/pages/<page>@<dpi>.png."""
-    path = settings.books_dir / book_id / "pages" / f"{page_index}@{dpi}.png"
+    """Render once and cache at settings.page_cache_dir/<book_id>/<page>@<dpi>.png (in the data dir, not the books
+    folder: renders are derived)."""
+    path = settings.page_cache_dir / book_id / f"{page_index}@{dpi}.png"
     if not path.exists():
         write_atomic(path, render_page_png(pdf_path, page_index, dpi))
     return path

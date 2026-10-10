@@ -86,7 +86,7 @@ export function BookList({ books, onDeleted }: { books: BookSummary[] | undefine
           </>
         }
       >
-        <p>“{confirming?.title}” and its rendered pages will be removed from your library. This can't be undone.</p>
+        <p>“{confirming?.title}”, its PDF in the books folder and its rendered pages will be deleted. This can't be undone.</p>
       </Dialog>
     </>
   );

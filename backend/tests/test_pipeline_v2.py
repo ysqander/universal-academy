@@ -875,6 +875,44 @@ def test_replan_cli_refuses_while_the_app_server_runs_and_applies_otherwise(tmp_
     assert list((settings.data_dir / "replans").glob("*-report.txt"))
 
 
+def test_a_split_written_in_a_sandbox_is_applied_then_its_lessons_imported(tmp_path):
+    """replan --plan --apply-only applies the split without writing lessons; import_lesson then brings in each new
+    skill's lesson from the sandbox where the same plan was run (nothing is generated twice)."""
+    import shutil
+
+    from app.config import settings
+
+    cid = built_course(tmp_path)
+    key = skill_by_title(cid, "Add and multiply")["key"]
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    free = f"http://127.0.0.1:{_free_port()}/api/health"
+
+    def run(script: str, data_dir: Path, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(scripts / script), "--data-dir", str(data_dir), "--course", cid, "--yes", "--no-backup",
+             "--server-url", free, *extra],
+            capture_output=True, text=True, timeout=300, env={**os.environ, "UA_FAKE_LLM": "1"},
+        )
+
+    assert run("replan.py", settings.data_dir, "--skill", key, "--apply-only").returncode == 2  # needs --plan
+    assert run("replan.py", settings.data_dir, "--skill", key, "--dry-run").returncode == 0
+    plan = sorted((settings.data_dir / "replans").glob(f"{cid}-{key}-*.json"))[-1]
+    sandbox = tmp_path / "sandbox"
+    shutil.copytree(settings.data_dir, sandbox)
+    written = run("replan.py", sandbox, "--skill", key, "--plan", str(plan))
+    assert written.returncode == 0, written.stdout + written.stderr
+
+    applied = run("replan.py", settings.data_dir, "--skill", key, "--plan", str(plan), "--apply-only")
+    assert applied.returncode == 0 and f"Split {key} into {key}a, {key}b, {key}c" in applied.stdout, applied.stdout + applied.stderr
+    new = db.query_one("SELECT lesson_json FROM skills WHERE course_id = ? AND key = ?", (cid, f"{key}a"))
+    assert new is not None and not new["lesson_json"]  # no lesson written yet
+    for part in ("a", "b", "c"):
+        done = run("import_lesson.py", settings.data_dir, "--from-data-dir", str(sandbox), "--skill", f"{key}{part}")
+        assert done.returncode == 0, done.stdout + done.stderr
+    lesson = db.loads(db.query_one("SELECT lesson_json FROM skills WHERE course_id = ? AND key = ?", (cid, f"{key}a"))["lesson_json"], {})
+    assert lesson.get("format") == "v2"
+
+
 def test_proof_skills_reason_one_notch_higher_on_the_same_model():
     """The learner, 2026-10-08: proofs need more care — "use sol at one higher reasoning notch" (not a bigger model)."""
     from app.llm import raise_effort

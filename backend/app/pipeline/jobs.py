@@ -1,10 +1,11 @@
 """Build jobs (SPEC §4): create a course, run or resume its build in the background, report and clean up.
 
 Public interface:
-    create_course(req) -> course_id          ValueError (→ 400) for a bad book/page range
+    create_course(req) -> course_id          ValueError (→ 400) for a bad book/page range or a missing/damaged PDF
     start_build(course_id)                    background task (needs a running event loop); no-op while one runs
     await run_build(course_id) -> JobStatus   the whole pipeline; idempotent and resumable
-    resume_build(course_id) -> JobStatus      LookupError for an unknown course; also re-runs only the failed lessons
+    resume_build(course_id) -> JobStatus      LookupError for an unknown course; ValueError (→ 400) while render or
+                                              parse is left and the PDF is missing or damaged; also re-runs only the failed lessons
                                               (+ their visuals/verification) of a ready course
     get_job(course_id) -> JobStatus | None
     is_building(course_id) -> bool
@@ -27,6 +28,7 @@ import time
 
 from .. import db, llm
 from ..config import settings
+from ..ingest.pdf import locate_book_pdf
 from ..learning import state
 from ..schemas import CourseCreate, JobStatus
 from ..views import label_of
@@ -54,9 +56,11 @@ _active: set[str] = set()  # courses whose run_build is executing in this proces
 
 
 def create_course(req: CourseCreate) -> str:
-    book = db.query_one("SELECT id, title, page_count, page_labels_json FROM books WHERE id = ?", (req.book_id,))
+    book = db.query_one("SELECT id, title, page_count, page_labels_json, pdf_path FROM books WHERE id = ?", (req.book_id,))
     if book is None:
         raise ValueError(f"Book {req.book_id} does not exist.")
+    if not locate_book_pdf(book["id"], book["pdf_path"], book["page_count"])[1]:
+        raise ValueError(f"The PDF of “{book['title']}” is missing or damaged in the books folder. Upload the same file again to restore it.")
     if not 0 <= req.start_page <= req.end_page < book["page_count"]:
         raise ValueError(
             f"Invalid page range {req.start_page}–{req.end_page}: the book has pages 0–{book['page_count'] - 1} "
@@ -117,9 +121,14 @@ def get_job(course_id: str) -> JobStatus | None:
 
 
 def resume_build(course_id: str) -> JobStatus:
-    load_course(course_id)
+    """ValueError when the stages still to run need the book's PDF and it is missing."""
+    course = load_course(course_id)
     if not (course_id in _active or (course_id in _tasks and not _tasks[course_id].done())):
         tracker = JobTracker.load(course_id)
+        needs_pdf = any(stage.status != "done" for key, stage in tracker.stages.items() if key in ("render", "parse"))
+        book = db.query_one("SELECT pdf_path, page_count FROM books WHERE id = ?", (course.book_id,))
+        if needs_pdf and not locate_book_pdf(course.book_id, book["pdf_path"], book["page_count"])[1]:
+            raise ValueError(f"The PDF of “{course.book_title}” is missing or damaged in the books folder. Upload the same file again to restore it.")
         tracker.state = "queued"
         tracker.log("Resume requested — finished work is kept, the rest is redone.")
         start_build(course_id)

@@ -420,7 +420,7 @@ def test_prettify_filename() -> None:
 def test_render_and_cache(tmp_path: Path) -> None:
     path = make_pdf(tmp_path / "r.pdf")
     first = pdf.cached_page_png("book1", path, 1, 72)
-    assert first == settings.books_dir / "book1" / "pages" / "1@72.png"
+    assert first == settings.page_cache_dir / "book1" / "1@72.png"  # a derived file: in the data dir, not the books folder
     stamp = first.stat().st_mtime_ns
     assert pdf.cached_page_png("book1", path, 1, 72).stat().st_mtime_ns == stamp
     pix = pymupdf.Pixmap(str(first))

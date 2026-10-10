@@ -34,7 +34,11 @@ cd frontend && npm run build && npm run lint && npm test
 ## Rules
 
 - Never read or print `.env` (API keys).
-- Test servers: blank keys or `UA_FAKE_LLM=1`, so nothing calls a paid API by accident.
+- Test servers: blank keys or `UA_FAKE_LLM=1`, so nothing calls a paid API by accident, and a scratch `UA_DATA_DIR`
+  and `UA_BOOKS_DIR` (never the project's `books/`: a scratch DB shares book ids, so its delete would remove the real PDF;
+  a scratch `UA_DATA_DIR` without `UA_BOOKS_DIR` — or with only `.env`'s — keeps books in `<data>/books`).
 - The learner's real course and progress live in `~/Library/Application Support/UniversalAcademy` (outside this
   cloud-synced folder; `UA_DATA_DIR` overrides). Don't write to it except through the app or the `backend/scripts/`
   tools (stop the app first; they back up the database). Daily snapshots go to `backups/` here.
+- Book PDFs live in this project's `books/<book_id>/book.pdf` (`UA_BOOKS_DIR` overrides; not in git). Add or remove
+  books only through the app; tests always use a temporary books dir.

@@ -1,13 +1,15 @@
 """Replan one skill with lesson generation v2 (experimental; docs/lesson-v2.md, SPEC §4.2b).
 
     python scripts/replan.py --course <course_id> --skill S2
-                             [--dry-run] [--no-split] [--plan FILE] [--yes] [--no-backup] [--force]
+                             [--dry-run] [--no-split] [--plan FILE [--apply-only]] [--yes] [--no-backup] [--force]
 
 1. Planner (high effort): a teaching spec for the skill — objective, assumed prerequisites, out of scope, starting
    example, reasoning sequence, success check, representations, practice steps — and the split test. It may split
    an overloaded skill into 2-5 narrower ones (keys S2a, S2b, …) and say which of them every dependent needs.
    The plan is printed and saved to <data-dir>/replans/<course>-<skill>-<timestamp>.json; --dry-run stops here
-   (one LLM call, nothing written). --plan FILE applies a saved plan instead of planning again.
+   (one LLM call, nothing written). --plan FILE applies a saved plan instead of planning again; with --apply-only a
+   split is applied and nothing is generated — then each new skill's lesson, written and reviewed in a sandbox with the
+   same plan, is brought in with scripts/import_lesson.py.
 2. Apply: a split replaces the skill in one transaction (its tasks, questions, progress and edges go; the new skills
    get edges from the plan, the course order and the drawn edges are recomputed, unlocks are recomputed). A split
    is refused while the skill has answered attempts, an FSRS card or review history — then the skill is kept
@@ -49,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="plan only: print and save the plan, change nothing")
     p.add_argument("--no-split", action="store_true", help="keep the skill (only rewrite its lesson as v2)")
     p.add_argument("--plan", type=Path, help="apply a plan saved by an earlier run instead of planning again")
+    p.add_argument("--apply-only", action="store_true",
+                   help="with --plan: apply the split and stop (import the new skills' lessons with import_lesson.py)")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     p.add_argument("--no-backup", action="store_true", help="skip the database backup")
     p.add_argument("--force", action="store_true", help="run even though the app server answers (another data dir)")
@@ -69,6 +73,7 @@ from app.pipeline.replan import (  # noqa: E402
     PlanResult,
     SplitRefused,
     apply_replan,
+    apply_split,
     check_plan,
     plan_replan,
     report_lines,
@@ -132,6 +137,9 @@ def save(name: str, content: str) -> Path:
 async def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if args.apply_only and not args.plan:
+        print("--apply-only needs --plan (the plan the sandbox lessons were written with).")
+        return 2
     db.init_db()
     print(f"data dir: {settings.data_dir} · {'FAKE LLM' if settings.fake_llm else 'live calls: ' + ', '.join(f'{r} {p}:{m}' for r, (p, m, _) in ((r, settings.role_config(r)) for r in ('graph', 'lesson', 'verify')))}")
     if not args.course:
@@ -199,8 +207,22 @@ async def main() -> int:
         if not args.yes and input(f"\nApply: {action}? [y/N] ").strip().lower() not in ("y", "yes"):
             print("Cancelled.")
             return 1
+        if args.apply_only and planned.plan.decision != "split":
+            print("The plan keeps the skill: nothing to apply. Import its lesson with scripts/import_lesson.py.")
+            return 0
         if not args.no_backup:
             print("Backup:", backup())
+        if args.apply_only:
+            if jobs.is_building(args.course):
+                print("The course's build job is running; let it finish first.")
+                return 1
+            keys, _, notes, deleted = apply_split(args.course, key, planned.plan)
+            print(f"Split {key} into {', '.join(keys.values())} (no lessons written; {deleted} task(s) removed).")
+            for note in notes:
+                print(f"  note: {note}")
+            print("Next: scripts/import_lesson.py --from-data-dir <sandbox> --course "
+                  f"{args.course} --skill <key> for each of {', '.join(keys.values())}.")
+            return 0
         report = await apply_replan(args.course, key, planned, usage=usage)
     finally:
         llm.current_usage.reset(token)

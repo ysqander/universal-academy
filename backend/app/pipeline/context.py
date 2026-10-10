@@ -8,7 +8,7 @@ from typing import Any
 
 from .. import db, llm
 from ..config import settings
-from ..ingest.pdf import book_pdf_path
+from ..ingest.pdf import locate_book_pdf
 from ..views import label_of
 from .tracker import JobTracker
 
@@ -60,7 +60,7 @@ def course_dir(course_id: str) -> Path:
 
 def load_course(course_id: str) -> CourseInfo:
     row = db.query_one(
-        "SELECT c.*, b.title AS book_title, b.pdf_path, b.page_labels_json "
+        "SELECT c.*, b.title AS book_title, b.pdf_path, b.page_labels_json, b.page_count AS book_page_count "
         "FROM courses c JOIN books b ON b.id = c.book_id WHERE c.id = ?",
         (course_id,),
     )
@@ -74,7 +74,7 @@ def load_course(course_id: str) -> CourseInfo:
         start_page=row["start_page"],
         end_page=row["end_page"],
         sections=db.loads(row["sections_json"], []),
-        pdf_path=book_pdf_path(row["book_id"], row["pdf_path"]),  # follows a moved data dir
+        pdf_path=locate_book_pdf(row["book_id"], row["pdf_path"], row["book_page_count"])[0],  # an intact copy first
         labels=db.loads(row["page_labels_json"], []),
     )
 

@@ -10,11 +10,13 @@ Turn a chapter of a textbook PDF into a Math-Academy-style course: a knowledge g
 ./run.sh
 ```
 
-Then open http://localhost:8000. Keys go in `.env` (project root): `OPENAI_API_KEY` (required) and `NVIDIA_API_KEY` (optional; enables Nemotron Parse for layout/figure detection). To use it from an iPad or phone on the same network: `UA_HOST=0.0.0.0 ./run.sh` and open `http://<your-mac's-LAN-IP>:8000` (importing by path is only allowed from the Mac itself; upload works everywhere).
+Then open http://localhost:8000. Keys go in `.env` (project root): `OPENAI_API_KEY` (required) and `NVIDIA_API_KEY` (optional; enables Nemotron Parse for layout/figure detection). To use it from an iPad or phone on the same network: `UA_HOST=0.0.0.0 ./run.sh` and open `http://<your-mac's-LAN-IP>:8000` (importing by path is only allowed from the machine running the app; upload works everywhere). Imported books are kept in
+`books/<book_id>/book.pdf` in this folder (`UA_BOOKS_DIR`); the database and generated files in the data dir (`UA_DATA_DIR`).
 
 ## Use
 
-1. **Library** → drop a PDF, or paste a local path.
+1. **Library** → drop a PDF, or paste a path on the machine running the app. A book already in the library is opened, not
+   added twice; for another chapter of a book, open it from the Library (**New course**) — no new upload.
 2. **Pick a chapter** in the outline (click a chapter; shift-click or "Select several" for consecutive sections), check the page thumbnails, press **Build course**. Budget about 45 s and $0.10 per page; you can start studying as soon as the first lessons are ready.
 3. Watch the build: pages are parsed (layout, LaTeX, figures), the knowledge graph appears, then lessons, visuals and independently verified questions fill in.
 4. Press **Continue learning**. The app picks the next task (a new lesson or a due review) and says why. Each lesson has 2–3 knowledge points: a worked example, then practice until you get two right in a row without help. Proof skills ask for a written proof that you check against a model answer and a checklist. Reviews come back on an FSRS schedule, and practising an advanced skill also refreshes the skills it builds on.

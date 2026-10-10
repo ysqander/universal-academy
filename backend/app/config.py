@@ -22,6 +22,20 @@ def default_data_dir() -> Path:
     return Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "universal-academy"
 
 
+def default_books_dir() -> Path:
+    """Book PDFs live in the project's books/ folder (one folder per book), so a new course from another chapter never
+    needs the PDF again. The folder is not in git: deploy or restore it with the data dir. PDFs are written once, so
+    syncing the folder is safe."""
+    return PROJECT_ROOT / "books"
+
+
+def project_path(value: str) -> Path:
+    """A configured path; a relative one is taken from the project root, not the working directory (run.sh and the
+    scripts run from backend/)."""
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
 # Credentials a pytest run blanks, and Anthropic SDK settings it removes: a bare Anthropic client reads them from the
 # environment (Claude Code exports ANTHROPIC_BASE_URL to the shells it starts), and the app never relies on them.
 _SECRET_ENV = ("OPENAI_API_KEY", "NVIDIA_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_WORKSPACE_ID")
@@ -46,11 +60,16 @@ def _isolate_test_runs() -> None:
         os.environ[f"UA_PROVIDER_{role}"] = ""
     for key in _AMBIENT_ANTHROPIC_ENV:
         os.environ.pop(key, None)
+    import tempfile
+
     data_dir = os.getenv("UA_DATA_DIR", "").strip()
     if not data_dir or Path(data_dir).expanduser().resolve() == default_data_dir().resolve():
-        import tempfile
-
         os.environ["UA_DATA_DIR"] = tempfile.mkdtemp(prefix="ua-test-")
+    # Books default to the project folder: a test may only use a books dir under the system temp dir (whatever .env says)
+    books_dir = os.getenv("UA_BOOKS_DIR", "").strip()
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    if not books_dir or not project_path(books_dir).resolve().is_relative_to(temp_root):
+        os.environ["UA_BOOKS_DIR"] = tempfile.mkdtemp(prefix="ua-test-books-")
 
 
 _isolate_test_runs()
@@ -74,6 +93,25 @@ def _project_first(name: str) -> str:
 PROVIDERS = ("openai", "anthropic")
 ROLES = ("vision", "graph", "lesson", "viz", "verify")
 KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+
+def configured_books_dir() -> Path:
+    """UA_BOOKS_DIR when set. Otherwise the project's books/ folder for the app's own data dir — but <data>/books for
+    any other UA_DATA_DIR: a sandbox or test server on a copy of the database (same book ids) must never write to or
+    delete from the real books folder. It still reads PDFs from there (pdf.book_pdf_candidates). A UA_BOOKS_DIR from
+    .env belongs to the data dir .env names: a process given another UA_DATA_DIR uses <data>/books."""
+    explicit = _env("UA_BOOKS_DIR", "")
+    data_dir = _env("UA_DATA_DIR", "")
+    own = {default_data_dir().resolve()} | (
+        {Path(str(_DOTENV["UA_DATA_DIR"])).expanduser().resolve()} if _DOTENV.get("UA_DATA_DIR") else set()
+    )
+    own_data_dir = not data_dir or Path(data_dir).expanduser().resolve() in own
+    from_dotenv = bool(explicit) and explicit == str(_DOTENV.get("UA_BOOKS_DIR") or "").strip()
+    if explicit and (own_data_dir or not from_dotenv):
+        return project_path(explicit)
+    if not own_data_dir:
+        return Path(data_dir).expanduser() / "books"
+    return default_books_dir()
 
 
 @dataclass(frozen=True)
@@ -134,6 +172,8 @@ class Settings:
     max_course_pages: int = field(default_factory=lambda: int(_env("UA_MAX_COURSE_PAGES", "80")))
 
     data_dir: Path = field(default_factory=lambda: Path(_env("UA_DATA_DIR", str(default_data_dir()))))
+    # Book PDFs: <books_dir>/<book_id>/book.pdf. The database, course files and page renders stay in the data dir.
+    books_dir: Path = field(default_factory=lambda: configured_books_dir())
 
     # Set UA_FAKE_LLM=1 to run the whole pipeline offline against canned responses (tests / UI dev).
     fake_llm: bool = field(default_factory=lambda: _env("UA_FAKE_LLM", "0") == "1")
@@ -147,8 +187,19 @@ class Settings:
         return self.data_dir / "academy.sqlite3"
 
     @property
-    def books_dir(self) -> Path:
+    def legacy_books_dir(self) -> Path:
+        """Where books were stored before 2026-10-10 (<data>/books/<id>/book.pdf): read as a fallback only."""
         return self.data_dir / "books"
+
+    @property
+    def page_cache_dir(self) -> Path:
+        """Rendered page images (<id>/<page>@<dpi>.png): derived, safe to delete."""
+        return self.data_dir / "page-cache"
+
+    @property
+    def upload_tmp_dir(self) -> Path:
+        """Uploads are received here (outside the synced books folder) and copied into place once complete."""
+        return self.data_dir / "tmp"
 
     @property
     def courses_dir(self) -> Path:

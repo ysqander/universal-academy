@@ -47,7 +47,7 @@ if args.data_dir:
     os.environ["UA_DATA_DIR"] = str(args.data_dir.resolve())
 
 from app import db  # noqa: E402  (UA_DATA_DIR must be set before the app is imported)
-from app.ingest.pdf import read_book_meta  # noqa: E402
+from app.api import books  # noqa: E402
 from app.pipeline import jobs  # noqa: E402
 from app.pipeline.lessons import retire_questions  # noqa: E402
 from app.schemas import CourseCreate, OutlineNode  # noqa: E402
@@ -61,30 +61,11 @@ log = logging.getLogger("ua.e2e")
 # ---------------------------------------------------------------------------
 
 
-def ensure_book(pdf: Path) -> str:
-    row = db.query_one("SELECT id FROM books WHERE pdf_path = ?", (str(pdf.resolve()),))
-    if row:
-        return row["id"]
-    meta = read_book_meta(pdf)
-    book_id = db.new_id()
-    db.execute(
-        "INSERT INTO books(id, title, author, filename, pdf_path, page_count, outline_json, outline_source, "
-        "page_labels_json, has_text_layer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            book_id,
-            meta.title,
-            meta.author,
-            pdf.name,
-            str(pdf.resolve()),
-            meta.page_count,
-            db.dumps([n.model_dump() for n in meta.outline]),
-            meta.outline_source,
-            db.dumps(meta.page_labels),
-            int(meta.has_text_layer),
-            db.now_iso(),
-        ),
-    )
-    return book_id
+async def ensure_book(pdf: Path) -> str:
+    """The book of this PDF, imported the way the app imports it (copied into the books folder, found again by its bytes
+    or its pages), so a rerun reuses it."""
+    book = await books._import(pdf.resolve(), books._sha256_file(pdf.resolve()), pdf.name)
+    return book.id
 
 
 def sections_in_range(book_id: str, start: int, end: int) -> list[str]:
@@ -301,7 +282,7 @@ async def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     db.init_db()
     jobs.mark_interrupted_jobs()
-    book_id = ensure_book(args.pdf)
+    book_id = await ensure_book(args.pdf)
     course_id = ensure_course(book_id, args.start, args.end, args.title)
     print(f"data dir: {os.environ.get('UA_DATA_DIR', '(default)')} · book {book_id} · course {course_id}")
     if args.reset:

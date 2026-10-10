@@ -25,6 +25,10 @@ export interface Book extends BookSummary {
   outline: OutlineNode[];
   outline_source: "pdf" | "detected" | "none";
   has_text_layer: boolean;
+  /** Set on an import that found the book already on file: the same file, or the same book saved again. */
+  already_in_library?: "identical_file" | "same_text" | null;
+  /** The PDF is missing or damaged in the books folder: uploading the same file again restores it. */
+  pdf_missing: boolean;
 }
 
 // ---------- Courses + build job ----------

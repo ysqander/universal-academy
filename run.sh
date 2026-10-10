@@ -33,6 +33,7 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 # Live data lives outside this (cloud-synced) folder; only a closed daily snapshot is written here to be synced.
+# Book PDFs are the exception: they are written once and kept in $ROOT/books (UA_BOOKS_DIR).
 DATA_DIR="${UA_DATA_DIR:-$(.venv/bin/python -c 'from app.config import settings; print(settings.data_dir)')}"
 if [ -f "$DATA_DIR/academy.sqlite3" ]; then
   mkdir -p "$ROOT/backups"
@@ -41,5 +42,6 @@ if [ -f "$DATA_DIR/academy.sqlite3" ]; then
   ls -1t "$ROOT"/backups/academy-*.sqlite3 2>/dev/null | tail -n +15 | while read -r old; do rm -f "$old"; done
 fi
 
-echo "Starting Universal Academy at http://localhost:$PORT (Ctrl-C to stop) — data in $DATA_DIR"
+BOOKS_DIR="$(.venv/bin/python -c 'from app.config import settings; print(settings.books_dir)')"
+echo "Starting Universal Academy at http://localhost:$PORT (Ctrl-C to stop) — data in $DATA_DIR, books in $BOOKS_DIR"
 exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT"

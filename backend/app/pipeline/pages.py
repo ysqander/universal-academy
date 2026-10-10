@@ -41,7 +41,7 @@ async def run_render_stage(ctx: BuildContext) -> None:
         tracker.update("render", done=done)
     if len(failed) == len(pages):
         tracker.update("render", status="failed", message="no page could be rendered")
-        raise BuildError(f"No page could be rendered from {course.pdf_path}")
+        raise BuildError(f"No page could be rendered from “{course.book_title}”: its PDF is missing or damaged in the books folder. Upload the same file again to restore it.")
     message = f"{done} pages" + (f" · {len(failed)} failed" if failed else "")
     tracker.update("render", status="done", message=message)
 

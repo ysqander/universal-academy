@@ -173,7 +173,7 @@ def test_more_questions_reports_llm_failures_as_502(client, tmp_path, monkeypatc
 
 
 def test_a_moved_data_dir_keeps_courses_working(client, tmp_path):
-    """#32: rows store paths relative to the data dir; the book PDF and figures are found by id after a move."""
+    """#32: course rows store paths relative to the data dir and books relative to the books dir; either can move."""
     import shutil
 
     from app.config import settings
@@ -185,7 +185,7 @@ def test_a_moved_data_dir_keeps_courses_working(client, tmp_path):
     assert wait_for_job(client, cid).state == "done"
     stored_pdf = db.query_one("SELECT pdf_path FROM books WHERE id = ?", (book_id,))["pdf_path"]
     figure = db.query_one("SELECT id, image_path FROM figures WHERE course_id = ?", (cid,))
-    assert stored_pdf == f"books/{book_id}/book.pdf" and not figure["image_path"].startswith("/")
+    assert stored_pdf == f"{book_id}/book.pdf" and not figure["image_path"].startswith("/")
     fid = figure["id"].removeprefix(f"{cid}-")
 
     old, new = settings.data_dir, tmp_path / "moved"
@@ -211,3 +211,27 @@ def test_a_moved_data_dir_keeps_courses_working(client, tmp_path):
     assert job.state == "done", job.error
     assert db.query_one("SELECT COUNT(*) AS n FROM pages WHERE course_id = ?", (cid,))["n"] == 3
     assert client.get(f"/api/courses/{cid}/figures/{fid}.png").status_code == 200
+
+
+def test_a_book_whose_pdf_is_missing_gets_no_course_and_no_resume(client, tmp_path):
+    """A server without the books folder: say what to do (upload it again), never where the server keeps files."""
+    from app.config import settings
+    from app.pipeline import jobs
+
+    with open(make_tiny_pdf(tmp_path / "tiny.pdf"), "rb") as fh:
+        book_id = client.post("/api/books", files={"file": ("tiny.pdf", fh, "application/pdf")}).json()["id"]
+    cid = client.post("/api/courses", json={"book_id": book_id, "title": "", "start_page": 0, "end_page": 1}).json()["id"]
+    assert wait_for_job(client, cid).state == "done"
+    (settings.books_dir / book_id / "book.pdf").unlink()
+
+    resp = client.post("/api/courses", json={"book_id": book_id, "title": "", "start_page": 1, "end_page": 2})
+    assert resp.status_code == 400 and "Upload the same file again" in resp.json()["detail"]
+    assert str(settings.books_dir) not in resp.text
+    assert db.query_one("SELECT COUNT(*) AS n FROM courses")["n"] == 1
+
+    tracker = jobs.JobTracker.load(cid)  # a build that stopped before its pages were read
+    tracker.update("render", status="failed", message="interrupted")
+    tracker.state = "interrupted"
+    tracker.save()
+    resp = client.post(f"/api/courses/{cid}/resume")
+    assert resp.status_code == 400 and "missing or damaged" in resp.json()["detail"]

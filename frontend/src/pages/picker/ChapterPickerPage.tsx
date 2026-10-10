@@ -233,6 +233,15 @@ function Picker({ book }: { book: Book }) {
               </div>
             )}
           </div>
+          {book.pdf_missing && (
+            <p className="callout callout--warning picker__detected" role="alert">
+              <Icon name="info" size={16} />
+              <span>
+                This book's PDF is missing or damaged in the books folder, so its pages can't be shown or built. Upload the
+                same file again in the Library to restore it.
+              </span>
+            </p>
+          )}
           {hasOutline ? (
             <>
               {book.outline_source === "detected" && (

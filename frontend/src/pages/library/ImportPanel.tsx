@@ -33,7 +33,12 @@ export function ImportPanel() {
   useEffect(() => () => upload.current?.abort(), []);
 
   const opened = (book: Book) => {
-    toast.show(`Imported “${book.title}”. Choose a chapter to study.`, "success");
+    toast.show(
+      book.already_in_library
+        ? `“${book.title}” is already in your library${book.already_in_library === "same_text" ? " (another copy of the same book)" : ""}. Choose a chapter to study.`
+        : `Imported “${book.title}”. Choose a chapter to study.`,
+      "success",
+    );
     navigate(`/books/${encodeURIComponent(book.id)}`);
   };
 
@@ -80,7 +85,7 @@ export function ImportPanel() {
     event.preventDefault();
     const trimmed = path.trim().replace(/^["']|["']$/g, "");
     if (!trimmed) {
-      setPathError("Enter the full path to a PDF on this computer.");
+      setPathError("Enter the full path to a PDF on the computer running the app.");
       return;
     }
     setPathBusy(true);
@@ -154,7 +159,7 @@ export function ImportPanel() {
 
       <form className="import-path" onSubmit={submitPath} noValidate>
         <label className="field__label" htmlFor={pathId}>
-          Or import from a path on this computer
+          Or import from a path on the computer running the app
         </label>
         <div className="import-path__row">
           <input
@@ -184,7 +189,7 @@ export function ImportPanel() {
           </p>
         )}
       </form>
-      {state.phase === "idle" && <p className="import-panel__note muted">Files stay on this computer: books are copied into the app's local data folder.</p>}
+      {state.phase === "idle" && <p className="import-panel__note muted">Books are kept in the app's books folder, so a new course from another chapter needs no new upload. A book already in your library is recognised, not added twice.</p>}
     </div>
   );
 }

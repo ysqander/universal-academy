@@ -362,7 +362,8 @@ Details: [SPEC.md §6.7](SPEC.md).
   top-ups otherwise make live API calls.
 - Stop the app before `replan.py` / `regenerate.py` (they refuse while :8000 answers); both back up the database.
 - **Tests can't reach live data or paid APIs** (added 2026-10-07): when `pytest` is loaded, `config.py` forces the
-  fake LLM, blank keys and a temporary data dir (also when `UA_DATA_DIR` names the live dir), even if
+  fake LLM, blank keys, a temporary data dir (also when `UA_DATA_DIR` names the live dir) and a temporary books dir
+  (any `UA_BOOKS_DIR` outside the system temp dir is replaced), even if
   `tests/conftest.py` was bypassed. Why: a review agent imported a test module from outside `backend/tests`; the run
   wrote a "Tiny" test course into the live database and made paid OpenAI calls. Run tests from `backend/` as in
   CLAUDE.md.
@@ -372,6 +373,20 @@ Details: [SPEC.md §6.7](SPEC.md).
   copies of the live SQLite database while a script was writing (the main file was intact). `run.sh` writes one closed
   snapshot per day to the project's `backups/` (kept 14 days) — that folder is what gets synced. The pre-move folder is
   kept as `data-moved-2026-10-07/` until the learner deletes it.
+- **Book PDFs live in the project's `books/` folder** (decided 2026-10-10, the learner: "assume the app runs on a
+  server … save the docs simply in a folder of the project"; so another chapter needs no new upload, and a book uploaded
+  again is recognised): `books/<book_id>/book.pdf` (`UA_BOOKS_DIR` overrides), recorded as `<book_id>/book.pdf` and
+  found by id. The exception to the rule above is safe because a PDF is written once (temp file + rename); the
+  database, course files and page renders (`<data>/page-cache`) stay in the data dir. Not in git (private textbooks,
+  GitHub's 100 MB limit, server uploads never round-trip): back up `books/` with the data dir; a server sets
+  `UA_BOOKS_DIR` explicitly. Dedupe: the same file (sha256) or the same book saved again returns the book on file —
+  per-page signatures of the letters only, so a Preview re-save (it re-encodes math fonts: 372 of 404 Axler pages
+  changed their extracted text), download stamps and notes still match (SPEC §3.1); scans match only byte for
+  byte. An upload restores a missing or damaged PDF. Tests always get a temporary books dir (`config.py` refuses any
+  other under pytest); any other process with its own `UA_DATA_DIR` and no `UA_BOOKS_DIR` keeps books in
+  `<data>/books` and only reads the project's (a sandbox DB shares book ids: its delete must not remove the real PDF).
+  The Axler PDF was copied from `<data>/books/611eab851f87/` by `scripts/move_books.py` (its stored path still
+  pointed into the old project `data/` folder; the app had found it by id).
 
 ## 9. Open items
 

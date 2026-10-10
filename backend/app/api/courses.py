@@ -137,7 +137,10 @@ def get_job(cid: str) -> JobStatus:
 @router.post("/api/courses/{cid}/resume", response_model=JobStatus)
 async def resume(cid: str) -> JobStatus:
     _course_row(cid)
-    return jobs.resume_build(cid)
+    try:
+        return jobs.resume_build(cid)
+    except ValueError as e:  # the book's PDF is missing
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.delete("/api/courses/{cid}", status_code=204)

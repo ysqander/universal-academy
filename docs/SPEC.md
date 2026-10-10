@@ -16,26 +16,29 @@ FastAPI (Python 3.12, uvicorn)
    ├─ api/         routers: books, courses, study
    └─ llm.py       LLM entry point (structured outputs, retries, concurrency, fake mode); OpenAI here,
                    Anthropic in llm_anthropic.py; prompts/ = rules.py (shared) + openai/ + anthropic/
-SQLite (<data>/academy.sqlite3) + files (<data>/books/<book_id>/…, <data>/courses/<course_id>/…); <data> = UA_DATA_DIR, default ~/Library/Application Support/UniversalAcademy (outside the cloud-synced project)
+SQLite (<data>/academy.sqlite3) + files (<data>/courses/<course_id>/…, <data>/page-cache/…); <data> = UA_DATA_DIR, default ~/Library/Application Support/UniversalAcademy (outside the cloud-synced project). Book PDFs: <books>/<book_id>/book.pdf; <books> = UA_BOOKS_DIR, default <project>/books (not in git)
 External: OpenAI Responses API or Anthropic Messages API (per role) · NVIDIA Nemotron Parse (build.nvidia.com, optional)
 ```
 
 Run: `./run.sh` (builds frontend if needed, starts uvicorn on :8000). Dev: `uvicorn app.main:app --reload` + `npm run dev`.
 
-## 2. Files on disk (DB paths are stored relative to the data dir, so the data folder can move)
+## 2. Files on disk (DB paths are stored relative to their folder, so either folder can move or live on a server)
 
 ```
-<data>/books/<book_id>/book.pdf
-<data>/books/<book_id>/pages/<page>@<dpi>.png        # cached renders (thumbnails + source viewer)
+<books>/<book_id>/book.pdf                           # books.pdf_path = '<book_id>/book.pdf'; found by id
+<data>/page-cache/<book_id>/<page>@<dpi>.png         # cached renders (thumbnails + source viewer); derived, safe to delete
 <data>/courses/<course_id>/pages/<page>.png          # parse-resolution renders (UA_RENDER_DPI, default 200)
 <data>/courses/<course_id>/marks/<page>.png          # renders with numbered candidate boxes (set-of-mark prompt)
 <data>/courses/<course_id>/figures/<figure_id>.png   # cropped figures (2x scale, small padding)
 ```
 
+Books imported before 2026-10-10 were kept in `<data>/books/<book_id>/book.pdf` (recorded as `books/<id>/book.pdf` or an absolute path): still read as a fallback; `backend/scripts/move_books.py` copies them into `<books>`.
+
 ## 3. Ingestion
 
 ### 3.1 Book import
-- `POST /api/books` (multipart `file`) or `POST /api/books/import-path {path}` (local file path; copied into <data>/).
+- `POST /api/books` (multipart `file`, received in `<data>/tmp`) or `POST /api/books/import-path {path}` (a path on the machine running the app; loopback clients only). The PDF is copied to `<books>/<book_id>/book.pdf` (temp file + rename).
+- Already in the library → the book on file is returned with `already_in_library`: `identical_file` (kv `book_sha256:<sha>` → id) or `same_text` (the same book saved again — another download, a re-save in Preview, notes or stamps added). Each book keeps page signatures (kv `book_pages:<id>`): per page, a hash of its ASCII letters only (font re-encodings change math symbols and digits, not words), leaving out FreeText/Stamp annotations and lines that repeat on most pages with digits masked (download stamps, licence lines). Same book = same page count and ≥ 90 % of the text pages agreeing. A scan without a real text layer is recognised only byte for byte. A file recognised by its pages is then also recorded by its sha256; a bookmarked copy gives its outline to a book on file that had none from its PDF. If the book's PDF is missing or damaged (not one of the files recorded as this book: a sync can cut a file short and MuPDF still opens it), the upload restores it, and an intact older copy is used first. `Book.pdf_missing` flags it (the picker says to upload it again); no course is created for it, and a build is not resumed while its render or parse stage is left.
 - Extract metadata title/author (fallback: filename), page count, page labels (`page.get_label()` → fallback str(i+1)).
 - Outline: `doc.get_toc()` → nested `OutlineNode` tree. end_page of a node = (nearest later start at the same or higher level, in page order) − 1, or that start page itself when the next section begins below the top of its page (TOC destination y; if unknown, the shared page is included); clamped into the parent's range; the last top-level node ends at the last page. Ids `n0..nN` in TOC order. Titles are prettified at import (R^n → Rⁿ, x^2 → x²).
 - No outline → `outline_source="detected"`: send the text layer of the first ~25 pages to the LLM to detect the table of contents (chapters/sections with printed page numbers), then map printed numbers → PDF indexes via page labels (or by detecting the offset where printed number "1" appears). If no text layer, `outline_source="none"` and the UI offers manual page ranges.
@@ -274,7 +277,7 @@ Markdown everywhere through one `<Markdown>` component (react-markdown + remark-
 
 ## 8. Configuration (.env at project root)
 
-Provider (2026-10-08): `UA_LLM_PROVIDER` (`openai` default | `anthropic`) runs every LLM role on one provider; `UA_PROVIDER_VISION|GRAPH|LESSON|VIZ|VERIFY` overrides one role (e.g. Claude writes, GPT verifies). Keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (+ `ANTHROPIC_WORKSPACE_ID` for an organisation-level key) — each needed only when a role uses that provider — and `NVIDIA_API_KEY` (optional). OpenAI models: `UA_MODEL_VISION` (gpt-6-luna), `UA_MODEL_GRAPH`/`UA_MODEL_LESSON`/`UA_MODEL_VIZ` (gpt-6.1-sol), `UA_MODEL_VERIFY` (gpt-6-luna), `UA_EFFORT_*` per role (minimal…xhigh). Anthropic models: `UA_ANTHROPIC_MODEL_VISION`/`_VERIFY` (claude-haiku-5-5), `_GRAPH`/`_LESSON`/`_VIZ` (claude-opus-5-5), `UA_ANTHROPIC_EFFORT_*` (low…max; same defaults as OpenAI), `UA_ANTHROPIC_CACHE_TTL` (1h), `UA_ANTHROPIC_BASE_URL` (the ambient `ANTHROPIC_BASE_URL` is never used). `UA_PROOF_EFFORT_NOTCHES` (1) raises proof skills' effort on either scale. Prompts: `app/prompts/rules.py` (the learner's rules, shared) + one set per provider (`app/prompts/openai/`, `app/prompts/anthropic/`); `backend/scripts/prompt_diff.py` shows where the sets differ. Other: `UA_PARSE_ENGINE` (auto|openai|nemotron — "openai" means the vision model only, whichever provider runs it), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR`, `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work, whatever the provider).
+Provider (2026-10-08): `UA_LLM_PROVIDER` (`openai` default | `anthropic`) runs every LLM role on one provider; `UA_PROVIDER_VISION|GRAPH|LESSON|VIZ|VERIFY` overrides one role (e.g. Claude writes, GPT verifies). Keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` (+ `ANTHROPIC_WORKSPACE_ID` for an organisation-level key) — each needed only when a role uses that provider — and `NVIDIA_API_KEY` (optional). OpenAI models: `UA_MODEL_VISION` (gpt-6-luna), `UA_MODEL_GRAPH`/`UA_MODEL_LESSON`/`UA_MODEL_VIZ` (gpt-6.1-sol), `UA_MODEL_VERIFY` (gpt-6-luna), `UA_EFFORT_*` per role (minimal…xhigh). Anthropic models: `UA_ANTHROPIC_MODEL_VISION`/`_VERIFY` (claude-haiku-5-5), `_GRAPH`/`_LESSON`/`_VIZ` (claude-opus-5-5), `UA_ANTHROPIC_EFFORT_*` (low…max; same defaults as OpenAI), `UA_ANTHROPIC_CACHE_TTL` (1h), `UA_ANTHROPIC_BASE_URL` (the ambient `ANTHROPIC_BASE_URL` is never used). `UA_PROOF_EFFORT_NOTCHES` (1) raises proof skills' effort on either scale. Prompts: `app/prompts/rules.py` (the learner's rules, shared) + one set per provider (`app/prompts/openai/`, `app/prompts/anthropic/`); `backend/scripts/prompt_diff.py` shows where the sets differ. Other: `UA_PARSE_ENGINE` (auto|openai|nemotron — "openai" means the vision model only, whichever provider runs it), `UA_LLM_CONCURRENCY`, `UA_RENDER_DPI`, `UA_MAX_COURSE_PAGES`, `UA_DATA_DIR` (database, course files, page renders), `UA_BOOKS_DIR` (book PDFs; default `<project>/books` for the app's own data dir, `<data>/books` for any other `UA_DATA_DIR` so a sandbox on a copy of the database never writes to the real folder (a `UA_BOOKS_DIR` from `.env` counts only with the data dir `.env` names) — a server sets it explicitly; a relative value is taken from the project root), `UA_FAKE_LLM` (1 = offline canned responses for tests/UI work, whatever the provider).
 
 ## 9. Maintenance
 
@@ -282,6 +285,6 @@ Provider (2026-10-08): `UA_LLM_PROVIDER` (`openai` default | `anthropic`) runs e
 
 ## 10. Testing
 
-- `backend/tests/`: pytest, offline by default (`UA_FAKE_LLM=1`, small synthetic PDF + the Axler PDF when present for outline/figure tests). Graph validation, grading, scheduler/FIRe-lite, selector, API smoke (TestClient), full pipeline with the fake LLM.
+- `backend/tests/`: pytest, offline by default (`UA_FAKE_LLM=1`, a temporary data dir and books dir per test — never the project's `books/`; small synthetic PDF + the Axler PDF when present for outline/figure tests). Graph validation, grading, scheduler/FIRe-lite, selector, API smoke (TestClient), full pipeline with the fake LLM.
 - `backend/scripts/e2e_real.py`: real build of Axler §1A (pages 15-24) against the live APIs.
 - Frontend: `npm run build` (tsc strict) must pass; manual E2E through the browser.

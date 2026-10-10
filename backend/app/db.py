@@ -248,8 +248,7 @@ _initialized_for: str | None = None
 def init_db() -> None:
     global _initialized_for
     with _init_lock:
-        settings.data_dir.mkdir(parents=True, exist_ok=True)
-        settings.books_dir.mkdir(parents=True, exist_ok=True)
+        settings.data_dir.mkdir(parents=True, exist_ok=True)  # the books dir is created by the first import
         settings.courses_dir.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(settings.db_path)
         try:

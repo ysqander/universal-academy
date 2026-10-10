@@ -142,6 +142,8 @@ _EXAMPLE_POINT = re.compile(
             # "a numerical check covers one case only", "one computation covers only that case"
             r"\b(?:numeric(?:al)?\s+(?:check|example)|example|computation|calculation|check)s?\s+(?:covers?|proves?|shows?|"
             r"checks?|settles?)\s+(?:only\s+)?(?:one|a\s+single|that|this)\s+(?:case|choice|example|input|value|pair)\b",
+            # a numeric check offered as a proof: "Computing (1,−3)+(−1,3) = (0,0) proves x+(−x) = 0 for every x"
+            r"\b(?:computing|checking|taking|evaluating|testing|trying)\b[^.;]{0,120}?\bproves?\b[^.;]{0,80}?\bfor\s+(?:every|all)\b",
             r"\bagreement\s+on\s+(?:the\s+)?(?:numbers|one\s+example|an\s+example)\b",
             # a claim to reject: "the check with x = (1, −3) alone proved it for every x", "this alone proves … for every"
             r"\b(?:check|calculation|computation|example|numbers|this)\b[^.;]{0,60}?\balone\b[^.;]{0,60}?\bfor\s+(?:every|all|each)\b",

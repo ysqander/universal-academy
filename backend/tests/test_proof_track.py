@@ -421,6 +421,7 @@ def test_a_draft_that_makes_the_example_point_goes_to_the_revision():
         "One computation covers one case only. A proof must cover every allowed input.",
         "A numerical check covers one case only, and a fixed length proves only that length.",
         "Computing $(2+i)(1-3i)$ gives $1-5i$; this alone proves commutativity for every complex pair.",
+        "Computing $(1,-3)+(-1,3)=(0,0)$ proves $x+(-x)=0$ for every $x\\in\\mathbf{F}^n$.",
     ]
     other = [
         "Why is a real residual not enough to conclude that the corresponding unknown coordinate is real?",
@@ -429,6 +430,7 @@ def test_a_draft_that_makes_the_example_point_goes_to_the_revision():
         "Comparing coordinate 1 alone proves the law.",
         "One counterexample refutes an \"always\" claim.",
         "Why is $6i^2$ not yet in standard form?",
+        "Computing $\\alpha\\beta$ and $\\beta\\alpha$ from Definition 1.1 for arbitrary real $a,b,c,d$ proves $\\alpha\\beta=\\beta\\alpha$.",
     ]
     for text in made + other:
         blocks = list(draft.blocks)

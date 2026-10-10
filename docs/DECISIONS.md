@@ -465,6 +465,12 @@ Details: [SPEC.md §6.7](SPEC.md).
   The S17 judge's proposed claim "the chain could start from $(-1)v$ alone and reach $-v$ one law per line (F)" was
   wrong — $(-1)v=(-1)v+(v+(-v))=\dots=0+(-v)=-v$ needs no uniqueness — a reminder that review findings' fixes are
   checked before they are applied.
+- S12a block 1 rewritten by hand (2026-10-10, the learner: "I don't understand this paragraph nor why ab is only
+  applied to x1, and the second coordinate becomes zero"): the invented multiplication $\lambda(x_1,x_2)=(\lambda x_1,0)$
+  was defined only in block 0 and used two screens later without a word; the block now restates it and says it throws
+  the second coordinate away, separates the addition laws, the 1.19 check and the four scalar laws, and spells out
+  $a(bv)$ as the rule applied twice. Open for the generator: a block that computes with an invented operation should
+  restate it where it is used.
 - **S19–S28 made by Claude Code agents** (2026-10-10, the learner asked to use the remaining Claude Code credits for
   them): ten re-plans in sandboxes, run from a checkout pinned at the pushed commit while the books-folder change was
   made in the main tree. Four skills split — S20 → S20a/b/c (intersections; unions of two; unions of three), S21 →

@@ -380,8 +380,20 @@ Details: [SPEC.md §6.7](SPEC.md).
   is "What the proof rests on"; its five scored steps re-verified (all agree) and imported.
 - Rule 17 in stored lessons (2026-10-10): S4a k2q1 (a numeric check and a fixed input offered as proofs) rewritten in
   place ($0.61; claims about the moves a proof may make). S4a's and S13's reflects stay — both lessons are learned and
-  the teaching is not replayed. S10 still has its reflect, a numbers-scope claim and knowledge point 2's k2q1/k2q2 and
-  explanation — fixed together with its variant once the learner decides about the failed attempt.
+  the teaching is not replayed. S10 (2026-10-10, the learner's choice): its failed attempt (74 %) counts as passed —
+  the variant renamed x_k as c (the learner typed (ak+bk)x) and step 3 had two ambiguous statements, so it was flagged
+  on their behalf (`flag_question.py`), leaving the scored steps at 90 % (Good). For the reviews the variant was
+  rewritten without renaming ($0.88, its last step by hand so that no claim can be read off an earlier explanation),
+  k2q1/k2q2 rewritten, knowledge point 2 renamed "What the proof rests on"; its teaching keeps the reflect (learned,
+  and its scored-step records are indexed by block). The grader now splits 'ax_k' like 'ax_1' — '(ax_k, bx_k)' was
+  graded as unknown names.
+- Rolling regeneration ahead of the learner (the learner's choice on 2026-10-10: about three lessons ahead, so later
+  lessons get the rules feedback adds): S9 ($2.09) and S11 ($2.05) re-planned as kept v2 skills in sandboxes and
+  imported ("Compute with sequences in F^∞", "Locate arrows for vector operations in the plane"); S12 split into S12a
+  "Decide whether given operations make a vector space" and S12b, a guided proof "Prove the complexification of R^n is
+  a complex vector space" (applied on the live course from the sandbox's saved plan, $6.60; the sandbox run stopped
+  after $0.66 — a split cannot be imported). Final reviews: S9, S11 and S12a each had their blocking findings in the
+  capstone, rewritten and verified; S12b 0 blocking (one wording slip fixed by hand). S14–S28 are still v1.
 - S10 (two_routes) is in the real course since 2026-10-09, generated with the faster default (21.5 minutes, $3.94)
   plus a variant rewrite ($0.76) after the spot check: the variant's step 2 explanation named the law of F that step 3
   asked about — now a hard check. Spot-check minor findings left open: Block 4 and Block 10's scored steps are close to

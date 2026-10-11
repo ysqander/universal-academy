@@ -140,7 +140,7 @@ class Settings:
 
     # Provider (2026-10-08): UA_LLM_PROVIDER picks OpenAI or Anthropic for every role; UA_PROVIDER_<ROLE> overrides one
     # role (e.g. Opus writes, GPT reviews). Each provider has its own models, efforts and prompt set (app/prompts/).
-    llm_provider: str = field(default_factory=lambda: _env("UA_LLM_PROVIDER", "openai").lower())
+    llm_provider: str = field(default_factory=lambda: _env("UA_LLM_PROVIDER", "anthropic").lower())
     provider_vision: str = field(default_factory=lambda: _env("UA_PROVIDER_VISION", "").lower())
     provider_graph: str = field(default_factory=lambda: _env("UA_PROVIDER_GRAPH", "").lower())
     provider_lesson: str = field(default_factory=lambda: _env("UA_PROVIDER_LESSON", "").lower())

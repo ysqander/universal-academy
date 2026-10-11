@@ -33,7 +33,9 @@ def make_settings(monkeypatch, **env: str) -> Settings:
 
 
 def test_one_setting_switches_every_role_and_a_role_can_be_overridden(monkeypatch):
-    openai = make_settings(monkeypatch)
+    default = make_settings(monkeypatch)  # Claude is the default provider (2026-10-11)
+    assert [default.role_config(r)[0] for r in ROLES] == ["anthropic"] * 5
+    openai = make_settings(monkeypatch, UA_LLM_PROVIDER="openai")
     assert [openai.role_config(r)[0] for r in ROLES] == ["openai"] * 5
     assert openai.role_config("lesson")[1] == openai.model_lesson
     claude = make_settings(monkeypatch, UA_LLM_PROVIDER="anthropic", UA_PROVIDER_VERIFY="openai")

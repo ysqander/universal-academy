@@ -1,54 +1,50 @@
 # Universal Academy
 
-Turn a chapter of a textbook PDF into a Math-Academy-style course that you study in your browser. The app reads the
-chapter's pages (text, LaTeX, figures), breaks the material into small skills, writes a lesson and checked practice for
-each one, and then decides what you should do next based on how you actually answer. It runs on your own machine. You
-bring the book, and either an API key or Claude Code.
+Turn a chapter of a textbook into a course that teaches it to you, step by step.
+
+You give the app a PDF and pick a chapter. It breaks the chapter into small skills, writes a short lesson and practice
+questions for each one, and then walks you through them in the right order. It checks every answer you type, and it
+brings skills back for review just before you would forget them. Everything runs on your own computer.
 
 ![The knowledge map of a course in progress: learned skills in green, lessons in progress in amber, reviews due outlined in orange](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/skill-map.png)
 
-*The knowledge map of chapter 1 of Axler's* Linear Algebra Done Right *(the bundled example course), part-way through:
-learned skills in green, lessons in progress in amber, reviews that are due outlined in orange.*
+*The skill map of chapter 1 of Axler's* Linear Algebra Done Right *(the example course that comes with the app), part-way
+through: learned skills in green, lessons in progress in amber, reviews that are due outlined in orange.*
 
-**Course page:** progress, reviews due, the next quiz, and the tasks **Continue learning** picks next.
+**Course page:** your progress, the reviews that are due, the next quiz, and what to do next.
 
 ![The course page: progress, reviews due, the next quiz, and what to do next](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/course.png)
 
-**Lesson:** teaching in small steps, with quick checks you answer as math (the preview renders what you type).
+**Lesson:** one idea at a time, with quick checks you answer by typing math (the preview shows what you typed).
 
 ![A lesson: worked teaching with a quick check typed as math](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/lesson.png)
 
-**Review:** spaced reviews bring each learned skill back with new questions, scheduled by FSRS.
+**Review:** skills you have learned come back later with new questions.
 
 ![A spaced review question answered correctly](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/review.png)
 
-**Quiz:** timed and without help, mixed questions on what you learned lately.
+**Quiz:** timed, no hints, a mix of what you learned recently.
 
 ![A timed quiz question](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/quiz.png)
 
-**The learning loop**
+## How it works
 
-1. **Knowledge graph.** The chapter becomes a graph of micro-skills (definitions, results, techniques, proofs), each
-   linked to the skills it builds on.
-2. **Lessons.** Each skill has 2–3 knowledge points: a worked example, then practice. Proof skills guide you through
-   writing the proof and checking it against a model answer.
-3. **Checked practice.** Questions are verified independently before you see them. Hints, revealed solutions and
-   retyped expressions never count as independent answers. A lesson passes at 80 % (half points with a hint). A
-   knowledge point you can't pass pauses the lesson for a few hours, and failing twice at the same spot sends you to
-   review its prerequisites first.
-4. **Spaced reviews and quizzes.** Reviews come back on an FSRS schedule, and practising an advanced skill also
-   refreshes the skills under it. Timed quizzes check what the reviews consolidated. **Continue learning** picks the
-   next task and tells you why.
+1. **A map of skills.** The chapter becomes a map of small skills (a definition, a computation, a proof), each linked
+   to the skills it needs first. A skill opens once you know what it builds on.
+2. **Short lessons.** Each lesson explains one idea with a worked example, then has you do it yourself.
+3. **Honest practice.** Every question is checked before you see it, and your typed answers are graded. You pass a
+   lesson at 80 %, and an answer with a hint earns half a point. If you get stuck, the app sends you back to the skills
+   underneath first.
+4. **Reviews and quizzes.** Learned skills return on a spaced-repetition schedule, and timed quizzes mix everything
+   together. **Continue learning** always picks the next task and tells you why.
 
-## Quickstart
+## Get started
 
-You need macOS or Linux (on Windows, use [WSL](https://learn.microsoft.com/windows/wsl/install), which is the supported
-route), and:
+You need macOS or Linux (on Windows, use [WSL](https://learn.microsoft.com/windows/wsl/install)), and:
 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - Node.js 20.19+ (22.18+ to run the frontend tests)
-- optionally the `sqlite3` command-line tool for the daily database snapshot (preinstalled on macOS; without it,
-  `run.sh` makes the snapshot with Python)
+- optionally the `sqlite3` command-line tool, for the daily database snapshot (preinstalled on macOS)
 
 ```bash
 git clone https://github.com/ysqander/universal-academy.git
@@ -56,64 +52,60 @@ cd universal-academy
 ./run.sh
 ```
 
-The first run installs the backend and frontend dependencies and builds the frontend. Then open
-<http://localhost:8000>.
+The first run creates `.env` from `.env.example` and stops so you can add your keys (see below). Run `./run.sh` again
+and open <http://localhost:8000>.
 
-## Three ways to get a course
+To try the app before building anything, open the **Library** and press **Add to my library** on the example course
+(chapter 1 of Sheldon Axler's *Linear Algebra Done Right*). Studying needs no key.
 
-### 1. Try the example course (no key needed)
+Building a course always needs `NVIDIA_API_KEY` in `.env`: NVIDIA's page-layout model finds the text blocks, figures and
+formulas on each page. A key is free at [build.nvidia.com](https://build.nvidia.com).
 
-In the **Library**, press **Add to my library** on the **Example course** card. It is chapter 1, *Vector Spaces*, of
-Sheldon Axler's *Linear Algebra Done Right* (see [Credits](#license-and-credits)). You can study it without any API
-key.
+## Build a course with Claude Code (recommended)
 
-### 2. Build with an API key
+If you use [Claude Code](https://claude.com/claude-code), its agents write the course instead of a paid API. The work
+counts against your Claude Code plan, and only `NVIDIA_API_KEY` is needed in `.env`.
 
-1. Put your keys in `.env` at the project root (`./run.sh` creates it from `.env.example` on first start), then
-   restart the app:
-   - `ANTHROPIC_API_KEY` (with `UA_LLM_PROVIDER=anthropic`) or `OPENAI_API_KEY` (the default provider) — the model
-     that reads the pages and writes the graph, lessons and questions;
-   - `NVIDIA_API_KEY` — NVIDIA Nemotron Parse finds each page's layout (text blocks, figures, formulas, reading
-     order). Every build uses it; a free key is available at [build.nvidia.com](https://build.nvidia.com).
-2. In the **Library**, drop a PDF (or paste a path on the machine running the app). A book that is already in your
-   library is opened instead of being added twice.
-3. Pick a chapter in the outline (shift-click or "Select several" for consecutive sections), check the page
-   thumbnails, and press **Build course**. You can start studying as soon as the first lessons are ready.
+1. Start the app in Claude Code mode:
 
-Cost depends on the model and on the length of the chapter. When a build ends, its **Build log** (on the course page)
-shows the estimated cost of that build.
+   ```bash
+   UA_AGENT_DIR=.agent-broker ./run.sh
+   ```
 
-`.env` is also where you choose the provider and models (see [Configuration](#configuration)).
+2. In the app, drop a PDF into the **Library**, pick a chapter and press **Build course**.
+3. Open Claude Code in this folder and run `/build-course`.
 
-### 3. Build with Claude Code (no OpenAI or Anthropic key)
+Steps 2 and 3 can happen in either order. (If your PDF has no bookmarks, run `/build-course` first: adding such a book
+already asks a model for its table of contents.) Every model call of the build goes to `.agent-broker/`, and a Claude
+Code agent answers it; the answers pass the same checks as API answers. A chapter often takes a few hours, so keep the
+app and Claude Code open. If the build stops, run `/build-course` again and press **Resume build** in the app.
 
-If you use [Claude Code](https://claude.com/claude-code), its agents can answer the app's model calls instead of an
-API. Only `NVIDIA_API_KEY` is needed in `.env` (page layout, see above):
+## Build a course with an API key
 
-```bash
-UA_AGENT_DIR=.agent-broker ./run.sh
-```
+1. Put your keys in `.env` and restart the app:
+   - `ANTHROPIC_API_KEY`: Claude is the default (Opus 5.5 writes the skill map, lessons and questions; Haiku 5.5 reads
+     the pages and double-checks the questions). To use OpenAI instead, set `OPENAI_API_KEY` and
+     `UA_LLM_PROVIDER=openai`.
+   - `NVIDIA_API_KEY` (see above).
+2. In the **Library**, drop a PDF (or paste a path on this computer). A book you already have is opened instead of
+   being added twice.
+3. Pick a chapter in the outline, check the page thumbnails, and press **Build course**. You can start studying as soon
+   as the first lessons are ready.
 
-Start the build in the app as usual, then open Claude Code in this folder and run `/build-course` (either order
-works; if your PDF has no bookmarks, run `/build-course` first, because adding such a book already asks a model for its
-table of contents). Each model call the build makes is written to `.agent-broker/`, and a Claude Code agent answers it. The answers
-go through the same schemas and the same checks as API answers. This uses your Claude Code plan's usage instead of an
-API key. It is much slower than the API (a chapter often takes hours), so keep the app and the Claude Code session open
-until the build finishes. If the build stops, run `/build-course` again and press **Resume build** in the app.
+The cost depends on the model and the length of the chapter. When a build ends, its **Build log** on the course page
+shows what it cost.
 
 ## Configuration
 
 Settings are read from `.env` at the project root (see `.env.example`), and environment variables override them.
 
-- **Provider and models:** `UA_LLM_PROVIDER=openai` (the default) or `anthropic` runs every model role on one provider.
+- **Provider and models:** `UA_LLM_PROVIDER=anthropic` (the default) or `openai` runs every model role on one provider.
   `UA_PROVIDER_VISION|GRAPH|LESSON|VIZ|VERIFY` overrides a single role, for example so that Claude writes and GPT
   verifies. All models and effort levels are listed in [docs/SPEC.md §8](docs/SPEC.md).
 - **Offline mode:** `UA_FAKE_LLM=1 ./run.sh` runs the whole app with canned model output, for UI work.
 - **Claude Code route:** `UA_AGENT_DIR` (the folder for the model calls, relative to the project root) and
   `UA_AGENT_TIMEOUT` (seconds one call may wait for an agent's answer, default 7200).
-- **Port and host:** `UA_PORT` (default 8000). `UA_HOST=0.0.0.0 ./run.sh` lets a tablet or phone on the same network
-  open the app at `http://<your-computer's-LAN-IP>:8000`. Only do this on a network you trust: there is no login (see
-  [SECURITY.md](SECURITY.md)).
+- **Port:** `UA_PORT` (default 8000).
 
 ## Where your data lives
 
@@ -128,12 +120,12 @@ because otherwise the database still lists it. More detail is in [books/README.m
 
 ## Privacy
 
-- Everything runs on your computer. The app listens on `127.0.0.1` only, unless you set `UA_HOST`.
+- Everything runs on your computer. The app listens on `127.0.0.1` only.
 - There are no accounts, no telemetry and no analytics.
 - Your API keys stay on your machine, in `.env` (git ignores it).
 - When a course is built (and when the app writes fresh questions for a skill you are reviewing), the page images and
-  text the model needs are sent to the provider you chose (OpenAI or Anthropic) and the page images to NVIDIA (layout), or to Claude Code on the Claude
-  Code route. Nothing else leaves your machine.
+  text the model needs go to Claude Code or to the API you chose (Anthropic or OpenAI), and the page images to NVIDIA
+  for the layout. Nothing else leaves your machine.
 
 ## Development
 

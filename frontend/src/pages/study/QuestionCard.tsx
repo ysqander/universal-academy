@@ -313,6 +313,12 @@ export function QuestionCard({ task, question, position, onAnswered, onContinue,
           </ol>
         )}
 
+        {question.lesson_looked && !answered && (
+          <p className="step-card__note">
+            <Icon name="book" size={14} /> Lesson opened — a correct answer earns half points.
+          </p>
+        )}
+
         {revealed && !grading && !answered && (
           <div className="question-card__solution reveal">
             <span className="feedback__label">Solution</span>

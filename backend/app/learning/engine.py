@@ -260,6 +260,8 @@ _PER_QUESTION_DEFAULTS: dict[str, Any] = {
     # help used on a question the easier step swapped out: it caps this question's points (hint ½, solution 0)
     "carry_hint": False,
     "carry_revealed": False,
+    # a review's question on which the learner opened the lesson (POST /lesson-look): answered with help, like a hint
+    "looked": False,
 }
 
 
@@ -420,6 +422,39 @@ def _unseen_count(skill_id: str, *, kp: int | None = None, exclude: Collection[s
     pool = _pool(skill_id)
     candidates = pool.practice(kp) if kp is not None else [q for q in pool.rows if _servable(q)]
     return sum(1 for q in candidates if q["id"] not in pool.answered and q["id"] not in exclude)
+
+
+_capstone_topup_requested: dict[str, float] = {}
+
+
+def request_capstone_top_up(skill_id: str) -> None:
+    """Ask the pipeline for a new capstone variant (in the background); at most once per 10 min per skill."""
+    now = time.monotonic()
+    if now - _capstone_topup_requested.get(skill_id, -TOPUP_DEDUPE_SECONDS) < TOPUP_DEDUPE_SECONDS:
+        return
+    _capstone_topup_requested[skill_id] = now
+    try:
+        from ..pipeline.topup import request_capstone_top_up as pipeline_capstone_top_up
+
+        pipeline_capstone_top_up(skill_id)
+    except Exception:
+        log.exception("capstone top-up request failed for skill %s", skill_id)
+        return
+    log.info("requested capstone top-up for skill %s", skill_id)
+
+
+def _request_fresh_variants(skill_id: str, st: dict[str, Any]) -> None:
+    """A retake gets fresh variants (docs/DECISIONS.md §5): new practice questions for every playable knowledge point
+    with fewer never-answered questions than its target + 1, and a new capstone once every servable one was answered.
+    Asked for when a lesson fails and again when it starts after an earlier attempt (a top-up that failed is retried;
+    both requests dedupe)."""
+    pool = _pool(skill_id)
+    for kp in st.get("playable") or []:
+        if sum(1 for q in pool.practice(kp) if q["id"] not in pool.answered) < _target(st, kp) + 1:
+            request_top_up(skill_id, kp)
+    caps = pool.capstones()
+    if caps and all(q["id"] in pool.answered for q in caps):
+        request_capstone_top_up(skill_id)
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +892,7 @@ def _question_view(qrow: dict[str, Any], st: dict[str, Any]) -> QuestionPublic:
     """The current question as the learner sees it, with the server's record of the attempt (E3)."""
     question = views.question_public(qrow)
     question.role = _role(qrow)  # type: ignore[assignment]
+    question.lesson_looked = bool(st.get("looked"))
     if qrow["kind"] == "multistep":
         steps = _steps(qrow)
         index = max(0, min(int(st.get("step") or 0), len(steps) - 1))
@@ -1115,7 +1151,10 @@ def start_lesson(skill_id: str, reason: str, now: datetime, st: dict[str, Any] |
 def _start_lesson(skill_id: str, reason: str, now: datetime, st: dict[str, Any] | None = None) -> str:
     skill = _skill_row(skill_id)
     st = st if st is not None else _lesson_initial_state(skill)
+    retake = db.query_one("SELECT 1 FROM tasks WHERE skill_id = ? AND type = 'lesson' LIMIT 1", (skill_id,))
     task_id = _insert_task(skill["course_id"], skill_id, "lesson", "learn", reason, st, now)
+    if retake:  # after a fail or a left attempt: ask again for what the last attempt used up
+        _request_fresh_variants(skill_id, st)
     progress = _progress_row(skill)
     if progress["status"] not in scheduler.LEARNED:
         # A lesson started on a locked skill ("Learn anyway") stays locked until its prerequisites are learned (the
@@ -1378,8 +1417,7 @@ def _finish_lesson_fail(
         "planned": plan,
     }  # fmt: skip
     _complete(task, st, "failed", 0, now)
-    if stage not in ("capstone", "guided") and _unseen_count(skill["id"], kp=st["kp"]) < _target(st, st["kp"]) + 1:
-        request_top_up(skill["id"], st["kp"])
+    _request_fresh_variants(skill["id"], st)
     back = (
         f"It comes back at {local_clock(until)} (in about 2 hours) with fresh questions — work on something else in "
         "the meantime."
@@ -1780,7 +1818,7 @@ def _carried(st: dict[str, Any]) -> str | None:
 def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grading.GradeResult | None) -> _Graded:
     """Combine the correctness check with the server-side record of help for the current attempt (D1, D2), and with
     help carried over from a question the easier step swapped out."""
-    hints = max(0, sub.hints_used, int(st.get("hints") or 0))
+    hints = max(0, sub.hints_used, int(st.get("hints") or 0), 1 if st.get("looked") else 0)
     own_reveal = bool(sub.revealed_solution or st.get("revealed"))  # this question's own solution was shown
     revealed = own_reveal
     carried = _carried(st)
@@ -1829,7 +1867,7 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
 
 
 def _grade_step(index: int, step: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check) -> dict[str, Any]:
-    hinted = bool(st.get("step_hint")) or sub.hints_used > 0
+    hinted = bool(st.get("step_hint") or st.get("looked")) or sub.hints_used > 0
     revealed = bool(st.get("step_revealed")) or sub.revealed_solution
     if check is None:
         if not revealed:
@@ -2165,6 +2203,24 @@ def hint(question_id: str, now: datetime, step: int | None = None) -> HintRespon
                 _save_state(task["id"], st)
         log.info("question %s: hint %d of %d shown", q["key"], used, len(hints))
         return HintResponse(hint=hints[used - 1], hints_used=used)
+
+
+def lesson_look(task_id: str, now: datetime) -> Task:
+    """The learner opens the lesson during a task (POST /api/tasks/{tid}/lesson-look). A review tests recall, so its
+    current question then counts as answered with help, like a hint (half points; a multistep question: every step
+    answered after the look). A lesson's own practice is open-book: nothing is recorded. Never during a quiz (409)."""
+    with lock:
+        task = _task_row(task_id)
+        if task["type"] == "quiz":
+            raise Conflict("The lesson can't be opened during a quiz.")
+        if task["status"] != "active":
+            raise Conflict("This task is over — reload it.")
+        st = _load_state(task)
+        if task["type"] == "review" and st.get("current") and not st.get("looked"):
+            st["looked"] = True
+            _save_state(task["id"], st)
+            log.info("task %s: lesson opened on question %s (counts as a hint)", task_id, st["current"])
+        return build_task(_task_row(task_id), now)
 
 
 def _step_hint(q: dict[str, Any], current: list[tuple[dict[str, Any], dict[str, Any]]], step: int | None) -> HintResponse:

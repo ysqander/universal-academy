@@ -10,6 +10,7 @@ import {
   isApiError,
   isCooldownConflict,
   isQuizFirstConflict,
+  lookAtLesson,
   startPractice,
   startQuiz,
   startTask,
@@ -17,12 +18,14 @@ import {
 import { CourseProvider } from "../../components/CourseProvider";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { LessonPreviewDialog } from "../../components/lesson/LessonPreviewDialog";
 import { Markdown } from "../../components/Markdown";
 import { Spinner } from "../../components/Spinner";
 import { ErrorState, LoadingState, StateMessage } from "../../components/StateMessage";
 import { TaskMenu } from "../../components/TaskMenu";
 import { useToast } from "../../context/toast";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
+import { useHotkeys } from "../../hooks/useHotkeys";
 import { useQuizClock } from "../../hooks/useQuizClock";
 import { useResource } from "../../hooks/useResource";
 import { TASK_LABEL } from "../../lib/format";
@@ -111,6 +114,12 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   const [planBefore, setPlanBefore] = useState<{ id: string; planned: number } | null>(null);
   // The suggestion the answer that finished a task showed in its feedback (the results page doesn't repeat it).
   const [lastSuggestion, setLastSuggestion] = useState<{ id: string; text: string } | null>(null);
+  // The task as it was when its current question was answered (its feedback is on screen until Continue replaces it).
+  const [answeredOn, setAnsweredOn] = useState<Task | null>(null);
+  // The quick look at the lesson (an overlay: the question underneath keeps its input). `notice`: it counted as a hint.
+  const [lessonLook, setLessonLook] = useState<{ notice: boolean } | null>(null);
+  // A review's unanswered question: the learner confirms the half-point cost before the lesson opens.
+  const [confirmLook, setConfirmLook] = useState(false);
   const taskRef = useRef<Task | null>(task);
   const bootPromise = useRef<Promise<Initial> | null>(null);
   const autoStarted = useRef<string | null>(null);
@@ -213,6 +222,7 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   }, [task, beginPractice]);
 
   const onAnswered = useCallback((result: AnswerResult) => {
+    setAnsweredOn(taskRef.current);
     if (result.task.phase === "done") {
       setFinishedId(result.task.id);
       setConfirmEnd(false);
@@ -389,6 +399,40 @@ export default function StudyPage({ courseId }: { courseId: string }) {
   useEffect(() => {
     if (blocker.state === "blocked" && !guardQuiz) blocker.proceed();
   }, [blocker, guardQuiz]);
+
+  // A quick look at the lesson during practice (in a lesson's teaching phase it is already on screen). Never in a quiz.
+  const canLook = task !== null && task.skill !== null && task.phase === "practice" && (task.type === "lesson" || task.type === "review");
+  // A review's unanswered question: opening the lesson counts as a hint on it (½ point). Lesson practice is open-book.
+  const lookCosts = canLook && task.type === "review" && task.question !== null && answeredOn !== task;
+  const openLesson = async (confirmed = false) => {
+    if (!task || !canLook || busy === "lesson") return;
+    if (lookCosts && !task.question?.lesson_looked) {
+      if (!confirmed) {
+        setConfirmLook(true);
+        return;
+      }
+      setConfirmLook(false);
+      setBusy("lesson");
+      try {
+        replaceTask(await lookAtLesson(task.id));
+      } catch (err) {
+        toast.error(err);
+        return;
+      } finally {
+        setBusy(null);
+      }
+    }
+    setLessonLook({ notice: lookCosts });
+  };
+  useHotkeys(
+    {
+      l: () => {
+        if (busy === "lesson") return false;
+        void openLesson();
+      },
+    },
+    canLook,
+  );
 
   const goToMap = useCallback(() => navigate(`/courses/${encodeURIComponent(courseId)}`), [navigate, courseId]);
   const onSession = useCallback((next: NextTaskResponse) => setSession(next.session), []);
@@ -569,11 +613,21 @@ export default function StudyPage({ courseId }: { courseId: string }) {
         task={task}
         session={session}
         onEndTask={ongoing ? () => setConfirmEnd(true) : null}
+        onOpenLesson={canLook ? () => void openLesson() : null}
+        lessonCostsHint={lookCosts && !task?.question?.lesson_looked}
+        lessonPending={busy === "lesson"}
         clock={quizRunning && clock.secondsLeft !== null ? { secondsLeft: clock.secondsLeft, announcement: clock.announcement } : null}
       />
       <main id="main" className="study" data-phase={task?.phase ?? "none"}>
         {body}
       </main>
+      <LessonPreviewDialog
+        skill={lessonLook && canLook ? { id: task.skill?.id ?? "" } : null}
+        onClose={() => setLessonLook(null)}
+        title="Lesson"
+        notice={lessonLook?.notice ? "Opening the lesson counts as a hint on this question: a correct answer earns half points." : undefined}
+        closeLabel="Back to the question"
+      />
       <Dialog
         open={blocker.state === "blocked"}
         onClose={() => blocker.reset?.()}
@@ -593,6 +647,27 @@ export default function StudyPage({ courseId }: { courseId: string }) {
         <p>
           The clock keeps running while you're away{clock.secondsLeft !== null ? ` — ${formatCountdown(clock.secondsLeft)} left` : ""}. Questions you
           don't get to score 0. <strong>Resume quiz</strong> on the course page brings you back to it.
+        </p>
+      </Dialog>
+      <Dialog
+        open={confirmLook}
+        onClose={() => setConfirmLook(false)}
+        title="Open the lesson?"
+        size="sm"
+        footer={
+          <>
+            <button type="button" className="btn btn--ghost" onClick={() => setConfirmLook(false)}>
+              Back to the question
+            </button>
+            <button type="button" className="btn btn--primary" onClick={() => void openLesson(true)} disabled={busy === "lesson"}>
+              {busy === "lesson" && <Spinner size={14} label="Opening" />} Open the lesson
+            </button>
+          </>
+        }
+      >
+        <p>
+          A review checks what you remember. Opening the lesson counts as a hint on this question: a correct answer
+          earns half points.
         </p>
       </Dialog>
       <Dialog

@@ -2,12 +2,14 @@
 
     await top_up_questions(skill_id, kp_index=None, n=3) -> int     # generate, validate, insert held, verify, release
     request_top_up(skill_id, kp_index=None) -> None                 # fire-and-forget with in-flight dedup
+    await top_up_capstone(skill_id) -> int                          # a new capstone variant once every one was answered
+    request_capstone_top_up(skill_id) -> None                       # fire-and-forget with in-flight dedup
     release_stale_holds(skill_ids=None) -> int                      # holds left by an interrupted top-up → servable
 
 New machine-checkable questions are inserted flagged 'verification: pending', so they are never served before the
 verifier has checked them; verification then writes the final flag (a failed verification call releases the
-question, like the build does). One top-up per (skill, knowledge point) runs at a time; keys and duplicate prompts
-are re-checked inside the insert transaction.
+question, like the build does). One top-up per (skill, knowledge point) runs at a time — the capstone counts as the
+point after the last one (its kp_index); keys and duplicate prompts are re-checked inside the insert transaction.
 """
 
 from __future__ import annotations
@@ -17,15 +19,18 @@ import logging
 import re
 import threading
 from collections import Counter
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from .. import db, llm
-from ..llm_schemas import QuestionDraft
+from ..llm_schemas import QuestionDraft, TeachingSpec
 from .context import load_course, page_marker
-from .lessons import is_proof_skill, next_question_key
+from .lesson_v2 import render_lesson, rewrite_capstone, stored_questions, stored_spec
+from .lessons import is_proof_skill, lesson_prefix, next_question_key
 from .. import prompts
 from .questions import PENDING_REASON, clean_questions, insert_questions, length_cue, normalized_prompt
 from .verify import keep_kps_servable, needs_verification, verify_question
@@ -75,13 +80,20 @@ async def top_up_questions(skill_id: str, kp_index: int | None = None, n: int = 
         raise TopUpUnavailable(f"Skill {skill_id} has no knowledge points")
     kp = kp_index if kp_index is not None and 0 <= kp_index < len(kps) else neediest_kp(skill_id, len(kps))
     n = max(1, min(MAX_NEW, n))
+    with _tracked(skill_id, f"top-up {skill['key']} KP {kp + 1}"):
+        async with _kp_lock(skill_id, kp):
+            return await _top_up(skill, lesson, kp, n)
+
+
+@contextmanager
+def _tracked(skill_id: str, label: str) -> Iterator[None]:
+    """A top-up running in this process (its held rows are not stale), with its LLM spend logged."""
     usage = llm.current_usage.get()
     token = llm.current_usage.set(llm.Usage()) if usage is None else None
     with _running_guard:
         _running[skill_id] += 1
     try:
-        async with _kp_lock(skill_id, kp):
-            added = await _top_up(skill, lesson, kp, n)
+        yield
     finally:
         with _running_guard:
             _running[skill_id] -= 1
@@ -91,8 +103,7 @@ async def top_up_questions(skill_id: str, kp_index: int | None = None, n: int = 
             spent = llm.current_usage.get()
             llm.current_usage.reset(token)
             if spent and spent.calls:
-                log.info("top-up %s KP %d: %d LLM calls · $%.4f", skill["key"], kp + 1, spent.calls, spent.cost_usd)
-    return added
+                log.info("%s: %d LLM calls · $%.4f", label, spent.calls, spent.cost_usd)
 
 
 async def _top_up(skill: dict[str, Any], lesson: dict[str, Any], kp: int, n: int) -> int:
@@ -159,6 +170,92 @@ async def _top_up(skill: dict[str, Any], lesson: dict[str, Any], kp: int, n: int
         log.info("top-up %s: %s", skill["key"], note)
     log.info("top-up %s KP %d: added %d questions", skill["key"], kp + 1, len(ids))
     return len(ids)
+
+
+# A retake must not repeat a capstone the learner answered (docs/DECISIONS.md §5): the capstone writer gets this as the
+# "problem" with the current capstone, followed by the answered ones.
+VARIANT_PROBLEM = (
+    "the learner has answered the capstone(s) below, so a retake of this lesson needs a NEW VARIANT: the same "
+    "decisions and step structure (the same step kinds in the same order), new numbers or a new case — never a copy "
+    "or a relabelling of an answered capstone"
+)
+
+
+def _fresh_capstone_exists(skill_id: str) -> bool | None:
+    """Is a capstone never answered by the learner servable or held for verification? None: the skill has none."""
+    caps = db.query(
+        "SELECT id, flagged, flag_reason FROM questions WHERE skill_id = ? AND role = 'capstone' "
+        "AND key NOT LIKE 'old-%'",
+        (skill_id,),
+    )
+    if not caps:
+        return None
+    rows = db.query("SELECT DISTINCT question_id FROM attempts WHERE skill_id = ? AND status != 'voided'", (skill_id,))
+    answered = {r["question_id"] for r in rows}
+    return any(r["id"] not in answered and (not r["flagged"] or r["flag_reason"] == PENDING_REASON) for r in caps)
+
+
+async def top_up_capstone(skill_id: str) -> int:
+    """Write one new capstone variant when the learner has answered every capstone of the skill (v2 lessons: the
+    capstone writer, validated like a capstone repair), insert it held, verify it and release it. Returns 1 when a
+    variant became servable, else 0."""
+    skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
+    if skill is None or skill["lesson_status"] != "ready":
+        raise TopUpUnavailable(f"Skill {skill_id} has no ready lesson")
+    lesson = db.loads(skill["lesson_json"], {}) or {}
+    spec = stored_spec(lesson)
+    if spec is None or _fresh_capstone_exists(skill_id) is not False:
+        return 0  # a v1 lesson, no capstone at all, or one still unanswered
+    kp = len(lesson.get("knowledge_points") or [])  # the capstone's kp_index
+    with _tracked(skill_id, f"capstone top-up {skill['key']}"):
+        async with _kp_lock(skill_id, kp):
+            if _fresh_capstone_exists(skill_id) is not False:  # another top-up wrote one meanwhile
+                return 0
+            return await _top_up_capstone(skill, lesson, spec, kp)
+
+
+async def _top_up_capstone(skill: dict[str, Any], lesson: dict[str, Any], spec: TeachingSpec, kp: int) -> int:
+    skill_id = skill["id"]
+    course = load_course(skill["course_id"])
+    pools, current = stored_questions(skill_id)
+    answered = db.query(
+        "SELECT * FROM questions WHERE skill_id = ? AND role = 'capstone' AND key NOT LIKE 'old-%' AND EXISTS "
+        "(SELECT 1 FROM attempts a WHERE a.question_id = questions.id AND a.status != 'voided') ORDER BY rowid",
+        (skill_id,),
+    )
+    problems = [VARIANT_PROBLEM + ":"] + [
+        f"answered {r['key']}: {r['prompt']} Steps: "
+        + " | ".join(str(s.get("prompt", "")) for s in db.loads(r["steps_json"], []) or [])
+        for r in answered
+    ]
+    draft = await rewrite_capstone(
+        course, skill, spec, render_lesson(lesson, pools, current), lesson_prefix(course), problems
+    )
+    with db.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        sql = "SELECT key, prompt FROM questions WHERE skill_id = ? AND role = 'capstone'"
+        rows = conn.execute(sql, (skill_id,)).fetchall()
+        if normalized_prompt(draft.prompt) in {normalized_prompt(r["prompt"]) for r in rows}:
+            log.warning("capstone top-up %s: the variant repeats an existing capstone — dropped", skill["key"])
+            return 0
+        used, n = {r["key"] for r in rows}, 2
+        while f"cap{n}" in used:
+            n += 1
+        ids = insert_questions(
+            conn, skill_id, kp, [draft.model_copy(update={"key": f"cap{n}"})], pending=True, role="capstone"
+        )
+    row = db.query_one("SELECT * FROM questions WHERE id = ?", (ids[0],))
+    if await verify_question(row) is None:  # verification call failed twice: servable unverified, as in the build
+        db.execute(
+            "UPDATE questions SET flagged = 0, flag_reason = '' WHERE id = ? AND flag_reason = ?",
+            (ids[0], PENDING_REASON),
+        )
+    row = db.query_one("SELECT flagged, flag_reason FROM questions WHERE id = ?", (ids[0],))
+    if row["flagged"]:
+        log.warning("capstone top-up %s: cap%d withheld — %s", skill["key"], n, row["flag_reason"])
+        return 0
+    log.info("capstone top-up %s: added cap%d", skill["key"], n)
+    return 1
 
 
 def release_stale_holds(skill_ids: list[str] | None = None, *, older_than_s: float = STALE_HOLD_S) -> int:
@@ -251,6 +348,7 @@ def topup_request(
 # ---------------------------------------------------------------------------
 
 _in_flight: set[tuple[str, int | None]] = set()
+_capstones_in_flight: set[str] = set()
 _lock = threading.Lock()
 _tasks: set[asyncio.Task] = set()
 _loop: asyncio.AbstractEventLoop | None = None
@@ -280,21 +378,35 @@ def request_top_up(skill_id: str, kp_index: int | None = None) -> None:
         if key in _in_flight:
             return
         _in_flight.add(key)
+    _schedule(lambda: _run(key), f"top-up-{skill_id}")
+
+
+def request_capstone_top_up(skill_id: str) -> None:
+    """Schedule a background capstone top-up for the skill unless one is already running for it."""
+    with _lock:
+        if skill_id in _capstones_in_flight:
+            return
+        _capstones_in_flight.add(skill_id)
+    _schedule(lambda: _run_capstone(skill_id), f"capstone-top-up-{skill_id}")
+
+
+def _schedule(work: Callable[[], Coroutine[Any, Any, None]], name: str) -> None:
+    """Run `work` on the running loop, on the remembered server loop, or else in a thread of its own."""
     try:
         running = asyncio.get_running_loop()
     except RuntimeError:
         running = None
     if running is not None:
-        _spawn(key)
+        _spawn(work, name)
     elif _loop is not None and _loop.is_running():
-        _loop.call_soon_threadsafe(_spawn, key)
+        _loop.call_soon_threadsafe(_spawn, work, name)
     else:
-        threading.Thread(target=lambda: asyncio.run(_run(key)), name=f"top-up-{skill_id}", daemon=True).start()
+        threading.Thread(target=lambda: asyncio.run(work()), name=name, daemon=True).start()
 
 
-def _spawn(key: tuple[str, int | None]) -> None:
+def _spawn(work: Callable[[], Coroutine[Any, Any, None]], name: str) -> None:
     """Start the top-up as a task of the running loop (tracked, so shutdown can cancel it)."""
-    task = asyncio.get_running_loop().create_task(_run(key), name=f"top-up-{key[0]}")
+    task = asyncio.get_running_loop().create_task(work(), name=name)
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
 
@@ -318,3 +430,13 @@ async def _run(key: tuple[str, int | None]) -> None:
     finally:
         with _lock:
             _in_flight.discard(key)
+
+
+async def _run_capstone(skill_id: str) -> None:
+    try:
+        await top_up_capstone(skill_id)
+    except Exception:  # noqa: BLE001 — background work: log, never raise into the event loop
+        log.exception("background capstone top-up for skill %s failed", skill_id)
+    finally:
+        with _lock:
+            _capstones_in_flight.discard(skill_id)

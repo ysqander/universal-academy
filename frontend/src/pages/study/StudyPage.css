@@ -94,6 +94,10 @@
   color: var(--muted);
 }
 
+.study-bar__lesson {
+  flex: none;
+}
+
 @media (max-width: 699px) {
   .study-bar__back-label,
   .study-bar__reason {

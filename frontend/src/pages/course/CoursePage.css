@@ -394,23 +394,3 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-
-.lesson-preview .dialog__body {
-  padding-top: var(--space-5);
-}
-
-.lesson-preview .lesson {
-  max-width: var(--reading);
-  margin: 0 auto;
-}
-
-.lesson-preview .lesson__grid {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.lesson-preview .lesson__main,
-.lesson-preview .lesson__aside {
-  grid-column: 1;
-  grid-row: auto;
-  position: static;
-}

@@ -1,0 +1,40 @@
+/* The lesson in a dialog (course map preview, a quick look from a study task). */
+
+.lesson-preview .dialog__body {
+  padding-top: var(--space-5);
+}
+
+.lesson-preview .lesson {
+  max-width: var(--reading);
+  margin: 0 auto;
+}
+
+.lesson-preview .lesson__grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lesson-preview .lesson__main,
+.lesson-preview .lesson__aside {
+  grid-column: 1;
+  grid-row: auto;
+  position: static;
+}
+
+.lesson-preview__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: var(--reading);
+  margin: 0 auto var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--status-progress);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--status-progress-bg);
+  font-size: var(--text-sm);
+}
+
+.lesson-preview__notice > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--status-progress);
+}

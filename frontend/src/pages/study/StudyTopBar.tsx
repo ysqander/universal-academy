@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { Icon } from "../../components/Icon";
 import { Markdown } from "../../components/Markdown";
 import { ProgressBar } from "../../components/ProgressBar";
+import { Spinner } from "../../components/Spinner";
 import { TASK_ICON } from "../../components/taskIcon";
 import { TASK_LABEL } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
@@ -13,11 +14,16 @@ interface StudyTopBarProps {
   task: Task | null;
   session: SessionInfo | null;
   onEndTask: (() => void) | null;
+  /** A quick look at the task's lesson (an overlay; the question stays as it is). Null: not offered (a quiz). */
+  onOpenLesson?: (() => void) | null;
+  /** In a review, opening the lesson counts as a hint: say so before the click. */
+  lessonCostsHint?: boolean;
+  lessonPending?: boolean;
   /** A running quiz's countdown (seconds left), and what to announce when it crosses a minute / zero. */
   clock?: { secondsLeft: number; announcement: string | null } | null;
 }
 
-export function StudyTopBar({ courseId, task, session, onEndTask, clock = null }: StudyTopBarProps) {
+export function StudyTopBar({ courseId, task, session, onEndTask, onOpenLesson = null, lessonCostsHint = false, lessonPending = false, clock = null }: StudyTopBarProps) {
   const tone = clock ? clockTone(clock.secondsLeft) : null;
   return (
     <header className="study-bar">
@@ -62,6 +68,21 @@ export function StudyTopBar({ courseId, task, session, onEndTask, clock = null }
             </span>
             <ProgressBar value={session.xp_today} max={session.daily_goal} label="XP toward today's goal" size="sm" tone={session.goal_reached ? "learned" : "accent"} />
           </div>
+        )}
+
+        {onOpenLesson && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm study-bar__lesson"
+            onClick={onOpenLesson}
+            disabled={lessonPending}
+            aria-label="Look at the lesson"
+            aria-keyshortcuts="L"
+            title={lessonCostsHint ? "Look at the lesson (L) — counts as a hint on this question: a right answer earns ½ point" : "Look at the lesson (L)"}
+          >
+            {lessonPending ? <Spinner size={14} label="Opening the lesson" /> : <Icon name="book" size={16} />}
+            <span className="study-bar__back-label">Lesson</span>
+          </button>
         )}
 
         {onEndTask && (

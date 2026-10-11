@@ -34,13 +34,15 @@ class CourseFixture:
 
 
 @pytest.fixture(autouse=True)
-def isolated_engine(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int | None]]:
-    """No FSRS fuzzing, and question top-ups are recorded instead of starting background generation."""
+def isolated_engine(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int | str | None]]:
+    """No FSRS fuzzing, and question top-ups are recorded instead of starting background generation (a capstone
+    top-up as (skill id, "cap"))."""
     monkeypatch.setattr(
         scheduler, "scheduler", Scheduler(desired_retention=0.9, learning_steps=(), relearning_steps=(), enable_fuzzing=False)
     )
-    requested: list[tuple[str, int | None]] = []
+    requested: list[tuple[str, int | str | None]] = []
     monkeypatch.setattr(engine, "request_top_up", lambda skill_id, kp_index=None: requested.append((skill_id, kp_index)))
+    monkeypatch.setattr(engine, "request_capstone_top_up", lambda skill_id: requested.append((skill_id, "cap")))
     return requested
 
 

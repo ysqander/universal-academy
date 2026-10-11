@@ -604,6 +604,45 @@ def _capstone() -> QuestionDraft:
     )
 
 
+def _capstone_variant() -> QuestionDraft:
+    """A retake's new capstone (topup.top_up_capstone): _capstone's decisions and step kinds with new numbers."""
+    return _multistep(
+        "cap",
+        "Let $z=2+i$ and $w=1-i$. Find $zw$, then use the result to answer two questions without starting over.",
+        [
+            _step(
+                "expression",
+                "Compute $zw=(2+i)(1-i)$. Enter your answer in the form $a+bi$.",
+                answer="3-i",
+                display="$3-i$",
+                hint="Four products; the product of the two $i$ terms contains $i^2$.",
+                explanation="$2-2i+i-i^2=2-i+1=3-i$.",
+            ),
+            _step(
+                "multiple_choice",
+                "Which of these numbers, multiplied by $zw$, gives a real number?",
+                choices=["$3+i$", "$3-i$", "$1+i$", "$i$"],
+                correct=0,
+                display="$3+i$",
+                hint="Multiply each option by $3-i$ and look at the imaginary part.",
+                explanation="$(3-i)(3+i)=9-i^2=10$ is real; the other products have a nonzero imaginary part.",
+            ),
+            _step(
+                "true_false_set",
+                "Mark each statement about $zw=3-i$ true or false.",
+                choices=["The real part of $zw$ is $3$", "$zw$ is a real number", "$i\\cdot zw=1+3i$"],
+                answer="TFT",
+                display="True, false, true",
+                hint="Multiply $3-i$ by $i$ and use $i^2=-1$.",
+                explanation="$\\operatorname{Re}(zw)=3$; $zw$ has a nonzero imaginary part; $i(3-i)=3i-i^2=1+3i$.",
+            ),
+        ],
+        display="$zw=3-i$",
+        solution="$zw=3-i$; $(3-i)(3+i)=10$ is real; $\\operatorname{Re}(zw)=3$ and $i\\,zw=1+3i$.",
+        targets="chains multiplication with a decision about the product and $i^2=-1$",
+    )
+
+
 def _lesson(text: str, _prefix: str) -> LessonDraft:
     key, title = _skill_from(text)
     seed = _seed(key, title)
@@ -1077,7 +1116,9 @@ _HANDLERS = {
     "TeachingPlan": _plan,
     "LessonV2Draft": _lesson_v2,
     "LessonReview": _review,
-    "CapstoneRepair": lambda _text, _prefix: CapstoneRepair(capstone=_capstone()),
+    "CapstoneRepair": lambda text, _prefix: CapstoneRepair(
+        capstone=_capstone_variant() if "NEW VARIANT" in text else _capstone()
+    ),
     "BlockRepair": lambda _text, _prefix: BlockRepair(blocks=[]),  # offline: the blocks stay as they are
     "QuestionRepair": lambda text, prefix: QuestionRepair(question=_repaired_question(text, prefix)),
     "VisualizationPlan": _viz,

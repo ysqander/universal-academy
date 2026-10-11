@@ -60,7 +60,11 @@ TF_SET_KIND = (
     'true_false_set: "Mark each statement true or false" — choices holds the 2–5 statements (each self-contained, '
     'without its own number); answer = one letter per statement in order, T or F (e.g. "FTT"); correct_choice null; '
     "tolerance null. Mix true and false statements; the hints and the solution address every statement by its "
-    "number (why it is true, or a counterexample). With 3 or more statements it is not a guessable choice question."
+    "number (why it is true, or a counterexample). With 3 or more statements it is not a guessable choice question. "
+    "Each statement is a complete claim, true or false on its own: never a bare value, vector or input that a phrase "
+    "in the prompt completes (the learner, 2026-10-11, misread 'Mark each statement true or false: testing "
+    "$1\\otimes v=v$ at this vector exposes the failure' with the statement '$v=(3,3)$' as 'does $1\\otimes v=v$ "
+    "hold?'). Write '$v=(3,3)$ is a counterexample to $1\\otimes v=v$ (that is, $1\\otimes v\\neq v$)'."
 )
 
 

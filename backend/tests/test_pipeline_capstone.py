@@ -320,6 +320,40 @@ def test_kps_stay_servable_up_to_their_target(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_a_capstone_top_up_writes_a_held_variant_once_every_capstone_was_answered(tmp_path, monkeypatch):
+    """docs/DECISIONS.md §5: a retake gets a new capstone — written only when the learner has answered every capstone,
+    held until the verifier has checked it, then servable under a fresh key; never a copy of an answered one."""
+    cid, sid = _capstone_skill(tmp_path)
+    assert asyncio.run(topup.top_up_capstone(sid)) == 0  # the capstone was never answered: nothing to write
+    cap = capstone_row(sid)
+    task_id = db.new_id()
+    db.execute(
+        "INSERT INTO tasks(id, course_id, skill_id, type, status, created_at) VALUES (?, ?, ?, 'lesson', 'completed', ?)",
+        (task_id, cid, sid, db.now_iso()),
+    )
+    db.execute(
+        "INSERT INTO attempts(id, task_id, question_id, skill_id, correct, status, created_at) VALUES (?, ?, ?, ?, 0, 'incorrect', ?)",
+        (db.new_id(), task_id, cap["id"], sid, db.now_iso()),
+    )
+    original, texts, held = fake_llm.respond, [], []
+
+    def watched(**kwargs):
+        if kwargs["schema"].__name__ == "CapstoneRepair":
+            texts.append(kwargs["text"])
+        if kwargs["schema"] is IndependentAnswer and not held:  # the first verifier call
+            held.extend(db.query("SELECT flagged, flag_reason FROM questions WHERE skill_id = ? AND key = 'cap2'", (sid,)))
+        return original(**kwargs)
+
+    monkeypatch.setattr(fake_llm, "respond", watched)
+    assert asyncio.run(topup.top_up_capstone(sid)) == 1
+    assert len(texts) == 1 and "NEW VARIANT" in texts[0] and cap["prompt"] in texts[0]
+    assert held == [{"flagged": 1, "flag_reason": "verification: pending"}]
+    new = db.query_one("SELECT * FROM questions WHERE skill_id = ? AND key = 'cap2'", (sid,))
+    assert (new["role"], new["kind"], new["kp_index"], new["flagged"]) == ("capstone", "multistep", cap["kp_index"], 0)
+    assert db.loads(new["verify_json"])["status"] == "agree" and new["prompt"] != cap["prompt"]
+    assert asyncio.run(topup.top_up_capstone(sid)) == 0 and len(texts) == 1  # cap2 is not answered yet
+
+
 def test_top_ups_never_add_written_questions(tmp_path, monkeypatch):
     cid = tiny_course(tmp_path)
     build(cid)

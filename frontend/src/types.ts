@@ -310,6 +310,7 @@ export interface QuestionPublic {
   flagged: boolean;
   hints_used: number; // hints already shown for this attempt (server-recorded)
   revealed: boolean; // solution revealed for the current attempt (server-recorded)
+  lesson_looked: boolean; // review: the lesson was opened on this question (counts as a hint, half points)
   committed_response: string | null; // free_response: answer committed before a comparison reveal
   role: "practice" | "capstone"; // capstone = the lesson's final multistep problem
   steps: MultistepStepPublic[]; // multistep only

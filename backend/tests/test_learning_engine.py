@@ -1055,6 +1055,23 @@ def test_review_hint_recorded_server_side_gives_half_credit() -> None:
     assert result.correct and not result.independent and "half a point" in result.feedback and result.score == 0.5
 
 
+def test_opening_the_lesson_in_a_review_counts_as_a_hint_and_is_free_in_lesson_practice() -> None:
+    fx = build_course()
+    task_id, task = start_practice(fx, "S1")
+    looked = engine.lesson_look(task_id, T0)  # a lesson's own practice is open-book
+    assert looked.question.lesson_looked is False
+    assert engine.submit_answer(task_id, right(task.question.id), T0).score == 1.0
+    learn(fx, "S1", T0)
+    now = T0 + days(3)
+    review_id = engine.start_review(fx.sid("S1"), "Review due", now)
+    qid = engine.get_task(review_id).question.id
+    assert engine.lesson_look(review_id, now).question.lesson_looked is True
+    assert engine.get_task(review_id).question.lesson_looked is True  # survives a reload
+    result = engine.submit_answer(review_id, right(qid), now)
+    assert result.correct and not result.independent and result.score == 0.5
+    assert result.task.question.lesson_looked is False  # the next question starts fresh
+
+
 def test_task_restores_hints_reveal_and_committed_answer_after_a_reload() -> None:
     fx = build_course()
     kp0 = fx.questions["S1"][0]
@@ -1394,6 +1411,29 @@ def test_top_up_wrapper_calls_pipeline_once_per_window(monkeypatch: pytest.Monke
     real_request_top_up("s1", 0)
     real_request_top_up("s1", 1)
     assert calls == [("s1", 0), ("s1", 1)]
+
+
+def test_a_retake_gets_fresh_variants_of_every_point_and_a_new_capstone(isolated_engine) -> None:
+    """docs/DECISIONS.md §5: a fail asks for new practice questions for every knowledge point short of never-answered
+    ones (also when it stopped in the capstone) and, once every capstone was answered, for a new capstone; the retake
+    start asks again, and the retake serves the new capstone."""
+    fx = build_course()
+    sid = fx.sid("S1")
+    task_id, cap, _ = _to_capstone(fx)  # targets 1/1: KP 1 and KP 2 answered once each
+    for qid in fx.questions["S1"][1][2:]:  # KP 2 is left with 1 never-answered question (< its target + 1)
+        db.execute("UPDATE questions SET flagged = 1, flag_reason = 'learner: test' WHERE id = ?", (qid,))
+    engine.submit_answer(task_id, step_submit(cap, 0, correct=False), T0)
+    stopped = engine.submit_answer(task_id, step_submit(cap, 1, correct=False), T0)
+    assert stopped.task.outcome == "failed"
+    assert isolated_engine == [(sid, 1), (sid, "cap")]  # KP 1 still has 3 unseen questions
+    isolated_engine.clear()
+    later = T0 + timedelta(hours=3)
+    task_id, task = start_practice(fx, "S1", later)
+    assert isolated_engine == [(sid, 1), (sid, "cap")]
+    cap2 = add_capstone(fx, "S1")  # what the capstone top-up adds
+    task = engine.submit_answer(task_id, right(task.question.id), later).task
+    result = engine.submit_answer(task_id, right(task.question.id), later)
+    assert result.task.question.id == cap2
 
 
 # ---------------------------------------------------------------------------

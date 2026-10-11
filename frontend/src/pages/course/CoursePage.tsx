@@ -19,7 +19,7 @@ import { plainText, prettyTitle } from "../../lib/markdown";
 import { forgetOpenQuiz, openQuizId, quizContentLock, quizGate } from "../../lib/quiz";
 import { BuildProgress } from "./BuildProgress";
 import { CourseHeader } from "./CourseHeader";
-import { LessonPreviewDialog } from "./LessonPreviewDialog";
+import { LessonPreviewDialog } from "../../components/lesson/LessonPreviewDialog";
 import type { GraphSelection } from "./selection";
 import { SettingsDialog } from "./SettingsDialog";
 import { SkillDrawer } from "./SkillDrawer";

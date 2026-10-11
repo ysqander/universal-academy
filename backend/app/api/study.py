@@ -112,6 +112,12 @@ def abandon_task(tid: str) -> Task:
     return _run(lambda: engine.abandon(tid, _now()))
 
 
+@router.post("/api/tasks/{tid}/lesson-look", response_model=Task)
+def look_at_lesson(tid: str) -> Task:
+    """The learner opens the lesson during a task: a review records it as a hint on the current question."""
+    return _run(lambda: engine.lesson_look(tid, _now()))
+
+
 @router.post("/api/questions/{qid}/hint", response_model=HintResponse)
 def show_hint(qid: str, step: int | None = None) -> HintResponse:
     """Next hint for the current attempt (recorded server-side). Multistep: `?step=i` (the current step) returns

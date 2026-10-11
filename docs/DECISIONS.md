@@ -253,6 +253,12 @@ A step may refer only to earlier steps that exist. Stored lessons: `scripts/rege
 - **Early stop** as soon as 80 % is unreachable (also inside the capstone): 0 XP, the lesson returns after
   **2 hours** with fresh questions. The cooldown is honoured on manual starts too ("Start anyway" sends `force`). The
   second failure of the same lesson makes its top-2 prerequisites due (remediation).
+- **A retake gets fresh variants** (2026-10-11, the learner: students must not memorize answers): a failed lesson
+  asks for new practice questions for every knowledge point with fewer never-answered questions than its target + 1
+  (not only the one it stopped in, also after a capstone fail), and — once every capstone was answered — for one new
+  capstone variant (v2 lessons; same decisions and step kinds, new numbers or case; held until verified; keys `cap2`,
+  `cap3`, …). The same request runs again when the lesson starts after an earlier attempt (a top-up that failed is
+  retried). Never-answered questions and capstones are served first; with no API key the retake reuses answered ones.
 - **First review:** FSRS Good when the lesson score ≥ 0.9, Hard for 0.8–0.9.
 - **Reviews:** 3 questions (a capstone may replace one), order-weighted (later answers count more); ≥ 0.8 Good,
   0.6–0.8 Hard, < 0.6 Again.

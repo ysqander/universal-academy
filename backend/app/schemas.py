@@ -271,6 +271,7 @@ class QuestionPublic(BaseModel):
     flagged: bool = False
     hints_used: int = 0  # hints already shown for the current attempt (server-recorded; survives reloads)
     revealed: bool = False  # the solution was revealed for the current attempt (server-recorded)
+    lesson_looked: bool = False  # review: the learner opened the lesson on this question (counts as a hint)
     committed_response: str | None = None  # free_response: the answer committed before a comparison reveal
     role: Literal["practice", "capstone"] = "practice"  # capstone = the lesson's final multistep problem
     steps: list[MultistepStepPublic] = Field(default_factory=list)  # multistep only

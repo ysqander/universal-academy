@@ -174,6 +174,12 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
           </ol>
         )}
 
+        {question.lesson_looked && !final && (
+          <p className="step-card__note">
+            <Icon name="book" size={14} /> Lesson opened — a correct answer earns half points.
+          </p>
+        )}
+
         {missing !== null && (
           <p className="step-card__note">
             <Spinner size={14} label="Loading the next step" /> Loading the next step…

@@ -36,7 +36,7 @@ def test_old_layout_books_are_copied_into_the_books_folder(tmp_path: Path) -> No
     legacy = settings.legacy_books_dir / old["id"]
     legacy.parent.mkdir(parents=True)
     (settings.books_dir / old["id"]).rename(legacy)
-    db.execute("UPDATE books SET pdf_path = ? WHERE id = ?", ("/Users/x/project/data/books/old/book.pdf", old["id"]))
+    db.execute("UPDATE books SET pdf_path = ? WHERE id = ?", ("/home/user/project/data/books/old/book.pdf", old["id"]))
     db.execute("DELETE FROM kv WHERE key LIKE 'book_pages:%'")  # imported before page signatures existed
     assert db.kv_get(f"book_pages:{old['id']}") is None
     (settings.books_dir / gone["id"] / "book.pdf").unlink()

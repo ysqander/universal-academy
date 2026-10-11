@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -48,9 +49,10 @@ def test_a_call_is_written_as_a_request_and_returns_the_validated_answer(tmp_pat
     assert request["instructions"] == "Say it loudly." and request["shared_prefix"] == "context"
     assert request["schema_ref"] == "app.llm_schemas:ScopeStatement" and "statement" in request["schema"]["properties"]
     assert Path(request["images"][0]).read_bytes() == b"\x89PNG"
-    assert agent_llm.claim(tmp_path, wait=0) == {"done": False, "requests": []}  # answered: nothing left to claim
+    nothing = {"done": False, "requests": [], "waiting": []}
+    assert agent_llm.claim(tmp_path, wait=0) == nothing  # answered: nothing left to claim
     (tmp_path / "DONE").write_text("")
-    assert agent_llm.claim(tmp_path, wait=0) == {"done": True, "requests": []}
+    assert agent_llm.claim(tmp_path, wait=0) == {**nothing, "done": True}
 
 
 def test_validate_refuses_an_answer_that_does_not_fit_and_the_request_is_offered_again(tmp_path: Path) -> None:
@@ -99,3 +101,77 @@ def test_agent_mode_uses_no_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings()
     assert settings.agent_dir == "/tmp/agents" and settings.llm_ready
     assert settings.openai_api_key == "" and settings.anthropic_api_key == "" and settings.nvidia_api_key == ""
+
+
+def _request(root: Path, rid: str) -> Path:
+    (root / "requests").mkdir(parents=True, exist_ok=True)
+    path = root / "requests" / f"{rid}.json"
+    path.write_text(json.dumps({
+        "id": rid, "role": "lesson", "label": f"write {rid}", "effort": "high", "instructions": "", "shared_prefix": "",
+        "text": "", "images": [], "schema_ref": "app.llm_schemas:ScopeStatement", "schema": {},
+    }))
+    return path
+
+
+def test_broker_mode_offers_what_it_does_not_hold_and_never_an_orphan(tmp_path: Path) -> None:
+    for rid in ("a", "b", "c", "d"):
+        _request(tmp_path, rid)
+    old = time.time() - agent_llm.ORPHAN_SECONDS - 60
+    os.utime(_request(tmp_path, "orphan"), (old, old))  # the app that asked was stopped
+    assert [r["id"] for r in agent_llm.claim(tmp_path, wait=0)["requests"]] == ["a", "b", "c", "d"]  # claimed
+    assert agent_llm.claim(tmp_path, wait=0)["requests"] == []
+    # A restarted broker takes over every claim it does not hold itself, at most --max at a time.
+    got = agent_llm.claim(tmp_path, wait=0, limit=1, held=["a"], skip=["b"])
+    assert [r["id"] for r in got["requests"]] == ["c"] and got["waiting"] == ["a", "b", "c", "d"]
+    assert (tmp_path / "BROKER").exists()
+    (tmp_path / "responses" / "d.json").write_text("{}")
+    got = agent_llm.claim(tmp_path, wait=0, held=["a", "c"], skip=["b"])
+    assert got == {"done": False, "requests": [], "waiting": ["a", "b", "c"]}
+
+
+def test_main_parses_broker_flags(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _request(tmp_path, "a")
+    _request(tmp_path, "b")
+    assert agent_llm.main(["claim", str(tmp_path), "--wait", "0", "--max", "3", "--held", "--skip", "b"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "done": False, "requests": [{"id": "a", "role": "lesson", "label": "write a", "effort": "high", "chars": 0}],
+        "waiting": ["a", "b"],
+    }
+
+
+def test_a_call_queued_while_a_broker_works_is_not_timed_out_and_a_relative_dir_is_under_the_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.config
+
+    monkeypatch.setattr(app.config, "PROJECT_ROOT", tmp_path)
+    root = tmp_path / ".agent-broker"
+    stop = threading.Event()
+
+    def busy_broker() -> None:  # looks for work for 3 s without taking this call, then answers it
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            agent_llm.claim(root, wait=0, limit=0, held=[])
+            time.sleep(0.2)
+        got = agent_llm.claim(root, wait=5, held=[])
+        rid = got["requests"][0]["id"]
+        (root / "responses" / f"{rid}.json").write_text('{"statement": "late", "true": true}')
+        stop.set()
+
+    monkeypatch.setattr(agent_llm, "ALIVE_TOUCH_SECONDS", 0)
+    threading.Thread(target=busy_broker, daemon=True).start()
+    result = asyncio.run(agent_llm.structured(
+        root=Path(".agent-broker"), role="lesson", effort="high", instructions="", text="", schema=ScopeStatement,
+        images=None, shared_prefix=None, label="write k1", timeout=1.5,
+    ))
+    assert result.statement == "late" and stop.is_set()
+
+
+def test_a_call_nobody_answers_times_out(tmp_path: Path) -> None:
+    from app.llm import LLMError
+
+    with pytest.raises(LLMError, match="no agent answer"):
+        asyncio.run(agent_llm.structured(
+            root=tmp_path, role="verify", effort="low", instructions="", text="", schema=ScopeStatement, images=None,
+            shared_prefix=None, label="verify", timeout=0.5,
+        ))

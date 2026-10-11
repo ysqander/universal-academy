@@ -3,11 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ ! -f "$ROOT/.env" ]; then
-  cp "$ROOT/.env.example" "$ROOT/.env"
-  echo "Created .env — add your OPENAI_API_KEY or ANTHROPIC_API_KEY (UA_LLM_PROVIDER picks one; optionally NVIDIA_API_KEY), then run again."
-  exit 1
-fi
+# No .env needed: API keys can be entered in the app (key icon in the header); .env (see .env.example) is optional.
 
 cd "$ROOT/backend"
 [ -d .venv ] || uv sync
@@ -38,10 +34,19 @@ DATA_DIR="${UA_DATA_DIR:-$(.venv/bin/python -c 'from app.config import settings;
 if [ -f "$DATA_DIR/academy.sqlite3" ]; then
   mkdir -p "$ROOT/backups"
   SNAPSHOT="$ROOT/backups/academy-$(date +%Y-%m-%d).sqlite3"
-  [ -f "$SNAPSHOT" ] || sqlite3 "$DATA_DIR/academy.sqlite3" ".backup '$SNAPSHOT'"
+  if [ ! -f "$SNAPSHOT" ]; then
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sqlite3 "$DATA_DIR/academy.sqlite3" ".backup '$SNAPSHOT'"
+    else  # no sqlite3 command-line tool (minimal Linux): Python's sqlite3 module makes the same online backup
+      .venv/bin/python -c 'import sqlite3, sys; s = sqlite3.connect(sys.argv[1]); d = sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()' "$DATA_DIR/academy.sqlite3" "$SNAPSHOT"
+    fi
+  fi
   ls -1t "$ROOT"/backups/academy-*.sqlite3 2>/dev/null | tail -n +15 | while read -r old; do rm -f "$old"; done
 fi
 
-BOOKS_DIR="$(.venv/bin/python -c 'from app.config import settings; print(settings.books_dir)')"
+{ read -r BOOKS_DIR; read -r LLM_READY; } < <(.venv/bin/python -c 'from app.config import settings; print(settings.books_dir); print(int(settings.llm_ready))')
 echo "Starting Universal Academy at http://localhost:$PORT (Ctrl-C to stop) — data in $DATA_DIR, books in $BOOKS_DIR"
+if [ "$LLM_READY" = 0 ]; then
+  echo "No API key yet: open the app and click the key icon in the header to enter one (or build courses with Claude Code — see README)."
+fi
 exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT"

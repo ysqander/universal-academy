@@ -1,0 +1,25 @@
+/* Example course cards: a course card with the book's credit and a one-line description (LibraryPage.css styles the
+   shared course-card parts). */
+
+.example-card[data-status="example"]::before {
+  background: var(--status-learned);
+}
+
+.example-card__credit {
+  margin-top: calc(-1 * var(--space-2));
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.example-card__credit a {
+  color: inherit;
+}
+
+.example-card__credit a:hover {
+  color: var(--accent);
+}
+
+.example-card__description {
+  color: var(--ink-2);
+  line-height: 1.5;
+}

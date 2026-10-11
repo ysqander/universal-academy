@@ -4,6 +4,7 @@ import { Icon } from "../../components/Icon";
 import { ProgressBar } from "../../components/ProgressBar";
 import { Spinner } from "../../components/Spinner";
 import { useToast } from "../../context/toast";
+import { useHealth } from "../../hooks/useHealth";
 import { useResource } from "../../hooks/useResource";
 import { isActiveState, isJobActive } from "../../lib/job";
 import type { JobStage, JobState, JobStatus } from "../../types";
@@ -45,6 +46,8 @@ const STATUS_TEXT: Record<JobStage["status"], string> = {
 
 export function BuildProgress({ courseId, initialJob, onChange, failedLessons = 0 }: BuildProgressProps) {
   const toast = useToast();
+  // UA_AGENT_DIR: no API answers the build's model calls; Claude Code agents do, once /build-course runs there.
+  const agentRoute = useHealth().data?.agent_route === true;
   const [resuming, setResuming] = useState(false);
   const [pollActive, setPollActive] = useState(initialJob === null || isJobActive(initialJob));
   const lastState = useRef<JobState | null>(initialJob?.state ?? null);
@@ -147,6 +150,15 @@ export function BuildProgress({ courseId, initialJob, onChange, failedLessons = 
           </button>
         )}
       </div>
+
+      {agentRoute && (active || stopped || retryLessons) && (
+        <div className="callout callout--info build__agent">
+          <Icon name="info" size={18} />
+          <span>
+            Generation runs through Claude Code: open Claude Code in this folder and run <code>/build-course</code>.
+          </span>
+        </div>
+      )}
 
       {status.error && (
         <div className="callout callout--danger build__error" role="alert">

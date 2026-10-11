@@ -393,9 +393,9 @@ Details: [SPEC.md §6.7](SPEC.md).
   `tests/conftest.py` was bypassed. Why: a review agent imported a test module from outside `backend/tests`; the run
   wrote a "Tiny" test course into the live database and made paid OpenAI calls. Run tests from `backend/` as in
   CLAUDE.md.
-- The project lives in ProtonDrive: after parallel edits, look for `*conflict*` copies and re-run all tests.
+- The project may live in a cloud-synced folder: after parallel edits, look for `*conflict*` copies and re-run all tests.
 - **Live data lives outside the synced project folder** (decided 2026-10-07): `~/Library/Application Support/
-  UniversalAcademy` on macOS (`UA_DATA_DIR` overrides). Why: on 2026-10-06 ProtonDrive left two torn "Edit conflict"
+  UniversalAcademy` on macOS (`UA_DATA_DIR` overrides). Why: on 2026-10-06 the cloud sync left two torn "Edit conflict"
   copies of the live SQLite database while a script was writing (the main file was intact). `run.sh` writes one closed
   snapshot per day to the project's `backups/` (kept 14 days) — that folder is what gets synced. The pre-move folder is
   kept as `data-moved-2026-10-07/` until the learner deletes it.

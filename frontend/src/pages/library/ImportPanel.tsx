@@ -171,7 +171,7 @@ export function ImportPanel() {
               setPath(event.target.value);
               setPathError(null);
             }}
-            placeholder="/Users/you/Books/linear-algebra.pdf"
+            placeholder="~/Books/linear-algebra.pdf"
             autoComplete="off"
             spellCheck={false}
             aria-invalid={pathError ? true : undefined}

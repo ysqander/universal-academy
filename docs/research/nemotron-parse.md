@@ -664,4 +664,4 @@ def crop_png(page, rect, dpi=300) -> bytes:  # figure assets / GPT re-transcript
 6. Do the API Trial Terms permit a personal app's ongoing use, and what is the current free-credit policy beyond 40 RPM / 10k per day?
 7. Latency per page on the hosted 2.0 endpoint (not measured).
 
-Artifacts (scratchpad only, outside the project): `/private/tmp/claude-501/-Users-alexanderadamov-Library-CloudStorage-ProtonDrive-VpnAccount9966-pm-me-folder-Projects-Universal-Academy/cfbe0c0b-0fb2-452e-9134-2069a924b738/scratchpad/np/nemotron_parse.py` (module above) and `.../scratchpad/np/test_np.py` (offline test against the published samples).
+Artifacts (scratchpad only, outside the project): `<scratchpad>/np/nemotron_parse.py` (module above) and `<scratchpad>/np/test_np.py` (offline test against the published samples).

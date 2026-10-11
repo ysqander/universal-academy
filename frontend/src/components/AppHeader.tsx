@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useHealth } from "../hooks/useHealth";
+import { ApiKeysDialog } from "./ApiKeysDialog";
+import { Icon } from "./Icon";
 import "./AppHeader.css";
 
 function Wordmark() {
@@ -22,6 +25,8 @@ function Wordmark() {
 export function AppHeader() {
   const health = useHealth();
   const fake = health.data?.fake_llm;
+  const keyMissing = Boolean(health.data && !health.data.llm_ready);
+  const [keysOpen, setKeysOpen] = useState(false);
   return (
     <header className="app-header">
       <a href="#main" className="skip-link">
@@ -38,8 +43,19 @@ export function AppHeader() {
           <Link to="/" className="app-header__link">
             Library
           </Link>
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon btn--sm app-header__keys"
+            onClick={() => setKeysOpen(true)}
+            aria-label={keyMissing ? "API keys (a key is missing)" : "API keys"}
+            title="API keys"
+          >
+            <Icon name="key" size={18} />
+            {keyMissing && <span className="app-header__keys-dot" aria-hidden="true" />}
+          </button>
         </nav>
       </div>
+      <ApiKeysDialog open={keysOpen} onClose={() => setKeysOpen(false)} />
     </header>
   );
 }

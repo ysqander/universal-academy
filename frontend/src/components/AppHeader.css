@@ -104,6 +104,21 @@
   white-space: nowrap;
 }
 
+.app-header__keys {
+  position: relative;
+}
+
+.app-header__keys-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--paper);
+}
+
 .skip-link {
   position: absolute;
   left: var(--space-3);

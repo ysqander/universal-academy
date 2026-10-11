@@ -67,7 +67,7 @@ def _get_client() -> AsyncAnthropic:
         from .llm import LLMError
 
         if not settings.anthropic_api_key:
-            raise LLMError("ANTHROPIC_API_KEY is not set — add it to the .env file in the project root.")
+            raise LLMError("ANTHROPIC_API_KEY is not set — enter it with the key icon in the app header (API keys), or add it to .env.")
         # Everything explicit, and the SDK built where it sees no ANTHROPIC_* variable at all: with a key it skips the
         # credential chain, but it would still merge ANTHROPIC_CUSTOM_HEADERS into every request (headers that can
         # carry another credential), and Claude Code exports ANTHROPIC_* settings to the shells it starts.
@@ -338,7 +338,7 @@ async def structured(
         except LLMError:
             raise
         except anthropic.AuthenticationError as e:
-            raise LLMError("Anthropic authentication failed — check ANTHROPIC_API_KEY in .env.") from e
+            raise LLMError("Anthropic authentication failed — check the Anthropic key (key icon in the app header, or ANTHROPIC_API_KEY in .env).") from e
         except anthropic.PermissionDeniedError as e:
             raise LLMError(f"Anthropic refused access ({model}): {e.message}") from e
         except anthropic.NotFoundError as e:

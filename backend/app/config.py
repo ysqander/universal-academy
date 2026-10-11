@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,10 +19,15 @@ _DOTENV = dotenv_values(PROJECT_ROOT / ".env") if (PROJECT_ROOT / ".env").exists
 
 def default_data_dir() -> Path:
     """Live data (SQLite + files) stays OUT of the project folder, which is cloud-synced: syncing a database while it
-    is written can leave torn "conflict" copies. macOS: ~/Library/Application Support/UniversalAcademy."""
+    is written can leave torn "conflict" copies. macOS: ~/Library/Application Support/UniversalAcademy; Windows:
+    %APPDATA%\\UniversalAcademy; Linux and others: $XDG_DATA_HOME/UniversalAcademy (~/.local/share/UniversalAcademy)."""
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "UniversalAcademy"
-    return Path(os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "universal-academy"
+    if sys.platform == "win32":
+        return Path(os.getenv("APPDATA", "").strip() or Path.home() / "AppData" / "Roaming") / "UniversalAcademy"
+    xdg = os.getenv("XDG_DATA_HOME", "").strip()
+    # The XDG spec: a relative XDG_DATA_HOME is invalid and ignored.
+    return (Path(xdg) if xdg and Path(xdg).is_absolute() else Path.home() / ".local" / "share") / "UniversalAcademy"
 
 
 def default_books_dir() -> Path:
@@ -45,12 +53,17 @@ _AMBIENT_ANTHROPIC_ENV = (
 )
 
 
+_TEST_RUN = False  # set by _isolate_test_runs: keys saved in the app are read only from a temporary data dir
+
+
 def _isolate_test_runs() -> None:
     """A pytest run that did not load tests/conftest.py (e.g. a test module imported from another directory) must
     never touch the learner's data or a paid API: force the fake LLM, blank keys (OpenAI, NVIDIA, Anthropic) and a
     temporary data dir. (On 2026-10-07 such a run wrote a test course into the live database and made paid calls.)"""
+    global _TEST_RUN
     if "pytest" not in sys.modules or os.getenv("UA_ALLOW_LIVE_TESTS") == "1":
         return
+    _TEST_RUN = True
     os.environ["UA_FAKE_LLM"] = "1"
     for key in _SECRET_ENV:
         os.environ[key] = ""
@@ -93,6 +106,60 @@ def _project_first(name: str) -> str:
 PROVIDERS = ("openai", "anthropic")
 ROLES = ("vision", "graph", "lesson", "viz", "verify")
 KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+# Keys entered in the app (the "API keys" dialog, PUT /api/settings/keys) live in <data_dir>/api-keys.json (mode 600),
+# e.g. {"ANTHROPIC_API_KEY": "...", "UA_LLM_PROVIDER": "anthropic"}. A saved value wins over .env and the environment
+# for that key; the one exception is a variable set to an empty string in the environment that started the app (not
+# by a blank line in .env) — a test server's "no key" — which still wins. The agent route (UA_AGENT_DIR) uses no key.
+APP_KEYS_FILE = "api-keys.json"
+APP_KEY_FIELDS = {"OPENAI_API_KEY": "openai_api_key", "ANTHROPIC_API_KEY": "anthropic_api_key", "NVIDIA_API_KEY": "nvidia_api_key"}
+
+
+def env_key(name: str) -> str:
+    """A key as .env and the environment give it (before any key saved in the app)."""
+    return _project_first(name) if name.startswith("ANTHROPIC_") else os.getenv(name, "").strip()
+
+
+def _blanked_in_environment(name: str) -> bool:
+    value = os.environ.get(name)
+    from_blank_dotenv_line = name in _DOTENV and not (_DOTENV.get(name) or "").strip()
+    return value is not None and not value.strip() and not from_blank_dotenv_line
+
+
+def load_app_keys(data_dir: Path) -> dict[str, str]:
+    """The keys and provider saved in the app ({} when none, or when the file is unreadable). A test run reads them only
+    from a data dir under the system temp dir."""
+    if _TEST_RUN and not data_dir.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()):
+        return {}
+    try:
+        raw = json.loads((data_dir / APP_KEYS_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        logging.getLogger("ua.config").warning("%s in %s is unreadable: ignored", APP_KEYS_FILE, data_dir)
+        return {}
+    names = (*APP_KEY_FIELDS, "UA_LLM_PROVIDER")
+    return {k: v.strip() for k, v in raw.items() if k in names and isinstance(v, str) and v.strip()} if isinstance(raw, dict) else {}
+
+
+def save_app_keys(data_dir: Path, values: dict[str, str]) -> None:
+    """Replace the saved keys atomically: a private temp file (mode 600) renamed into place; none left → no file."""
+    path = data_dir / APP_KEYS_FILE
+    if not values:
+        path.unlink(missing_ok=True)
+        return
+    data_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=data_dir, prefix=".api-keys-", suffix=".tmp")  # created with mode 600
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(values, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def configured_books_dir() -> Path:
@@ -180,7 +247,9 @@ class Settings:
     # Set UA_AGENT_DIR to a folder to have every model call answered by Claude Code agents (app/agent_llm.py) instead
     # of an API; UA_AGENT_TIMEOUT (seconds) is how long one call may wait for its answer.
     agent_dir: str = field(default_factory=lambda: _env("UA_AGENT_DIR", ""))
-    agent_timeout: float = field(default_factory=lambda: float(_env("UA_AGENT_TIMEOUT", "5400")))
+    agent_timeout: float = field(default_factory=lambda: float(_env("UA_AGENT_TIMEOUT", "7200")))
+    # Which of OPENAI_API_KEY / ANTHROPIC_API_KEY / NVIDIA_API_KEY / UA_LLM_PROVIDER come from the app (api-keys.json).
+    app_keys: frozenset[str] = field(default=frozenset())
 
     @property
     def db_path(self) -> Path:
@@ -206,6 +275,16 @@ class Settings:
         return self.data_dir / "courses"
 
     def __post_init__(self) -> None:
+        saved = load_app_keys(self.data_dir)
+        applied = set()
+        for name, attr in APP_KEY_FIELDS.items():
+            if saved.get(name) and not _blanked_in_environment(name):
+                object.__setattr__(self, attr, saved[name])
+                applied.add(name)
+        if saved.get("UA_LLM_PROVIDER", "").lower() in PROVIDERS:
+            object.__setattr__(self, "llm_provider", saved["UA_LLM_PROVIDER"].lower())
+            applied.add("UA_LLM_PROVIDER")
+        object.__setattr__(self, "app_keys", frozenset(applied))
         if self.agent_dir:  # agents answer every call: no API key may be used, whatever .env holds
             for key in ("openai_api_key", "anthropic_api_key", "nvidia_api_key"):
                 object.__setattr__(self, key, "")
@@ -253,3 +332,11 @@ class Settings:
 
 
 settings = Settings()
+
+
+def reload_app_keys() -> None:
+    """After a save in the app: recompute the keys and provider and update the shared `settings` in place (every module
+    holds that object), so /api/health and the next model call see them without a restart."""
+    fresh = Settings(data_dir=settings.data_dir, agent_dir=settings.agent_dir)  # the agent route still blanks every key
+    for attr in (*APP_KEY_FIELDS.values(), "llm_provider", "app_keys"):
+        object.__setattr__(settings, attr, getattr(fresh, attr))

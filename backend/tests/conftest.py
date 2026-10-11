@@ -23,9 +23,11 @@ import pytest  # noqa: E402
 from app import db  # noqa: E402
 from app.config import settings  # noqa: E402
 
+# Axler, Linear Algebra Done Right (4th ed., Open Access PDF): the example course's copy, or UA_TEST_AXLER_PDF
 AXLER_PDF = Path(
-    "/Users/alexanderadamov/Knowledge Base/books/textbooks/Math for physics/Linear Algebra/Linear_Algebra_Done_Right_Sheldon.pdf"
-)
+    os.environ.get("UA_TEST_AXLER_PDF")
+    or Path(__file__).resolve().parents[2] / "examples" / "linear-algebra-done-right" / "book.pdf"
+).expanduser()
 
 
 @pytest.fixture(autouse=True)

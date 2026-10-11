@@ -612,7 +612,61 @@ class Health(BaseModel):
     parse_engine: str
     max_course_pages: int = 80
     models: dict[str, str]
+    agent_route: bool = False  # UA_AGENT_DIR: model calls are answered by Claude Code agents (/build-course)
 
 
 Visualization.model_rebuild()
 Lesson.model_rebuild()
+
+
+# ---------- API keys entered in the app (GET/PUT /api/settings/keys; app/api/keys.py) ----------
+
+ApiKeyName = Literal["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NVIDIA_API_KEY"]
+
+
+class ApiKeyStatus(BaseModel):
+    """One key, never the key itself: set or not, its last 4 characters, and where it comes from."""
+
+    set: bool
+    last4: str | None = None
+    source: Literal["app", "env"] | None = None  # "app": saved in the app (api-keys.json); "env": .env / environment
+
+
+class ApiKeys(BaseModel):
+    keys: dict[ApiKeyName, ApiKeyStatus]
+    provider: Literal["openai", "anthropic"]  # UA_LLM_PROVIDER (a role may override it: see Health.models)
+    agent_route: bool = False  # Claude Code agents answer the model calls: keys are not used
+    fake_llm: bool = False
+    llm_ready: bool = False
+    missing_keys: list[str] = []
+    file: str  # where keys saved in the app are kept (<data dir>/api-keys.json)
+
+
+class ApiKeysUpdate(BaseModel):
+    """PUT /api/settings/keys: any of the keys (an empty string removes the saved one) and/or the provider."""
+
+    keys: dict[ApiKeyName, str] = {}
+    provider: Literal["openai", "anthropic"] | None = None
+
+
+class ExampleCourse(BaseModel):
+    """GET /api/examples: a course bundle shipped in the repo's examples/<name>/ (app/bundle.py), studied without a key."""
+
+    name: str  # the folder under examples/
+    course_id: str
+    title: str  # the course (chapter) title
+    book_title: str
+    author: str
+    description: str = ""
+    license: str = ""  # short name, e.g. "CC BY-NC 4.0"
+    license_url: str = ""
+    skills: int
+    imported: bool  # the course is in this library
+
+
+class ExampleImportResult(BaseModel):
+    """POST /api/examples/{name}/import: the course (and its book, unless already there) added with fresh progress."""
+
+    course_id: str
+    already_imported: bool  # nothing changed: the course was already in the library
+    message: str

@@ -7,7 +7,10 @@ node_modules/
 frontend/dist/
 .DS_Store
 .playwright-mcp/
-.claude/
+# Claude Code: only the project skills are shared
+.claude/*
+!.claude/skills/
+.agent-broker/
 backups/
 data-moved-*/
 # Book PDFs (UA_BOOKS_DIR): kept in the project folder, not in git — only the folder's README is tracked

@@ -4,6 +4,8 @@ import { isQuizFirstMessage } from "./lib/quiz";
 import type {
   AnswerResult,
   AnswerSubmit,
+  ApiKeys,
+  ApiKeysUpdate,
   BlockCheckRequest,
   BlockCheckResult,
   BlockFeedbackRequest,
@@ -13,6 +15,8 @@ import type {
   CourseCreate,
   CourseGraph,
   CourseSummary,
+  ExampleCourse,
+  ExampleImportResult,
   FoundationNode,
   GuidedCheckResult,
   GuidedRevealRequest,
@@ -135,6 +139,10 @@ const seg = encodeURIComponent;
 export const getHealth = (signal?: AbortSignal) => get<Health>("/api/health", signal);
 export const getSettings = (signal?: AbortSignal) => get<Settings>("/api/settings", signal);
 export const putSettings = (settings: Settings) => put<Settings>("/api/settings", settings);
+/** API keys saved in the app (never the keys themselves: set or not, last 4 characters, where they come from). */
+export const getKeys = (signal?: AbortSignal) => get<ApiKeys>("/api/settings/keys", signal);
+/** Save keys and/or the provider; an empty string removes a saved key. 403 when not on the computer running the app. */
+export const saveKeys = (body: ApiKeysUpdate) => put<ApiKeys>("/api/settings/keys", body);
 
 // ---------- Books ----------
 export const listBooks = (signal?: AbortSignal) => get<BookSummary[]>("/api/books", signal);
@@ -178,6 +186,10 @@ export function uploadBook(file: File, onProgress: (fraction: number) => void): 
   });
   return { promise, abort: () => xhr.abort() };
 }
+
+// ---------- Example courses (repo examples/: studied with no API key) ----------
+export const listExamples = (signal?: AbortSignal) => get<ExampleCourse[]>("/api/examples", signal);
+export const importExample = (name: string) => post<ExampleImportResult>(`/api/examples/${seg(name)}/import`);
 
 // ---------- Courses & build job ----------
 export const listCourses = (signal?: AbortSignal) => get<CourseSummary[]>("/api/courses", signal);

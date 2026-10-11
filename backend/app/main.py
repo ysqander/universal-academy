@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .api import books, courses, study
+from .api import books, courses, examples, keys, study
 from .config import KEY_NAMES, PROJECT_ROOT, ROLES, settings
 from .learning import grading
 from .pipeline import jobs
@@ -37,6 +37,8 @@ app = FastAPI(title="Universal Academy", lifespan=lifespan)
 app.include_router(books.router)
 app.include_router(courses.router)
 app.include_router(study.router)
+app.include_router(keys.router)
+app.include_router(examples.router)
 
 
 @app.get("/api/health", response_model=Health)
@@ -48,12 +50,13 @@ def health() -> Health:
         anthropic=bool(settings.anthropic_api_key),
         provider=settings.llm_provider,
         llm_ready=settings.llm_ready,
-        missing_keys=[] if settings.fake_llm else [KEY_NAMES[p] for p in missing],
+        missing_keys=[] if settings.fake_llm or settings.agent_dir else [KEY_NAMES[p] for p in missing],
         nvidia=settings.has_nvidia,
         fake_llm=settings.fake_llm,
         parse_engine=settings.parse_engine,
         max_course_pages=settings.max_course_pages,
         models={role: f"{provider}:{model} ({effort})" for role, (provider, model, effort) in configs.items()},
+        agent_route=bool(settings.agent_dir),
     )
 
 

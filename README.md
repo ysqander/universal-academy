@@ -6,6 +6,9 @@ You give the app a PDF and pick a chapter. It breaks the chapter into small skil
 questions for each one, and then walks you through them in the right order. It checks every answer you type, and it
 brings skills back for review just before you would forget them. Everything runs on your own computer.
 
+**Best for math and other quantitative textbooks** (math, physics, statistics, economics, …). You answer by typing
+math, and many skills are proofs, so a book that is mostly prose (history, literature) won't work well yet.
+
 ![The knowledge map of a course in progress: learned skills in green, lessons in progress in amber, reviews due outlined in orange](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/skill-map.png)
 
 *The skill map of chapter 1 of Axler's* Linear Algebra Done Right *(the example course that comes with the app), part-way
@@ -188,3 +191,10 @@ noncommercial use only. See [NOTICE.md](NOTICE.md) for the full attribution and 
 
 The learning design follows [Math Academy](https://www.mathacademy.com)'s published approach. This project is not
 affiliated with Math Academy.
+
+## Support
+
+I built this over a week, and it used up a full week of a Claude Max 20x plan plus about $100 in API calls. If it
+helps you learn, a coffee would mean a lot. Even €1 is appreciated. Thank you!
+
+<a href="https://buymeacoffee.com/ysqander" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50"></a>

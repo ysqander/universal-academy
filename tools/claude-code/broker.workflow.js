@@ -64,6 +64,9 @@ const answerPrompt = (r) => {
     '',
     'Do the work yourself, at the quality the instructions ask for. Check algebra and computations with SymPy (' +
       q(PY) + ' has it) when useful.',
+    'Work in few tool calls: every call re-reads this whole conversation, so read each file once and in full (one Read ' +
+      'per file; page through it only if the Read result says it was cut), never re-read a file, write the answer with ' +
+      'one Python script, and after a failed validation fix only what the error names.',
     'Write ONLY the JSON object of your answer to ' + DIR + '/responses/' + r.id + '.json.tmp, produced with ' +
       "Python's json.dump (it gets LaTeX backslashes right). Then run",
     '  cd ' + q(BACKEND) + ' && ' + q(PY) + ' -m app.agent_llm validate ' + q(DIR) + ' ' + r.id,
@@ -75,7 +78,16 @@ const answerPrompt = (r) => {
   ].join('\n')
 }
 
-const effortFor = (role) => (role === 'graph' ? 'xhigh' : role === 'lesson' ? 'high' : role === 'verify' ? 'medium' : 'high')
+// The effort the app asked for (2026-10-11: a fixed effort per role ran every planner and review at xhigh — 3–8x slower
+// than the API, which uses high for non-proof skills and for a proof's final review); the role's level only when the
+// request names none. OpenAI's 'minimal' has no agent equivalent: low.
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+const ROLE_EFFORT = { graph: 'high', lesson: 'medium', verify: 'high', vision: 'low', viz: 'low', topup: 'medium' }
+const effortFor = (r) => (r.effort === 'minimal' ? 'low' : EFFORTS.includes(r.effort) ? r.effort : ROLE_EFFORT[r.role] || 'high')
+// The model the app's role names, as on the API: Haiku reads pages and checks answers; Opus builds the skill map and
+// plans, writes, reviews and repairs lessons, visuals and practice questions — whatever model this session runs.
+const ROLE_MODEL = { verify: 'haiku', vision: 'haiku' }
+const modelFor = (r) => ROLE_MODEL[r.role] || 'opus'
 
 phase('Answer')
 const running = new Map() // request id -> its agent (a promise that removes itself when the agent ends)
@@ -90,7 +102,7 @@ let waiting = []
 let stoppedBecause = ''
 
 const answer = (r) =>
-  agent(answerPrompt(r), { label: r.role + ' ' + r.label, model: r.role === 'verify' ? 'haiku' : undefined, effort: effortFor(r.role) })
+  agent(answerPrompt(r), { label: r.role + ' ' + r.label, model: modelFor(r), effort: effortFor(r) })
     .then((out) => {
       if (typeof out === 'string' && /^\s*OK\b/.test(out)) answered++
       return out

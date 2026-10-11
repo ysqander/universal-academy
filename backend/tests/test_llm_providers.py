@@ -34,9 +34,9 @@ def make_settings(monkeypatch, **env: str) -> Settings:
 
 def test_one_setting_switches_every_role_and_a_role_can_be_overridden(monkeypatch):
     default = make_settings(monkeypatch)  # Claude is the default provider (2026-10-11)
-    assert [default.role_config(r)[0] for r in ROLES] == ["anthropic"] * 5
+    assert [default.role_config(r)[0] for r in ROLES] == ["anthropic"] * len(ROLES)
     openai = make_settings(monkeypatch, UA_LLM_PROVIDER="openai")
-    assert [openai.role_config(r)[0] for r in ROLES] == ["openai"] * 5
+    assert [openai.role_config(r)[0] for r in ROLES] == ["openai"] * len(ROLES)
     assert openai.role_config("lesson")[1] == openai.model_lesson
     claude = make_settings(monkeypatch, UA_LLM_PROVIDER="anthropic", UA_PROVIDER_VERIFY="openai")
     assert claude.role_config("graph")[:2] == ("anthropic", "claude-opus-5-5")
@@ -199,6 +199,18 @@ def test_sentinels_come_back_as_nulls_and_enum_casing_is_repaired():
     assert S.LessonV2Draft.model_validate(llm_anthropic.restore_nulls(sent, S.LessonV2Draft)) == draft
     shouted = json.loads(json.dumps(sent).replace('"kind": "setup"', '"kind": "SETUP"', 1))
     assert S.LessonV2Draft.model_validate(llm_anthropic.restore_nulls(shouted, S.LessonV2Draft)).blocks[0].kind == "setup"
+
+
+def test_a_draft_and_its_repairs_share_the_cached_instructions_and_chapter():
+    """The writer's draft (prompted mode, schema block) and a repair (grammar mode) with the same instructions and prefix
+    send identical leading system blocks up to a breakpoint, so the repair reads the draft's cache entry."""
+    kw = dict(model="claude-opus-5-5", effort="medium", instructions="RULES", text="TASK", images=None,
+              shared_prefix="CHAPTER", budget=16000)
+    draft = llm_anthropic.build_request(schema=S.LessonV2Draft, mode="prompted", **kw)
+    repair = llm_anthropic.build_request(schema=S.IndependentAnswer, mode="grammar", **kw)
+    assert [b["text"] for b in draft["system"][:2]] == ["RULES", "CHAPTER"] and "JSON Schema" in draft["system"][2]["text"]
+    assert draft["system"][:2] == repair["system"] and repair["system"][1]["cache_control"]["type"] == "ephemeral"
+    assert draft["system"][2]["cache_control"]["type"] == "ephemeral"  # the schema block is cached too
 
 
 def test_the_request_caches_the_system_blocks_and_sends_no_sampling_parameters():

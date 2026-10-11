@@ -116,8 +116,8 @@ async def _top_up(skill: dict[str, Any], lesson: dict[str, Any], kp: int, n: int
         used_keys.add(planned_keys[-1])
 
     draft = await llm.structured(
-        role="lesson",
-        instructions=prompts.for_role("lesson").TOPUP_INSTRUCTIONS,
+        role="topup",
+        instructions=prompts.for_role("topup").TOPUP_INSTRUCTIONS,
         text=topup_request(skill, lesson, kp, existing, planned_keys),
         schema=TopUpDraft,
         max_output_tokens=24000,

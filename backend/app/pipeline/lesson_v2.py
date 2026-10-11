@@ -107,7 +107,9 @@ IDEA_BUDGET = 4  # about this many new ideas per lesson (the learner's S3b revie
 # the final review still found were stored as they were).
 TARGET_BLOCKS, MAX_TEACHING_BLOCKS = 9, 10
 TARGET_PROSE_WORDS, MAX_PROSE_WORDS = 350, 420
-MAX_REVISIONS = 2  # the second revision runs only for blocking issues or validation problems the first one left
+# One revision round (2026-10-11): a second round cleared its blocking issues in 0 of 4 non-proof lessons (2 were kept as
+# worse than the draft) and cost ~$0.73 and 15–20 minutes each time; what is left goes to the targeted repairs.
+MAX_REVISIONS = 1
 # A proof lesson revises once (2026-10-09: a second round fixed what was left in 3 of 10 proof runs and cost ~10 minutes
 # of Opus each time); blocking issues left in its teaching blocks get a targeted block repair instead.
 PROOF_MAX_REVISIONS = 1

@@ -42,7 +42,7 @@ MAX_UNIONS = 16  # Anthropic: parameters with union types (anyOf) per request
 # every rate once a prompt exceeds 100K tokens (LONG_PROMPT).
 PRICES: dict[str, tuple[float, float, float, float, float]] = {
     "claude-opus-5-5": (4.0, 5.0, 8.0, 0.20, 20.0),
-    "claude-sonnet-5-5": (2.0, 2.50, 4.0, 0.10, 10.0),
+    "claude-sonnet-5-5": (2.0, 2.50, 4.0, 0.20, 10.0),
     "claude-haiku-5-5": (0.10, 0.125, 0.20, 0.01, 0.50),
 }
 LONG_PROMPT: dict[str, tuple[int, float]] = {"claude-haiku-5-5": (100_000, 5.0)}
@@ -278,17 +278,20 @@ def build_request(
     *, model: str, effort: str, instructions: str, text: str, schema: type[BaseModel], images: list[bytes] | None,
     shared_prefix: str | None, budget: int, mode: str = "grammar",
 ) -> dict:
-    system: list[dict] = [{"type": "text", "text": instructions}]
-    if mode == "prompted":
-        system.append({"type": "text", "text": PROMPTED_JSON.format(schema=prompted_schema_json(schema))})
-    if shared_prefix:
-        system.append({"type": "text", "text": shared_prefix})
-    # one breakpoint after the last system block: instructions (+ chapter) are reused across a lesson's calls and
-    # across parallel lessons; a 1-hour entry survives the minutes between a draft, its review and its revision
+    # Order: instructions, the shared prefix (chapter + course map), then a prompted-mode schema. A breakpoint after the
+    # prefix lets calls with the same instructions and prefix but another schema or mode (the writer's draft, prompted;
+    # its question / capstone / block repairs, grammar) read one cache entry — with the schema in between, every repair
+    # wrote its own ~50K-token entry (2026-10-11 analysis: 70 % of a repair's cost). A second breakpoint closes the
+    # schema block. A 1-hour entry survives the minutes between a draft, its review, its revision and its repairs.
     cache: dict[str, str] = {"type": "ephemeral"}
     if settings.anthropic_cache_ttl == "1h":
         cache["ttl"] = "1h"
-    system[-1]["cache_control"] = cache
+    system: list[dict] = [{"type": "text", "text": instructions}]
+    if shared_prefix:
+        system.append({"type": "text", "text": shared_prefix})
+    system[-1]["cache_control"] = dict(cache)
+    if mode == "prompted":
+        system.append({"type": "text", "text": PROMPTED_JSON.format(schema=prompted_schema_json(schema)), "cache_control": dict(cache)})
     content: list[dict] = [_image_block(png) for png in images or []]  # images before the text (Anthropic's advice)
     content.append({"type": "text", "text": text})
     output_config: dict[str, Any] = {"effort": effort}

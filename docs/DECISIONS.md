@@ -12,7 +12,7 @@ When you change one of these decisions, update this file (and the SPEC section i
 | What | Runs where | Notes |
 |---|---|---|
 | In-app course build (Build course button) | OpenAI + NVIDIA APIs, inside the app | Lessons in the **v1** format (fixed sections), but with all question rules of §3, a capstone (§4) and verification (§6). No skill splitting, no teaching-sequence writer, no reviewer pass. |
-| Lesson generation **v2** (planner → writer → reviewer with a missing-bridge pass and a density/outcome pass → one revision, a second one only for what is still blocking; may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
+| Lesson generation **v2** (planner → writer → reviewer with a missing-bridge pass and a density/outcome pass → one revision (a second round until 2026-10-11, see below); may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
 | Pedagogy / code / browser reviews by Claude Code agents | Development only | Not part of the app. |
 
 Decision (2026-10-06): keep v2 off the in-app build for now; use it per skill from the command line while the
@@ -26,6 +26,28 @@ blanked. Nothing else changes: planning, writing, reviews, revisions, repairs an
 agent-made lesson goes through every check an API one does. A Claude Code workflow claims the requests and dispatches
 one agent per call, matching the Anthropic mapping (Haiku for verification, the session model otherwise, at the
 role's effort). A lesson takes about 40–60 minutes (several run in parallel). Used for S14–S18.
+
+**Model per stage and cost (2026-10-11, the learner asked where Sonnet 5.5 could replace Opus 5.5 before the next
+rounds of content).** Measured on the S9–S12 API runs (108 Opus calls) and 951 agent-route requests: a v2 lesson costs
+about $2.05–2.55 on the API ($4.7 for a proof skill), a chapter about $130–150 (lessons ≈ 97 %), and Opus output
+(thinking) is 73 % of it; on the agent route a lesson takes ~55 minutes, most of it the planner and the two reviews.
+Every quality complaint (S2/S3b density, S4a "convoluted", S12a's paragraph, the S16–S28 leaks, the S10 variant) came
+from the planner, the writer, the reviews and the capstone writer, and an effort notch lower there had already lost
+blind judgments — so they stay on Opus. Sonnet 5.5 was tried where the output is narrow and checked in code, on a copy
+of the course with the same requests: **practice top-ups** (12 knowledge points × 3 questions): at medium effort 12 of
+35 rejected by verification, 7 of them answer keys the independent solver disputed (Opus: 4, 1); at high effort 5 of 35
+(all readable answers, caught in code) for half Opus's cost at the same speed, but blind judges preferred Opus's sets
+9 of 12 (Sonnet's repeated existing demands or were plug-ins); **visuals** (S1, S5, S6): Opus 2 of 3, and the lost
+Sonnet plan drew the correct steps in the "wrong answer" colour. Both stay on Opus; the new `topup` role
+(`UA_ANTHROPIC_MODEL_TOPUP`, …) keeps them configurable. What saves money and time without a quality trade instead:
+(1) **the prompt cache** — the system blocks are instructions, chapter prefix, then a prompted-mode schema, with a
+breakpoint after the prefix, so a question / capstone / block repair reads the draft's cache entry instead of writing a
+~50K-token one of its own (a repair was ~70 % cache writes: capstone repair $0.50 → ~$0.16, question repair $0.35 →
+~$0.14); (2) **one revision round** for every lesson (`MAX_REVISIONS = 1`): a second round cleared its blocking issues
+in 0 of 4 non-proof lessons and cost ~$0.73 and 15–20 minutes; (3) **the agent route uses the effort each request asks
+for** (it ran every planner and review at xhigh — 3–8× slower than the API — and pages on the session model), reads
+pages and checks answers on Haiku and Opus for the rest, and tells agents to read each request file once (a planner
+agent took ~25 turns, each re-reading its context). Sonnet's cache-read price in the cost estimate is $0.20/MTok.
 
 **Providers (decided 2026-10-08, the learner: "switch between openAI and anthropic").** Every LLM role runs on OpenAI
 or Anthropic (`UA_LLM_PROVIDER`, per role `UA_PROVIDER_<ROLE>`; default OpenAI until a Claude-generated lesson has been

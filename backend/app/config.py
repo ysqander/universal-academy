@@ -96,7 +96,7 @@ def _project_first(name: str) -> str:
 
 
 PROVIDERS = ("openai", "anthropic")
-ROLES = ("vision", "graph", "lesson", "viz", "verify")
+ROLES = ("vision", "graph", "lesson", "viz", "verify", "topup")
 KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
 
 def configured_books_dir() -> Path:
@@ -129,11 +129,13 @@ class Settings:
     model_lesson: str = field(default_factory=lambda: _env("UA_MODEL_LESSON", "gpt-6.1-sol"))
     model_viz: str = field(default_factory=lambda: _env("UA_MODEL_VIZ", "gpt-6.1-sol"))
     model_verify: str = field(default_factory=lambda: _env("UA_MODEL_VERIFY", "gpt-6-luna"))
+    model_topup: str = field(default_factory=lambda: _env("UA_MODEL_TOPUP", "gpt-6.1-sol"))
     effort_vision: str = field(default_factory=lambda: _env("UA_EFFORT_VISION", "low"))
     effort_graph: str = field(default_factory=lambda: _env("UA_EFFORT_GRAPH", "high"))
     effort_lesson: str = field(default_factory=lambda: _env("UA_EFFORT_LESSON", "medium"))
     effort_viz: str = field(default_factory=lambda: _env("UA_EFFORT_VIZ", "low"))
     effort_verify: str = field(default_factory=lambda: _env("UA_EFFORT_VERIFY", "high"))
+    effort_topup: str = field(default_factory=lambda: _env("UA_EFFORT_TOPUP", "medium"))
     # Proof skills get more reasoning on the same model (the learner, 2026-10-08: "use sol at one higher reasoning
     # notch"): planner high → xhigh, writer medium → high, reviewer high → xhigh.
     proof_effort_notches: int = field(default_factory=lambda: int(_env("UA_PROOF_EFFORT_NOTCHES", "1")))
@@ -146,6 +148,8 @@ class Settings:
     provider_lesson: str = field(default_factory=lambda: _env("UA_PROVIDER_LESSON", "").lower())
     provider_viz: str = field(default_factory=lambda: _env("UA_PROVIDER_VIZ", "").lower())
     provider_verify: str = field(default_factory=lambda: _env("UA_PROVIDER_VERIFY", "").lower())
+    # topup: fresh practice questions written during study (retakes, reviews, quizzes) — checked like any question
+    provider_topup: str = field(default_factory=lambda: _env("UA_PROVIDER_TOPUP", "").lower())
     # Anthropic: Opus 5.5 where OpenAI uses Sol, Haiku 5.5 where it uses Luna. Efforts: low/medium/high/xhigh/max.
     anthropic_api_key: str = field(default_factory=lambda: _project_first("ANTHROPIC_API_KEY"))
     # An organisation-level key (not created inside a workspace) must name the workspace on every request.
@@ -156,13 +160,19 @@ class Settings:
     anthropic_model_vision: str = field(default_factory=lambda: _env("UA_ANTHROPIC_MODEL_VISION", "claude-haiku-5-5"))
     anthropic_model_graph: str = field(default_factory=lambda: _env("UA_ANTHROPIC_MODEL_GRAPH", "claude-opus-5-5"))
     anthropic_model_lesson: str = field(default_factory=lambda: _env("UA_ANTHROPIC_MODEL_LESSON", "claude-opus-5-5"))
+    # Model per role (2026-10-11 analysis, docs/DECISIONS.md §1): Opus for everything that writes or judges course
+    # content; Sonnet 5.5 was tried on practice top-ups and visuals and lost the blind comparisons (9 of 12, 2 of 3).
     anthropic_model_viz: str = field(default_factory=lambda: _env("UA_ANTHROPIC_MODEL_VIZ", "claude-opus-5-5"))
     anthropic_model_verify: str = field(default_factory=lambda: _env("UA_ANTHROPIC_MODEL_VERIFY", "claude-haiku-5-5"))
+    # Practice top-ups stay on Opus: Sonnet 5.5 lost 9 of 12 blind comparisons at high effort and gave 7 of 35 keys the
+    # solver disputed at medium (2026-10-11, docs/DECISIONS.md §1); the role lets a deployment choose another model.
+    anthropic_model_topup: str = field(default_factory=lambda: _env("UA_ANTHROPIC_MODEL_TOPUP", "claude-opus-5-5"))
     anthropic_effort_vision: str = field(default_factory=lambda: _env("UA_ANTHROPIC_EFFORT_VISION", "low"))
     anthropic_effort_graph: str = field(default_factory=lambda: _env("UA_ANTHROPIC_EFFORT_GRAPH", "high"))
     anthropic_effort_lesson: str = field(default_factory=lambda: _env("UA_ANTHROPIC_EFFORT_LESSON", "medium"))
     anthropic_effort_viz: str = field(default_factory=lambda: _env("UA_ANTHROPIC_EFFORT_VIZ", "low"))
     anthropic_effort_verify: str = field(default_factory=lambda: _env("UA_ANTHROPIC_EFFORT_VERIFY", "high"))
+    anthropic_effort_topup: str = field(default_factory=lambda: _env("UA_ANTHROPIC_EFFORT_TOPUP", "medium"))
 
     # Page parsing engine: "auto" (nemotron when NVIDIA key present, plus OpenAI vision), "openai", "nemotron".
     parse_engine: str = field(default_factory=lambda: _env("UA_PARSE_ENGINE", "auto"))

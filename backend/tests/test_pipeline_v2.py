@@ -27,6 +27,7 @@ from app.llm_schemas import (
     TeachingPlan,
 )
 from app.pipeline import jobs
+from app.pipeline import lesson_v2 as lesson_v2_module
 from app.pipeline.context import key_number, load_course
 from app.pipeline.lesson_v2 import (
     InvalidPlan,
@@ -614,6 +615,7 @@ def test_only_blocked_spares_are_left_out_and_only_the_question_a_location_names
 
 
 def test_a_second_revision_runs_only_for_what_is_still_blocking(tmp_path, llm_calls, monkeypatch):
+    monkeypatch.setattr(lesson_v2_module, "MAX_REVISIONS", 2)  # the two-round machinery (default: one round)
     cid = built_course(tmp_path)
     key = skill_by_title(cid, "Distinguish lists")["key"]
     original = fake_llm.respond
@@ -668,6 +670,7 @@ def _review_as(blocking: bool):
 
 
 def test_a_revision_that_fixes_the_review_is_kept_although_it_runs_long(tmp_path, llm_calls, monkeypatch):
+    monkeypatch.setattr(lesson_v2_module, "MAX_REVISIONS", 2)  # the two-round machinery (default: one round)
     cid = built_course(tmp_path)
     key = skill_by_title(cid, "Distinguish lists")["key"]
     # first draft: blocking review; revision 1: 11 blocks but a clean review; revision 2 trims it
@@ -680,6 +683,7 @@ def test_a_revision_that_fixes_the_review_is_kept_although_it_runs_long(tmp_path
 
 
 def test_a_revision_with_a_worse_review_is_not_taken(tmp_path, llm_calls, monkeypatch):
+    monkeypatch.setattr(lesson_v2_module, "MAX_REVISIONS", 2)  # the two-round machinery (default: one round)
     cid = built_course(tmp_path)
     key = skill_by_title(cid, "Distinguish lists")["key"]
     # first draft: clean review but too long; both revisions are shorter but their reviews find a blocking problem
@@ -692,6 +696,7 @@ def test_a_revision_with_a_worse_review_is_not_taken(tmp_path, llm_calls, monkey
 
 
 def test_a_failing_second_revision_keeps_the_first(tmp_path, llm_calls, monkeypatch):
+    monkeypatch.setattr(lesson_v2_module, "MAX_REVISIONS", 2)  # the two-round machinery (default: one round)
     cid = built_course(tmp_path)
     key = skill_by_title(cid, "Distinguish lists")["key"]
 

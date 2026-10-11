@@ -30,7 +30,7 @@ from .config import settings
 
 log = logging.getLogger("ua.llm")
 
-Role = Literal["vision", "graph", "lesson", "viz", "verify"]
+Role = Literal["vision", "graph", "lesson", "viz", "verify", "topup"]
 T = TypeVar("T", bound=BaseModel)
 
 # USD per 1M tokens: (input, cached input, output). Used only for the cost estimate shown in job logs.

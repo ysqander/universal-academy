@@ -14,6 +14,7 @@ os.environ["UA_BOOKS_DIR"] = tempfile.mkdtemp(prefix="ua-test-books-")  # inheri
 os.environ["NVIDIA_API_KEY"] = ""
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["UA_LLM_PROVIDER"] = "openai"  # whatever .env chooses for the app
+os.environ["UA_LESSON_GENERATION"] = "v1"  # the suite's built courses are v1; v2 builds are tested explicitly
 for _role in ("VISION", "GRAPH", "LESSON", "VIZ", "VERIFY"):
     os.environ[f"UA_PROVIDER_{_role}"] = ""
 os.environ.pop("ANTHROPIC_BASE_URL", None)  # Claude Code exports it; the app never uses it

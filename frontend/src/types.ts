@@ -619,6 +619,7 @@ export interface Health {
   max_course_pages: number;
   models: Record<string, string>;
   agent_route: boolean; // UA_AGENT_DIR: model calls are answered by Claude Code agents (/build-course)
+  lesson_generation: string; // UA_LESSON_GENERATION: the in-app build's lessons ("v2", or the cheaper "v1")
 }
 
 // ---------- Example courses (GET /api/examples, POST /api/examples/{name}/import) ----------

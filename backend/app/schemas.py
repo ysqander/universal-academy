@@ -613,6 +613,7 @@ class Health(BaseModel):
     max_course_pages: int = 80
     models: dict[str, str]
     agent_route: bool = False  # UA_AGENT_DIR: model calls are answered by Claude Code agents (/build-course)
+    lesson_generation: str = "v2"  # UA_LESSON_GENERATION: the in-app build's lessons (v2, or the cheaper v1)
 
 
 Visualization.model_rebuild()

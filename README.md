@@ -95,8 +95,11 @@ app and Claude Code open. If the build stops, run `/build-course` again and pres
 3. Pick a chapter in the outline, check the page thumbnails, and press **Build course**. You can start studying as soon
    as the first lessons are ready.
 
-The cost depends on the model and the length of the chapter. When a build ends, its **Build log** on the course page
-shows what it cost.
+Each lesson is planned, written, reviewed and revised, and a skill the planner finds too big is split into smaller
+ones. With the default Claude models that is about $2–5 per skill, so a chapter of about 40 skills costs roughly
+$100–150 and takes a few hours (lessons are written in parallel; you can study the first ones while the rest are
+written). The **Build log** on the course page shows what each build cost. `UA_LESSON_GENERATION=v1` in `.env` writes
+simpler one-call lessons instead, about 20 times cheaper.
 
 ## Configuration
 

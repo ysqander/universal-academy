@@ -11,12 +11,19 @@ When you change one of these decisions, update this file (and the SPEC section i
 
 | What | Runs where | Notes |
 |---|---|---|
-| In-app course build (Build course button) | OpenAI + NVIDIA APIs, inside the app | Lessons in the **v1** format (fixed sections), but with all question rules of §3, a capstone (§4) and verification (§6). No skill splitting, no teaching-sequence writer, no reviewer pass. |
+| In-app course build (Build course button) | The API (or Claude Code agents on the agent route) + NVIDIA, inside the app | Since 2026-10-11: **v2 lessons** (`pipeline/build_v2.py`, below). Until then lessons in the **v1** format (fixed sections) — still available with `UA_LESSON_GENERATION=v1`. |
 | Lesson generation **v2** (planner → writer → reviewer with a missing-bridge pass and a density/outcome pass → one revision (a second round until 2026-10-11, see below); may split a skill) | Command line only: `backend/scripts/replan.py`, `backend/scripts/regenerate.py` | Run per skill by a developer (so far from Claude Code). Applied to S2 and S3 of the real course. ~$0.25–0.40 per skill vs ~$0.10 for v1. |
 | Pedagogy / code / browser reviews by Claude Code agents | Development only | Not part of the app. |
 
 Decision (2026-10-06): keep v2 off the in-app build for now; use it per skill from the command line while the
-generator is still being tuned.
+generator is still being tuned. **Replaced 2026-10-11** (the learner: "make the button use v2"): every lesson of the
+in-app build is a v2 lesson. Skills are planned along the graph: a skill as soon as all of its prerequisites are
+planned, so a split's keys and edges are final when its dependents are planned (independent skills plan in parallel,
+splits are applied one at a time), and each lesson is written, reviewed, revised, stored and verified by
+`generate_v2_lesson` as soon as its plan is applied. The spec a lesson is written from is kept (kv `v2_spec:<skill
+id>`, also for the parts of a `replan.py` split) until it is stored, so Resume rewrites a failed lesson without planning
+(or splitting) it again; an interrupted build cancels its plans and writers. Cost: about $2–5 per skill with Claude (a 40-skill
+chapter ≈ $100–150) instead of ~$0.10–0.30 for v1; `UA_LESSON_GENERATION=v1` keeps the old builder.
 
 **Agent route (2026-10-10, the learner: "use my Claude Code credits instead of the API … do the same work as you
 would do through the API, but do it yourself with agents").** With `UA_AGENT_DIR` set (`app/agent_llm.py`), every

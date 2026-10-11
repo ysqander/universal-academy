@@ -65,6 +65,17 @@ export const kindLabel = (kind: string): string =>
   KIND_LABEL[kind] ?? (kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Skill");
 
 /** Build-time estimate shown before starting a course (~45 s and ~$0.10 per page, measured on Axler ch. 1). */
-export function buildEstimate(pages: number): { minutes: number; dollars: number } {
-  return { minutes: Math.max(1, Math.round((pages * 45) / 60)), dollars: Math.round(pages * 0.1 * 100) / 100 };
+/** Rough build time and API cost of a page range. v2 lessons (the default) are planned, written, reviewed and revised:
+ * about $5 and 8 minutes per page with Claude (chapter 1 of Axler: 26 pages, 42 skills, ~$130). On the Claude Code
+ * route there is no API cost, and agents take about 20 minutes per page. v1 lessons: one call each, ~45 s and $0.10. */
+export function buildEstimate(pages: number, generation = "v2", agentRoute = false): { minutes: number; dollars: number } {
+  if (generation === "v1") {
+    return { minutes: Math.max(1, Math.round((pages * 45) / 60)), dollars: Math.round(pages * 0.1 * 100) / 100 };
+  }
+  return { minutes: Math.max(1, pages * (agentRoute ? 20 : 8)), dollars: agentRoute ? 0 : pages * 5 };
+}
+
+/** "45 min" or "3.5 h". */
+export function durationLabel(minutes: number): string {
+  return minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 30) / 2} h`;
 }

@@ -253,6 +253,7 @@ def delete_course(course_id: str) -> None:
             (course_id, course_id),
         )
         conn.execute("DELETE FROM tasks WHERE course_id = ?", (course_id,))
+        conn.execute("DELETE FROM kv WHERE key IN (SELECT 'v2_spec:' || id FROM skills WHERE course_id = ?)", (course_id,))
         conn.execute(f"DELETE FROM review_log WHERE course_id = ? OR skill_id IN {skills}", (course_id, course_id))
         conn.execute("DELETE FROM xp_log WHERE course_id = ?", (course_id,))
         conn.execute(f"DELETE FROM progress WHERE course_id = ? OR skill_id IN {skills}", (course_id, course_id))
@@ -332,6 +333,21 @@ async def run_skill_pipeline(ctx: BuildContext) -> None:
         or before["visual_errors"] > 0
         or before["verified"] < before["questions"]
     )
+    if settings.lesson_generation == "v2":  # the default since 2026-10-11 (build_v2.py)
+        from .build_v2 import run_v2_lessons
+
+        await run_v2_lessons(ctx, lambda: refresh_pipeline_counters(ctx))
+        # every lesson's visual and verification (a v2 lesson verifies itself; this catches v1 lessons and leftovers)
+        skills = skill_rows(course.id)
+        results = await asyncio.gather(
+            *(_process_skill(ctx, s["id"], "", write_lesson=False) for s in skills), return_exceptions=True
+        )
+        for skill, result in zip(skills, results):
+            if isinstance(result, BaseException):
+                log.error("pipeline for skill %s crashed", skill["key"], exc_info=result)
+                tracker.log(f"Skill {skill['key']}: unexpected error {result}", level=logging.ERROR)
+        _close_pipeline_stages(ctx, report=has_work)
+        return
     prefix = lesson_prefix(course)
     pending = [s for s in skills if s["lesson_status"] != "ready"]
     attempted: set[str] = set()

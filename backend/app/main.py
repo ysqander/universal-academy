@@ -55,6 +55,7 @@ def health() -> Health:
         max_course_pages=settings.max_course_pages,
         models={role: f"{provider}:{model} ({effort})" for role, (provider, model, effort) in configs.items()},
         agent_route=bool(settings.agent_dir),
+        lesson_generation=settings.lesson_generation,
     )
 
 

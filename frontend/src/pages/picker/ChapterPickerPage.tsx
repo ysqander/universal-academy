@@ -9,7 +9,7 @@ import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import { DEFAULT_MAX_COURSE_PAGES, useHealth } from "../../hooks/useHealth";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useResource } from "../../hooks/useResource";
-import { buildEstimate, pageRangeLabel, plural } from "../../lib/format";
+import { buildEstimate, durationLabel, pageRangeLabel, plural } from "../../lib/format";
 import { prettyTitle } from "../../lib/markdown";
 import {
   ancestorIds,
@@ -115,7 +115,8 @@ function Picker({ book }: { book: Book }) {
   const { range, sections, manualError } = useMemo(() => resolvePick(pick, flat, book.page_count), [pick, flat, book.page_count]);
   const pageCount = range ? range.end - range.start + 1 : 0;
   // Server limit (UA_MAX_COURSE_PAGES, reported by /api/health): larger selections are rejected by POST /api/courses.
-  const maxPages = useHealth().data?.max_course_pages ?? DEFAULT_MAX_COURSE_PAGES;
+  const health = useHealth().data;
+  const maxPages = health?.max_course_pages ?? DEFAULT_MAX_COURSE_PAGES;
   const tooLarge = pageCount > maxPages;
 
   const defaultTitle = useMemo(() => {
@@ -181,7 +182,9 @@ function Picker({ book }: { book: Book }) {
     }
   };
 
-  const estimate = buildEstimate(pageCount);
+  const generation = health?.lesson_generation ?? "v2";
+  const agentRoute = health?.agent_route ?? false;
+  const estimate = buildEstimate(pageCount, generation, agentRoute);
   const summaryTitle =
     sections.length === 1
       ? prettyTitle(sections[0].title)
@@ -361,8 +364,32 @@ function Picker({ book }: { book: Book }) {
             <p className="picker__estimate">
               <Icon name="clock" size={16} />
               <span>
-                Roughly <strong>{estimate.minutes} min</strong> and <strong>${estimate.dollars.toFixed(2)}</strong> to build
-                <span className="muted"> (about 45 s and $0.10 per page; you can start studying before it finishes)</span>
+                {generation === "v1" ? (
+                  <>
+                    Roughly <strong>{durationLabel(estimate.minutes)}</strong> and <strong>${estimate.dollars.toFixed(2)}</strong>{" "}
+                    to build
+                    <span className="muted"> (about 45 s and $0.10 per page; you can start studying before it finishes)</span>
+                  </>
+                ) : agentRoute ? (
+                  <>
+                    Roughly <strong>{durationLabel(estimate.minutes)}</strong> on your Claude Code plan, no API cost
+                    <span className="muted">
+                      {" "}
+                      (each lesson is planned, written, reviewed and revised by agents; run /build-course in Claude Code; you
+                      can start studying before it finishes)
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    Roughly <strong>{durationLabel(estimate.minutes)}</strong> and <strong>${Math.round(estimate.dollars)}</strong>{" "}
+                    to build
+                    <span className="muted">
+                      {" "}
+                      (about $5 per page: each lesson is planned, written, reviewed and revised; you can start studying before it
+                      finishes)
+                    </span>
+                  </>
+                )}
               </span>
             </p>
           )}

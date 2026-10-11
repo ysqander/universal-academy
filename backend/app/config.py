@@ -194,6 +194,9 @@ class Settings:
     # Set UA_AGENT_DIR to a folder to have every model call answered by Claude Code agents (app/agent_llm.py) instead
     # of an API; UA_AGENT_TIMEOUT (seconds) is how long one call may wait for its answer.
     agent_dir: str = field(default_factory=lambda: _env("UA_AGENT_DIR", ""))
+    # Lessons of the in-app build: "v2" (planner → writer → reviews → revision, may split a skill; the default since
+    # 2026-10-11) or "v1" (one call per lesson, fixed sections: ~20x cheaper, the format before the learner's reviews).
+    lesson_generation: str = field(default_factory=lambda: "v1" if _env("UA_LESSON_GENERATION", "v2").lower() == "v1" else "v2")
     agent_timeout: float = field(default_factory=lambda: float(_env("UA_AGENT_TIMEOUT", "7200")))
 
     @property

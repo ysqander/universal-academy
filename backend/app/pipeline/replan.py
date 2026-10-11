@@ -16,7 +16,7 @@ Keep: the skill's lesson is replaced by a v2 lesson (answered questions retired,
 transaction, as in regenerate).
 
 Like regenerate, the job row shows 'running' meanwhile, and an interruption leaves the course servable: the split is
-atomic, a new skill without a lesson yet is 'pending' (Resume in the app writes a v1 lesson for it), and a kept
+atomic, a new skill without a lesson yet is 'pending' (Resume in the app writes its lesson), and a kept
 skill keeps its old lesson until the new one is stored.
 """
 
@@ -36,6 +36,7 @@ from .context import BuildContext, load_course
 from .graph import reorder_course
 from .lesson_v2 import (
     IDEA_BUDGET,
+    SPEC_KEY,
     V2Result,
     describe_plan,
     generate_v2_lesson,
@@ -294,13 +295,21 @@ async def apply_replan(course_id: str, key: str, planned: PlanResult, *, usage: 
         semaphore = asyncio.Semaphore(LESSON_CONCURRENCY)
 
         async def one(local: str) -> V2Result:
+            sid = report.skill_ids[local]
+            # kept until the lesson is stored: an interrupted or failed lesson is rewritten from this spec by the
+            # app's Resume (pipeline/build_v2.py), never planned or split again
+            db.kv_set(SPEC_KEY.format(sid), specs[local].model_dump_json())
             async with semaphore:
                 try:
-                    return await generate_v2_lesson(ctx, report.skill_ids[local], specs[local], prefix)
+                    return await generate_v2_lesson(ctx, sid, specs[local], prefix)
                 except Exception as e:  # noqa: BLE001 — one skill's failure never stops the others
                     log.exception("v2 lesson %s crashed", report.keys[local])
                     tracker.log(f"Lesson {report.keys[local]} (v2): unexpected error {e}", level=logging.ERROR)
-                    return V2Result(key=report.keys[local], skill_id=report.skill_ids[local], error=str(e))
+                    return V2Result(key=report.keys[local], skill_id=sid, error=str(e))
+                finally:
+                    row = db.query_one("SELECT lesson_status FROM skills WHERE id = ?", (sid,))
+                    if row is None or row["lesson_status"] == "ready":
+                        db.execute("DELETE FROM kv WHERE key = ?", (SPEC_KEY.format(sid),))
 
         locals_ = [s.local_id for s in plan.skills]
         first = await one(locals_[0])  # the first lesson call writes the prompt cache for the others
@@ -310,7 +319,7 @@ async def apply_replan(course_id: str, key: str, planned: PlanResult, *, usage: 
         report.cost_usd = usage.cost_usd
         tracker.log(f"Replan of {key} finished · ${usage.cost_usd - cost_before:.2f} · {jobs._cost_summary(usage)}")
     except (asyncio.CancelledError, KeyboardInterrupt):
-        final_state, interrupted_now = "interrupted", True  # → Resume in the app writes (v1) lessons for new skills still pending
+        final_state, interrupted_now = "interrupted", True  # → Resume in the app writes the lessons of new skills still pending
         tracker.log(
             f"Replan of {key} interrupted — the course stays servable; resume to write missing lessons · "
             f"{jobs._cost_summary(usage)}",

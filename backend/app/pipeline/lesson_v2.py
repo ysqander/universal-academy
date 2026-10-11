@@ -122,6 +122,9 @@ _BLOCK_LOCATION = re.compile(r"\bblocks?\s+(\d+)(?:\s*(?:[-–—]|to|and|,)\s*(
 MAX_SHOWN_MISSES = 10  # learner misses on this skill (any lesson version) shown to the planner
 MIN_WEIGHT, MAX_WEIGHT = 0.05, 1.0
 V2_VIZ = {"format": "none"}  # skills.viz_json of a v2 lesson: its visuals live in the blocks
+# skill id → the TeachingSpec (JSON) a lesson is written from, kept until the lesson is stored: a resumed build (or a
+# replan's split part) is rewritten from it, never planned or split again (pipeline/build_v2.py, replan.apply_replan)
+SPEC_KEY = "v2_spec:{}"
 _GOAL_PREFIX = re.compile(r"^\s*(?:\*\*)?\s*your goal\s*:?\s*(?:\*\*)?\s*:?\s*", re.IGNORECASE)
 # The learner's rule 17 (2026-10-10, prompts/rules.py EXAMPLE_FEEDBACK): no point that one example, value or special
 # case does not prove or determine the general case. The wordings the stored lessons used (S4a, S4b, S10, S13) — a
@@ -1615,7 +1618,7 @@ class V2Result:
 
 async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpec, prefix: str) -> V2Result:
     """Write, review, revise once when needed, validate, persist and verify a v2 lesson for one skill. A failure keeps
-    a previously ready lesson; a skill without a lesson is marked failed (the app's Resume writes a v1 lesson)."""
+    a previously ready lesson; a skill without a lesson is marked failed (the app's Resume retries it)."""
     skill = db.query_one("SELECT * FROM skills WHERE id = ?", (skill_id,))
     if skill is None:
         raise LookupError(f"Skill {skill_id} not found")
@@ -1727,7 +1730,7 @@ async def generate_v2_lesson(ctx: BuildContext, skill_id: str, spec: TeachingSpe
         result.error = str(e)
         if skill["lesson_status"] != "ready":
             db.execute("UPDATE skills SET lesson_status = 'failed' WHERE id = ? AND lesson_status != 'ready'", (skill_id,))
-            tracker.log(f"Lesson {key} (v2) failed: {e} — Resume in the app writes a v1 lesson", level=logging.ERROR)
+            tracker.log(f"Lesson {key} (v2) failed: {e} — Resume in the app retries it", level=logging.ERROR)
         else:
             tracker.log(f"Lesson {key} (v2) failed: {e} — the previous lesson is kept", level=logging.ERROR)
         return result

@@ -1,11 +1,13 @@
-"""Reword a stored question (or one step of a multistep question) in place: its prompt, and its choices with the
-same count. Keys, answers and the answer display stay as they are, so attempts and open tasks are unaffected — for a
+"""Reword a stored question (or one step of a multistep question) in place: its prompt, its choices with the same
+count, and (whole questions) its solution and hints; a step's explanation and hint. Keys, answers and the answer display stay as they are, so attempts and open tasks are unaffected — for a
 question whose answer is wrong, flag it (scripts/flag_question.py) instead.
 
     python scripts/edit_question.py --course <course_id> --skill S12a1 --question k1q1 [--step 3] --patch FILE.json
                                     [--data-dir <dir>] [--yes] [--no-backup] [--force]
 
-FILE.json: {"prompt": "…", "choices": ["…", …]} (either key may be left out). --step is 1-based.
+FILE.json: {"prompt": "…", "choices": ["…", …], "solution": "…", "hints": ["…"], "explanation": "…", "hint": "…"}
+(any subset: solution/hints for a whole question, explanation/hint for a step; answer_display for either — the answer
+key itself never changes). --step is 1-based.
 A consistent copy of the database is written to <data-dir>/backups/ first (unless --no-backup).
 
 Stop the app server first: the tool refuses while the app answers on http://127.0.0.1:8000/api/health (--force if
@@ -74,9 +76,21 @@ def backup() -> Path:
     return target
 
 
-def apply_patch(item: dict, patch: dict) -> list[str]:
-    """Change item's prompt / choices in place; return what changed. Choices keep their count (the answer key)."""
+TEXT_FIELDS = {"question": ("prompt", "solution", "answer_display"), "step": ("prompt", "explanation", "hint", "answer_display")}
+
+
+def apply_patch(item: dict, patch: dict, where: str) -> list[str]:
+    """Change the item's texts in place; return what changed. Choices keep their count (the answer key)."""
     changed = []
+    for field in TEXT_FIELDS[where]:
+        if field in patch and field != "prompt":
+            item[field] = str(patch[field])
+            changed.append(field)
+    if "hints" in patch:
+        if where != "question":
+            raise SystemExit("hints belong to a whole question (a step has one 'hint')")
+        item["hints"] = [str(h) for h in patch["hints"]]
+        changed.append("hints")
     if "prompt" in patch:
         item["prompt"] = str(patch["prompt"])
         changed.append("prompt")
@@ -91,8 +105,9 @@ def apply_patch(item: dict, patch: dict) -> list[str]:
 
 def main() -> int:
     patch = json.loads(args.patch.read_text(encoding="utf-8"))
-    if not isinstance(patch, dict) or not set(patch) & {"prompt", "choices"} or set(patch) - {"prompt", "choices"}:
-        print('The patch must be a JSON object with "prompt" and/or "choices".')
+    allowed = {"prompt", "choices", "solution", "hints", "explanation", "hint", "answer_display"}
+    if not isinstance(patch, dict) or not patch or set(patch) - allowed:
+        print(f"The patch must be a JSON object with some of: {', '.join(sorted(allowed))}.")
         return 2
     db.init_db()
     skill = db.query_one("SELECT * FROM skills WHERE course_id = ? AND key = ?", (args.course, args.skill))
@@ -112,14 +127,17 @@ def main() -> int:
             print(f"{args.skill} {args.question} has {len(steps)} steps")
             return 1
         before = dict(steps[args.step - 1])
-        changed = apply_patch(steps[args.step - 1], patch)
+        changed = apply_patch(steps[args.step - 1], patch, "step")
         columns = {"steps_json": json.dumps(steps, ensure_ascii=False)}
         after = steps[args.step - 1]
     else:
-        before = {"prompt": q["prompt"], "choices": json.loads(q["choices_json"] or "[]")}
+        before = {"prompt": q["prompt"], "choices": json.loads(q["choices_json"] or "[]"), "solution": q["solution"],
+                  "hints": json.loads(q["hints_json"] or "[]"), "answer_display": q["answer_display"]}
         after = dict(before)
-        changed = apply_patch(after, patch)
-        columns = {"prompt": after["prompt"], "choices_json": json.dumps(after["choices"], ensure_ascii=False)}
+        changed = apply_patch(after, patch, "question")
+        columns = {"prompt": after["prompt"], "choices_json": json.dumps(after["choices"], ensure_ascii=False),
+                   "solution": after["solution"], "hints_json": json.dumps(after["hints"], ensure_ascii=False),
+                   "answer_display": after["answer_display"]}
     where = f"{args.skill} {args.question}" + (f" step {args.step}" if args.step else "")
     print(f"Reword {where} in {settings.data_dir} (course {args.course})")
     for field in changed:

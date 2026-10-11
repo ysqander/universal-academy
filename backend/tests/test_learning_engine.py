@@ -1629,3 +1629,18 @@ def test_mark_passed_script_records_the_weakest_pass() -> None:
     assert db.query_one("SELECT COUNT(*) AS n FROM review_log WHERE implicit = 1")["n"] == implicit_before
     again = run()
     assert again.returncode == 1 and "already learned" in again.stdout
+
+
+def test_progress_reports_the_points_of_the_whole_plan() -> None:
+    """planned_points = points possible over the plan (answered + still planned): the meter shows "2 of 6 points"."""
+    fx = build_course()
+    task_id, task = start_practice(fx, "S1")
+    start = task.progress
+    assert start.points == 0 and start.planned_points > 0
+    after = engine.submit_answer(task_id, right(task.question.id), T0).task.progress
+    assert after.points == 1 and after.planned_points == start.planned_points  # a right answer keeps the plan
+    review_id = None
+    learn(fx, "S1", T0)
+    review_id = engine.start_review(fx.sid("S1"), "Review due", T0 + days(3))
+    review = engine.get_task(review_id).progress
+    assert review.planned_points == sum(range(1, review.planned + 1)) or review.has_capstone  # answer i weighs i

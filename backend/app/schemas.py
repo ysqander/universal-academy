@@ -420,6 +420,7 @@ class TaskProgress(BaseModel):
     in_guided: bool = False  # guided steps are still open: the practice can't start yet
     variant: bool = False  # the final problem is the proof lesson's variant (same idea, something changes)
     best_possible: float = 0.0  # the score if everything still planned is answered right (lessons only; 0 otherwise)
+    planned_points: float = 0.0  # points possible over the whole plan so far (answered + still planned); grows with an extra question
     suggestion_text: str = ""  # a finished lesson that failed: what to do next (e.g. prerequisites made due)
 
 

@@ -155,6 +155,7 @@ export function quizScoreView(summary: QuizSummary): ScoreView {
   return {
     hasScore,
     fraction: summary.fraction,
+    fill: hasScore ? summary.fraction : 0,
     label,
     passLabel,
     passMark: QUIZ_PASS_MARK,

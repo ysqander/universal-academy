@@ -46,6 +46,8 @@ export interface ScoreView {
   hasScore: boolean;
   /** Score of the answered questions (0–1). */
   fraction: number;
+  /** How full the bar is (0–1): during a task the points earned out of the plan's points; at the end the score. */
+  fill: number;
   /** "Score 86%" / "Score —". */
   label: string;
   /** "pass at 80%". */
@@ -108,11 +110,28 @@ export function scoreView(progress: Partial<TaskProgress>, end?: TaskEnd | null)
     const left = Math.max(0, planned - answered);
     remainingLabel = left === 1 && answered > 0 && !end ? "Last question" : `${Math.min(answered, planned)} of ${planned} answered`;
   }
+  // During a task, points against the whole plan (the learner, 2026-10-11: a percentage of the few answers so far — 100 %
+  // after two — says nothing): "2 of 6 points · pass at 5", the bar filling toward the pass line. The plan grows by a
+  // question after a miss. A finished task (or an older server without planned_points) shows its score in percent.
+  const plannedPoints = num(progress.planned_points);
+  if (!end && plannedPoints > 0 && planned > 0 && answered < planned) {
+    const points = num(progress.points);
+    const passPoints = Math.ceil(passMark * plannedPoints * 2 - 1e-9) / 2;
+    const secured = points + 1e-9 >= passPoints;
+    return {
+      hasScore, fraction, fill: clamp01(points / plannedPoints), passMark, answered, planned, remainingLabel, halted,
+      label: `${halves(points)} of ${halves(plannedPoints)} points`,
+      passLabel: `pass at ${halves(passPoints)}`,
+      tone: secured ? "pass" : "none",
+      ariaText: `${halves(points)} of ${halves(plannedPoints)} points so far; ${halves(passPoints)} needed to pass.`,
+    };
+  }
   const tone = !hasScore ? "none" : fraction + 1e-9 >= passMark ? "pass" : "below";
   const ariaText = hasScore
     ? `Score ${percentLabel(fraction, passMark)} of the questions answered${halted ? "; the lesson stopped early" : end ? "" : " so far"}; ${passLabel}.`
     : `No answers scored yet; ${passLabel}.`;
-  return { hasScore, fraction, label, passLabel, passMark, tone, answered, planned, remainingLabel, halted, ariaText };
+  const fill = hasScore ? fraction : 0;
+  return { hasScore, fraction, fill, label, passLabel, passMark, tone, answered, planned, remainingLabel, halted, ariaText };
 }
 
 /** The task ends with the multistep capstone (known once it is served, or when the server announces it). */

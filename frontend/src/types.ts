@@ -507,6 +507,7 @@ export interface TaskProgress {
   in_guided: boolean; // guided steps are still open: the practice can't start yet
   variant: boolean; // the final problem is the proof lesson's variant (same idea, something changes)
   best_possible: number; // the score if everything still planned is answered right (lessons only; 0 otherwise)
+  planned_points?: number; // points possible over the whole plan so far (answered + still planned); older servers: absent
   suggestion_text?: string; // a finished lesson that failed: what to do next (e.g. prerequisites made due)
 }
 

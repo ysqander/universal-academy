@@ -838,6 +838,7 @@ def _lesson_progress_view(task: dict[str, Any], st: dict[str, Any], skill_id: st
         guided_total=guided_total, guided_done=guided_done, in_guided=active and st.get("stage") == "guided" and
         guided_done < guided_total, variant=guided_total > 0 and has_capstone,
         best_possible=_best_possible(st, pool) if active else _ratio(points, max_points),
+        planned_points=max_points + _remaining_weight(st, pool) if active else max_points,
         suggestion_text=str((st.get("fail") or {}).get("suggestion_text") or "") if task["outcome"] == "failed" else "",
     )  # fmt: skip
 
@@ -873,6 +874,8 @@ def _review_progress_view(task: dict[str, Any], st: dict[str, Any]) -> TaskProgr
         points=points, max_points=max_points, score=_ratio(points, max_points),
         planned=len(st["set"]), pass_mark=PASS_MARK, in_capstone=in_capstone,
         has_capstone=any(_is_capstone_id(q) for q in st["set"]),
+        # answer i of the set weighs i (× CAPSTONE_WEIGHT for a capstone), as in _review_totals
+        planned_points=float(sum((i + 1) * (CAPSTONE_WEIGHT if _is_capstone_id(q) else 1) for i, q in enumerate(st["set"]))),
     )  # fmt: skip
 
 

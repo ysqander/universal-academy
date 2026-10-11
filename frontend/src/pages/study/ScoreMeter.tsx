@@ -8,10 +8,11 @@ interface ScoreMeterProps {
   aside?: string | null;
 }
 
-/** Score of the answered questions with the pass mark drawn on the bar (SPEC §6.3: pass at 80 %). A lesson halted
+/** During a task: points earned out of the plan's points, the bar filling toward the pass line ("2 of 6 points · pass at
+ * 5"). At the end: the score in percent with the pass mark drawn on the bar (SPEC §6.3: pass at 80 %). A lesson halted
  * early is marked as such ("Stopped after n questions"), never as a finished plan. */
 export function ScoreMeter({ view, size = "md", aside }: ScoreMeterProps) {
-  const pct = Math.round(view.fraction * 1000) / 10;
+  const pct = Math.round(view.fill * 1000) / 10;
   const mark = Math.round(view.passMark * 1000) / 10;
   const right = aside === undefined ? view.remainingLabel : aside;
   return (
@@ -30,7 +31,7 @@ export function ScoreMeter({ view, size = "md", aside }: ScoreMeterProps) {
         aria-valuenow={view.hasScore ? scorePercent(view.fraction, view.passMark) : 0}
         aria-valuetext={view.ariaText}
       >
-        <div className="score-meter__fill" style={{ width: `${view.hasScore ? pct : 0}%` }} />
+        <div className="score-meter__fill" style={{ width: `${pct}%` }} />
         <span className="score-meter__mark" style={{ left: `${mark}%` }} aria-hidden="true" />
       </div>
     </div>

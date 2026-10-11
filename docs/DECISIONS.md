@@ -105,6 +105,11 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
 
 ## 2. Lessons
 
+- **Nothing trivial** (the learner, 2026-10-11, about S2c "Compute a supplied candidate's cube": "too trivial … the
+  same as for real numbers"). A task whose method the learner already has from earlier mathematics, applied
+  unchanged, is not a skill: it folds into the skill that uses it or is left out. S2c was removed
+  (`scripts/remove_skill.py`; cubing is a positive-integer power, taught in S2b). Rule text: `prompts/rules.py`
+  `OUTCOME_RULE` (graph builder and v2 planner, both providers).
 - **Skills are outcomes** (decided 2026-10-07, from the learner's review of S3b). A skill names a task the learner
   can do at the end — solve an equation, find all roots, construct an example, **prove or show a statement (a proof
   is an outcome, so proof skills stay separate units)**. In the learner's words: "learn to do something, not just
@@ -219,6 +224,17 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
 
 ## 3. Questions
 
+- **Ask for the result, without a red herring; rules in tables** (the learner, 2026-10-11). A question asks for the
+  thing directly ("Compute …", "Enter …", "Decide …"). It never opens with a wrong claim to correct ("A student writes
+  … That is wrong. Enter the correct …"): the learner must read past it for nothing. A wrong working is shown only when
+  telling two easily confused moves apart IS the demand (locating the flawed step of an argument, one classic slip) —
+  rare. More than two supplied rules or cases (Exercise 1B.6's ten rules for $\pm\infty$) are laid out as a table or
+  a list, at most two short statements per line. Rule text once: `prompts/rules.py` `DISTINCT_DEMANDS_RULE` (the old
+  "spotting the error in a shown working" demand is gone) and `MATH_FORMAT`. The 46 stored questions with such a
+  preamble were reworded in place (`scripts/edit_question.py`; same numbers and answer keys, all re-verified by the
+  independent solver on a copy first), and S12a1's 1B.6 worked example and k2q2 were rewritten with the rule tables
+  (`scripts/edit_lesson.py`).
+
 - **Typed answers first.** Multiple-choice + true/false together ≤ 40 % of a lesson (drafts above 50 % are rejected).
   A `true_false_set` with ≥ 3 statements does not count as choice-based. Among the questions **served first** (the
   first `target_questions` of each knowledge point) at most one is choice-based and at least one asks for a typed
@@ -274,6 +290,12 @@ Dropping a step left dangling "the root from Step 2" references in S2d, and a wi
 A step may refer only to earlier steps that exist. Stored lessons: `scripts/regenerate.py --only capstone [--note …]`.
 
 ## 5. Scoring and progression (SPEC §6.3–§6.4)
+
+- **During a task the meter shows points against the plan** (the learner, 2026-10-11: "the score as a % before the
+  end of the practice session is meaningless"): "2 of 6 points · pass at 5", the bar filling toward the pass line
+  (`TaskProgress.planned_points` = points answered + weight still planned; a review's answer i weighs i). The plan grows
+  by a question after a miss, so the numbers can grow. The finished lesson, review or quiz still shows its score in
+  percent.
 
 - **Points:** 1 independent correct, **0.5 with a hint**, 0 wrong or answered after revealing the solution. A
   multistep question scores the mean of its steps; the capstone counts **double**.

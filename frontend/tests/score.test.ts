@@ -320,3 +320,17 @@ test("completionSuggestion: a failed lesson's next step, unless the last answer 
   assert.equal(completionSuggestion(progress({})), null);
   assert.equal(completionSuggestion(progress({ suggestion_text: "  " })), null);
 });
+
+test("scoreView during a task: points against the plan's points, the pass line in points", () => {
+  const mid = scoreView(progress({ answered: 2, planned: 4, points: 2, max_points: 2, score: 1, planned_points: 6 }));
+  assert.equal(mid.label, "2 of 6 points");
+  assert.equal(mid.passLabel, "pass at 5"); // 80 % of 6 = 4.8, shown as the next half point
+  assert.equal(Math.round(mid.fill * 1000) / 1000, 0.333);
+  assert.equal(mid.tone, "none"); // not yet secured, and not "below" after two right answers
+  const halfway = scoreView(progress({ answered: 3, planned: 4, points: 2.5, max_points: 3, score: 2.5 / 3, planned_points: 6 }));
+  assert.equal(halfway.label, "2½ of 6 points");
+  assert.equal(scoreView(progress({ answered: 3, planned: 4, points: 5, max_points: 5, score: 1, planned_points: 6 })).tone, "pass");
+  // the end of the task, or an older server: the score in percent
+  assert.equal(scoreView(progress({ answered: 4, planned: 4, points: 5, max_points: 6, score: 5 / 6, planned_points: 6 })).label, "Score 83%");
+  assert.equal(scoreView(progress({ answered: 2, planned: 4, points: 2, max_points: 2, score: 1 })).label, "Score 100%");
+});

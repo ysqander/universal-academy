@@ -10,7 +10,10 @@ from __future__ import annotations
 MATH_FORMAT = (
     "Formatting: Markdown. Math only as $...$ (inline) or $$...$$ (display) — never \\( \\), \\[ \\] or bare LaTeX. "
     "Keep the author's notation (e.g. $\\mathbf{F}^n$, $\\mathbf{C}$, 'list', 'length'). Words go outside math: no "
-    "\\text{...} phrases inside $...$ (they cannot wrap on a phone)."
+    "\\text{...} phrases inside $...$ (they cannot wrap on a phone). More than two supplied rules, cases or facts are "
+    "laid out as a Markdown table or a list — one rule per row or line, at most two short statements on a line — never "
+    "one run-on sentence (the learner, 2026-10-11, could not read Exercise 1B.6's ten rules in one sentence; a table of "
+    "scalar multiplication by sign and one of sums read at a glance)."
 )
 
 
@@ -85,13 +88,16 @@ DISTINCT_DEMANDS_RULE = (
     "shown the method once experiences a second identical exercise as pointless drill. Demands to choose from: one "
     "straightforward application of the method (once among the questions served first; otherwise only as a spare); a new case that needs a different thought (a "
     "negative or zero part, a real or pure imaginary number, an edge case); a prediction or decision without the full "
-    "computation (is it real? which sign? which is larger?); spotting the error in a shown working (typed: the "
-    "corrected value; multiple_choice \"which line is wrong\" only when locating the error is itself the demand); a reverse problem (find the missing number or factor that "
+    "computation (is it real? which sign? which is larger?); a reverse problem (find the missing number or factor that "
     "gives a stated result); interpreting a result; deciding which method or fact applies. Questions stay inside the "
     "objective: a different demand, not a new method. Every question needs THIS knowledge point's idea to answer: "
     "not one whose answer follows from a prerequisite or outside fact alone, or is the only special value the prompt "
     'allows (e.g. "for real $a,b$ with $a^2+b^2=0$, what is $b$?" needs only that real squares are nonnegative) — '
-    "make such a question a decision with a near miss that needs the lesson's idea."
+    "make such a question a decision with a near miss that needs the lesson's idea. Ask for the result directly "
+    "(\"Compute …\", \"Enter …\", \"Decide …\"): never open with a wrong claim to correct (\"A student writes … That "
+    "is wrong. Enter the correct …\") — a red herring the learner must read past (the learner, 2026-10-11). Show a wrong "
+    "working only when telling two easily confused moves apart IS the demand (locate the flawed step of an argument, "
+    "or judge one classic slip) — rare."
 )
 
 
@@ -184,7 +190,12 @@ solve before?" — the objective names that problem. Evaluating an expression, c
 or recognising something are steps on the way to such a task: they belong inside the skill that uses them (a
 knowledge point, an inline check, a capstone step), not in a skill of their own — unless the judgement itself is the
 hard part (deciding whether a set with given operations is a vector space; whether a sum is direct). Computing
-$\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$; checking a candidate root is how you confirm the roots you found."""
+$\\beta/\\alpha$ is how you solve $\\alpha z=\\beta$; checking a candidate root is how you confirm the roots you found.
+NOTHING TRIVIAL (the learner, 2026-10-11, after "Compute a supplied candidate's cube"): a task whose method the learner
+already has from earlier mathematics, applied unchanged, is not a skill — cubing a complex number is a positive-integer
+power, and a cube root is the number whose cube is given, as for real numbers. Fold such a task into the skill that
+uses it (a knowledge point, an inline check, a capstone step) or leave it out. Every skill teaches something new at
+this course's level."""
 
 
 PRINCIPLE = """\

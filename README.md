@@ -5,29 +5,26 @@ chapter's pages (text, LaTeX, figures), breaks the material into small skills, w
 each one, and then decides what you should do next based on how you actually answer. It runs on your own machine. You
 bring the book, and either an API key or Claude Code.
 
-![The knowledge map of a course in progress: learned skills in green, lessons in progress in amber, reviews due outlined in orange](docs/screenshots/skill-map.png)
+![The knowledge map of a course in progress: learned skills in green, lessons in progress in amber, reviews due outlined in orange](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/skill-map.png)
 
 *The knowledge map of chapter 1 of Axler's* Linear Algebra Done Right *(the bundled example course), part-way through:
 learned skills in green, lessons in progress in amber, reviews that are due outlined in orange.*
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/course.png" alt="The course page: progress, reviews due, the next quiz, and what to do next"></td>
-    <td width="50%"><img src="docs/screenshots/lesson.png" alt="A lesson: worked teaching with a quick check typed as math"></td>
-  </tr>
-  <tr>
-    <td><b>Course page.</b> Progress, reviews due, the next quiz, and the tasks <b>Continue learning</b> picks next.</td>
-    <td><b>Lesson.</b> Teaching in small steps, with quick checks you answer as math (the preview renders what you type).</td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/review.png" alt="A spaced review question answered correctly"></td>
-    <td><img src="docs/screenshots/quiz.png" alt="A timed quiz question"></td>
-  </tr>
-  <tr>
-    <td><b>Review.</b> Spaced reviews bring each learned skill back with new questions, scheduled by FSRS.</td>
-    <td><b>Quiz.</b> Timed and without help: mixed questions on what you learned lately.</td>
-  </tr>
-</table>
+**Course page:** progress, reviews due, the next quiz, and the tasks **Continue learning** picks next.
+
+![The course page: progress, reviews due, the next quiz, and what to do next](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/course.png)
+
+**Lesson:** teaching in small steps, with quick checks you answer as math (the preview renders what you type).
+
+![A lesson: worked teaching with a quick check typed as math](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/lesson.png)
+
+**Review:** spaced reviews bring each learned skill back with new questions, scheduled by FSRS.
+
+![A spaced review question answered correctly](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/review.png)
+
+**Quiz:** timed and without help, mixed questions on what you learned lately.
+
+![A timed quiz question](https://raw.githubusercontent.com/ysqander/universal-academy/main/docs/screenshots/quiz.png)
 
 **The learning loop**
 

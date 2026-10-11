@@ -961,7 +961,8 @@
   background: var(--success);
 }
 
-.multistep__pips li[data-state="half"] {
+.multistep__pips li[data-state="half"],
+.multistep__pips li[data-state="partial"] {
   background: linear-gradient(90deg, var(--status-progress) 50%, var(--line) 50%);
 }
 
@@ -993,7 +994,8 @@
   animation: fade-up 0.3s var(--ease) both;
 }
 
-.step-trail__item[data-mark="half"] {
+.step-trail__item[data-mark="half"],
+.step-trail__item[data-mark="partial"] {
   --mark: var(--status-progress);
   --mark-bg: var(--status-progress-bg);
 }

@@ -256,7 +256,7 @@ export function MultistepCard({ task, question, position, onAnswered, onContinue
 
 /** An answered step, compact: mark, "Step 1", its result; opens to the step's prompt and explanation. */
 function StepTrailItem({ step, result, revealed }: { step: MultistepStepPublic | undefined; result: StepResult; revealed: boolean }) {
-  const mark = stepMark(result.score, revealed);
+  const mark = stepMark(result.score, revealed, result.correct);
   const tfKey = step?.kind === "true_false_set" ? parseTfKey(result.answer_display, step.choices.length) : null;
   return (
     <li className="step-trail__item" data-mark={mark}>
@@ -276,7 +276,7 @@ function StepTrailItem({ step, result, revealed }: { step: MultistepStepPublic |
         <div className="step-trail__body">
           {step && stepReached(step) && <Markdown className="step-trail__prompt">{step.prompt}</Markdown>}
           {result.explanation.trim() && <Markdown className="step-trail__explanation">{result.explanation}</Markdown>}
-          <p className="step-trail__points">{stepPointsLabel(result.score, revealed)}</p>
+          <p className="step-trail__points">{stepPointsLabel(result.score, revealed, result.correct)}</p>
         </div>
       </details>
     </li>
@@ -429,7 +429,9 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
     tone === "correct"
       ? "Right"
       : tone === "partial"
-        ? "Right"
+        ? result?.correct
+          ? "Right"
+          : "Partly right" // a true/false set with some statements right
         : tone === "neutral"
           ? result?.correct
             ? "Right — after the answer was shown"
@@ -547,9 +549,13 @@ function StepCard({ taskId, questionId, step, index, total, result, revealed, hi
         {result && (
           <div ref={resultRef} className="step-card__result reveal">
             <p className="step-card__verdict">
-              <Icon name={tone === "correct" || tone === "partial" ? "check" : tone === "neutral" ? "eye" : "x"} size={16} strokeWidth={2.25} />
+              <Icon
+                name={tone === "correct" || (tone === "partial" && result.correct) ? "check" : tone === "partial" ? "steps" : tone === "neutral" ? "eye" : "x"}
+                size={16}
+                strokeWidth={2.25}
+              />
               <span>{verdict}</span>
-              <span className="step-card__points">{stepPointsLabel(result.score, shown)}</span>
+              <span className="step-card__points">{stepPointsLabel(result.score, shown, result.correct)}</span>
             </p>
             {/* A right step's feedback only restates the points line ("With the hint, so half a point"). */}
             {feedback && !shown && !result.correct && <Markdown className="step-card__feedback">{feedback}</Markdown>}

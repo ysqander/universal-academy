@@ -390,6 +390,10 @@
   border-left-color: var(--danger);
 }
 
+.quiz-result[data-mark="partial"] {
+  border-left-color: var(--warning);
+}
+
 .quiz-result__head {
   display: flex;
   flex-wrap: wrap;
@@ -417,6 +421,11 @@
 .quiz-result[data-mark="incorrect"] .quiz-result__mark {
   background: var(--danger-bg);
   color: var(--danger);
+}
+
+.quiz-result[data-mark="partial"] .quiz-result__mark {
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 .quiz-result__n {

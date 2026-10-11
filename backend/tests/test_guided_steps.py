@@ -30,7 +30,7 @@ SCORED = [2, 3, 4, 5, 6, 7]
 RIGHT = {2: {"response": "-6"}, 3: {"response": "1+7*i"}, 4: {"response": "4"}, 5: {"choice": 2}, 6: {"choice": 1},
          7: {"response": "FTT"}}  # fmt: skip
 WRONG = {2: {"response": "6"}, 3: {"response": "3+7*i"}, 4: {"response": "5"}, 5: {"choice": 0}, 6: {"choice": 0},
-         7: {"response": "TTT"}}  # fmt: skip
+         7: {"response": "TFF"}}  # fmt: skip  (every mark wrong: a set with some right earns their share)
 
 
 @pytest.fixture

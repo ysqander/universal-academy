@@ -637,15 +637,21 @@ def test_true_false_set_wrong_number_of_marks_is_invalid(response: str, marked: 
     assert result.feedback == f"Mark every statement true or false (3 statements). You marked {marked}."
 
 
-def test_true_false_set_feedback_names_the_statements_marked_wrong() -> None:
-    assert tf_set("FTT", "TFT").feedback == "Statement 1 is actually false; statement 2 is actually true."
-    assert tf_set("FTT", "FTF").feedback == "Statement 3 is actually true."
-    assert tf_set("FTT", "TFF").feedback == (
-        "Statement 1 is actually false; statement 2 is actually true; statement 3 is actually true."
-    )
+def test_true_false_set_feedback_names_the_statements_marked_wrong_and_credits_the_right_ones() -> None:
+    first = tf_set("FTT", "TFT")
+    assert first.feedback == "1 of 3 statements right: statement 1 is actually false; statement 2 is actually true."
+    assert first.credit == pytest.approx(1 / 3)
+    assert tf_set("FTT", "FTF").feedback == "2 of 3 statements right: statement 3 is actually true."
+    none_right = tf_set("FTT", "TFF")
+    assert none_right.feedback == (
+        "0 of 3 statements right: statement 1 is actually false; statement 2 is actually true; statement 3 is actually true."
+    ) and none_right.credit == 0
     one = tf_set("TFTTF", "TFTTT")
-    assert not one.correct and not one.invalid and one.feedback == "Statement 5 is actually false."
-    assert tf_set("T", "F").feedback == "Statement 1 is actually true."
+    assert not one.correct and not one.invalid and one.feedback == "4 of 5 statements right: statement 5 is actually false."
+    assert one.credit == pytest.approx(0.8)
+    # one or two statements: a choice question, all or nothing (one right of two is what a coin flip gets)
+    assert tf_set("T", "F").feedback == "Statement 1 is actually true." and tf_set("T", "F").credit is None
+    assert tf_set("TF", "TT").feedback == "Statement 2 is actually false." and tf_set("TF", "TT").credit is None
     singular = tf_set("T", "TF")
     assert singular.invalid and singular.feedback == "Mark every statement true or false (1 statement). You marked 2."
 

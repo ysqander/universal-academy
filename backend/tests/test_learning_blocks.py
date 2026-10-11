@@ -153,8 +153,8 @@ def nothing_recorded() -> None:
         (6, {"choice": 0}, False, "Not this option."),
         (7, {"response": "FTT"}, True, "Correct."),
         (7, {"response": "false, true, true"}, True, "Correct."),
-        (7, {"response": "TTT"}, False, "Statement 1 is actually false."),
-        (7, {"response": "T F T"}, False, "Statement 1 is actually false; statement 2 is actually true."),
+        (7, {"response": "TTT"}, False, "2 of 3 statements right: statement 1 is actually false."),
+        (7, {"response": "T F T"}, False, "1 of 3 statements right: statement 1 is actually false; statement 2 is actually true."),
     ],
 )  # fmt: skip
 def test_inline_check_grades_every_kind(client: TestClient, index: int, body: dict, correct: bool, feedback: str) -> None:
@@ -439,11 +439,13 @@ def test_lesson_with_true_false_set_questions() -> None:
     assert not db.query("SELECT 1 FROM attempts WHERE task_id = ?", (task_id,))
 
     missed = engine.submit_answer(task_id, AnswerSubmit(question_id=first.id, response="T T T"), T0)
-    assert not missed.correct and missed.status == "incorrect" and not missed.independent
-    assert missed.feedback.startswith("Statement 1 is actually false.") and "One more question" in missed.feedback
+    # two of three marks right: 2/3 of a point, and still a miss (one extra question follows)
+    assert not missed.correct and missed.status == "partial" and not missed.independent
+    assert missed.feedback.startswith("2 of 3 statements right: statement 1 is actually false.")
+    assert "One more question" in missed.feedback
     assert missed.correct_answer == "False, true, true" and missed.correct_choice is None and missed.solution
 
-    assert missed.score == 0 and missed.task.progress.kp_target == 3  # one extra question after the miss
+    assert missed.score == pytest.approx(2 / 3) and missed.task.progress.kp_target == 3
 
     second = missed.task.question
     a = engine.submit_answer(task_id, right(second.id), T0)
@@ -453,7 +455,7 @@ def test_lesson_with_true_false_set_questions() -> None:
     task = b.task
     while task.phase != "done":
         task = engine.submit_answer(task_id, right(task.question.id), T0).task
-    assert task.outcome == "passed" and task.progress.score == pytest.approx(0.8)
+    assert task.outcome == "passed" and task.progress.score == pytest.approx((4 + 2 / 3) / 5)
     attempts = db.query("SELECT response, correct, independent FROM attempts WHERE task_id = ? ORDER BY created_at, rowid", (task_id,))
     assert [(r["response"], r["correct"], r["independent"]) for r in attempts[:3]] == [
         ("T T T", 0, 0), ("TFT", 1, 1), ("TTF", 1, 1)

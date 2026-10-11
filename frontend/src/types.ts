@@ -287,11 +287,12 @@ export interface MultistepStepPublic {
 export interface StepResult {
   index: number;
   correct: boolean;
-  score: number; // 1 independent, 0.5 with the hint, 0 wrong
+  score: number; // 1 independent, 0.5 with the hint, a true/false set's share of right statements, 0 wrong
   feedback: string;
   answer_display: string;
   explanation: string;
   revealed?: boolean; // the step's answer was shown ("Show solution"): 0 points (older servers: absent)
+  hinted?: boolean; // the step's hint was used: at most ½ point (older servers: absent)
 }
 
 export interface QuestionPublic {
@@ -341,7 +342,7 @@ export interface GuidedCheckState {
   first_response: string | null; // the wrong first answer (choice checks: the option index as a string)
   response: string | null; // done: the answer that ended the check (null: the answer was shown instead)
   correct: boolean | null; // done: whether that answer was right (null: shown without an answer)
-  points: number | null; // done: 1 first try / 0.5 second try / 0
+  points: number | null; // done: 1 first try / 0.5 second try / a set wrong twice: half its right statements' share / 0
   revealed: boolean; // done through "Show answer"
   feedback: string; // the grader's message for the last answer
   hint: string; // sent once the first answer was wrong
@@ -575,7 +576,7 @@ export interface AnswerSubmit {
 export interface AnswerResult {
   correct: boolean;
   // "step": a multistep step, more to come; "recorded": a quiz answer was saved (correctness shown at the end)
-  status: "correct" | "incorrect" | "self_graded" | "voided" | "step" | "recorded";
+  status: "correct" | "incorrect" | "partial" | "self_graded" | "voided" | "step" | "recorded"; // partial: some statements of a true/false set right
   independent: boolean;
   feedback: string;
   correct_answer: string;

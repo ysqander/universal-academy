@@ -9,6 +9,14 @@ export const DEFAULT_PASS_MARK = 0.8;
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0);
 const num = (n: unknown): number => (typeof n === "number" && Number.isFinite(n) ? n : 0);
 
+/** Points as the learner reads them: halves as "2½" / "½" / "3", any other share (a true/false set's right statements,
+ * 3 of 4 → 0.75) with up to two decimals: "0.75", "2.67". */
+export function formatPoints(value: number): string {
+  const v = Math.max(0, num(value));
+  if (Math.abs(v * 2 - Math.round(v * 2)) < 1e-6) return halves(v);
+  return v.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 /** A count in halves: 2.5 → "2½", 0.5 → "½", 3 → "3" (rounded to the nearest half). */
 export function halves(value: number): string {
   const doubled = Math.round(Math.max(0, num(value)) * 2);
@@ -120,10 +128,10 @@ export function scoreView(progress: Partial<TaskProgress>, end?: TaskEnd | null)
     const secured = points + 1e-9 >= passPoints;
     return {
       hasScore, fraction, fill: clamp01(points / plannedPoints), passMark, answered, planned, remainingLabel, halted,
-      label: `${halves(points)} of ${halves(plannedPoints)} points`,
+      label: `${formatPoints(points)} of ${formatPoints(plannedPoints)} points`,
       passLabel: `pass at ${halves(passPoints)}`,
       tone: secured ? "pass" : "none",
-      ariaText: `${halves(points)} of ${halves(plannedPoints)} points so far; ${halves(passPoints)} needed to pass.`,
+      ariaText: `${formatPoints(points)} of ${formatPoints(plannedPoints)} points so far; ${halves(passPoints)} needed to pass.`,
     };
   }
   const tone = !hasScore ? "none" : fraction + 1e-9 >= passMark ? "pass" : "below";
@@ -198,6 +206,7 @@ export function pointsLabel(result: ScoredResult, revealed = false): string | nu
   const points = questionPoints(result);
   if (points >= 1) return "1 point";
   if (points > 0) {
+    if (result.status === "partial") return `${formatPoints(points)} point — partly right`;
     if (result.status === "self_graded" && !result.correct) return `${halves(points)} point — partly right`;
     return `${halves(points)} point — with a hint`;
   }
@@ -211,10 +220,14 @@ export function pointsLabel(result: ScoredResult, revealed = false): string | nu
 export const hintTotal = (question: Pick<QuestionPublic, "hints"> & { hint_count?: number | null }, shown = 0): number =>
   Math.max(Math.round(num(question.hint_count)), question.hints.length, shown);
 
-/** One multistep step: "1 point", "½ point — with the hint", "0 points — solution shown", "0 points". */
-export function stepPointsLabel(score: number, revealed = false): string {
+/** One multistep step: "1 point", "½ point — with the hint", "0.75 point — partly right" (a true/false set's right
+ * statements), "0 points — solution shown", "0 points". `correct`: the step's verdict — a step that earned points
+ * without being right is a set with some statements right, even at exactly ½ (2 of 4). */
+export function stepPointsLabel(score: number, revealed = false, correct?: boolean | null): string {
   if (score >= 1) return "1 point";
-  if (score > 0) return "½ point — with the hint";
+  if (score > 0 && correct === false) return `${formatPoints(score)} point — partly right`;
+  if (Math.abs(score - 0.5) < 1e-9) return "½ point — with the hint";
+  if (score > 0) return `${formatPoints(score)} point — partly right`;
   return revealed ? "0 points — solution shown" : "0 points";
 }
 

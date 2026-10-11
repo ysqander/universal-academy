@@ -54,6 +54,7 @@ function toneOf(result: AnswerResult, steps: StepsSummary | null): Tone {
   }
   // Help used is said once, in the points line under the title ("½ point — with a hint").
   if (result.correct) return { tone: "correct", icon: "check", title: "Correct", note: null };
+  if (result.status === "partial") return { tone: "partial", icon: "steps", title: "Partly right", note: null };
   if (result.status === "self_graded") {
     return { tone: "incorrect", icon: "review", title: "Not there yet", note: "Compare your answer with the model solution below." };
   }

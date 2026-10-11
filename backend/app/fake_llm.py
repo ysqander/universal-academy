@@ -332,6 +332,17 @@ def _kp_complex(seed: int) -> KnowledgePointDraft:
                 targets="product formula; the sign of the $bd$ term",
             ),
             _question(
+                key="k1q3",
+                tier=2,
+                kind="numeric",
+                prompt=f"What is the real part of $({_cx(e, f)})({_cx(g, h)})$?" + _marker(None, str(re2)),
+                answer=str(re2),
+                answer_display=f"${re2}$",
+                hints=["The real part is $ac-bd$.", f"Here $ac={e * g}$.", f"$bd={f * h}$, so subtract."],
+                solution=f"The real part is ${e}\\cdot{g}-({f})({h})={re2}$.",
+                targets="real part of a product",
+            ),
+            _question(
                 key="k1q2",
                 tier=1,
                 kind="true_false_set",
@@ -353,17 +364,6 @@ def _kp_complex(seed: int) -> KnowledgePointDraft:
                     "3. True: multiplying by $0$ gives $0$."
                 ),
                 targets="using $i^2=-1$; which claims about products hold",
-            ),
-            _question(
-                key="k1q3",
-                tier=2,
-                kind="numeric",
-                prompt=f"What is the real part of $({_cx(e, f)})({_cx(g, h)})$?" + _marker(None, str(re2)),
-                answer=str(re2),
-                answer_display=f"${re2}$",
-                hints=["The real part is $ac-bd$.", f"Here $ac={e * g}$.", f"$bd={f * h}$, so subtract."],
-                solution=f"The real part is ${e}\\cdot{g}-({f})({h})={re2}$.",
-                targets="real part of a product",
             ),
             _question(
                 key="k1q4",

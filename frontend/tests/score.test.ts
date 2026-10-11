@@ -334,3 +334,18 @@ test("scoreView during a task: points against the plan's points, the pass line i
   assert.equal(scoreView(progress({ answered: 4, planned: 4, points: 5, max_points: 6, score: 5 / 6, planned_points: 6 })).label, "Score 83%");
   assert.equal(scoreView(progress({ answered: 2, planned: 4, points: 2, max_points: 2, score: 1 })).label, "Score 100%");
 });
+
+test("partial credit: points with decimals, 'partly right' labels", async () => {
+  const { formatPoints, pointsLabel, stepPointsLabel } = await import("../src/lib/score.ts");
+  assert.equal(formatPoints(0.75), "0.75");
+  assert.equal(formatPoints(2 / 3), "0.67");
+  assert.equal(formatPoints(2.5), "2½");
+  assert.equal(formatPoints(3), "3");
+  assert.equal(pointsLabel({ status: "partial", correct: false, independent: false, score: 0.75 }), "0.75 point — partly right");
+  assert.equal(stepPointsLabel(0.75), "0.75 point — partly right");
+  assert.equal(stepPointsLabel(0.5), "½ point — with the hint");
+  // 2 of 4 statements right without a hint is also ½: the verdict tells them apart
+  assert.equal(stepPointsLabel(0.5, false, false), "½ point — partly right");
+  assert.equal(stepPointsLabel(0.5, false, true), "½ point — with the hint");
+  assert.equal(stepPointsLabel(0.375, false, false), "0.38 point — partly right");
+});

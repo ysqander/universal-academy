@@ -91,16 +91,17 @@ export function quizPosition(task: Pick<Task, "progress" | "quiz">): { index: nu
 
 // ---------- results ----------
 
-export type QuizMark = "correct" | "incorrect" | "passed";
+export type QuizMark = "correct" | "partial" | "incorrect" | "passed";
 
-/** ✓ right, ✗ wrong, – passed (or the time ran out before it was answered). */
+/** ✓ right, ◐ partly right (some statements of a true/false set), ✗ wrong, – passed (or the time ran out first). */
 export function resultMark(result: Pick<QuizQuestionResult, "answered" | "score">): QuizMark {
   if (!result.answered) return "passed";
-  return result.score >= 1 - 1e-9 ? "correct" : "incorrect";
+  if (result.score >= 1 - 1e-9) return "correct";
+  return result.score > 1e-9 ? "partial" : "incorrect";
 }
 
-export const QUIZ_MARK_GLYPH: Record<QuizMark, string> = { correct: "✓", incorrect: "✗", passed: "–" };
-export const QUIZ_MARK_LABEL: Record<QuizMark, string> = { correct: "Right", incorrect: "Not right", passed: "No answer" };
+export const QUIZ_MARK_GLYPH: Record<QuizMark, string> = { correct: "✓", partial: "◐", incorrect: "✗", passed: "–" };
+export const QUIZ_MARK_LABEL: Record<QuizMark, string> = { correct: "Right", partial: "Partly right", incorrect: "Not right", passed: "No answer" };
 
 /** An unanswered question: passed (or on screen when the time ran out), or never reached (no time spent on it). */
 export const noAnswerLabel = (result: Pick<QuizQuestionResult, "seconds">): string =>
@@ -112,7 +113,7 @@ export interface QuizSummary {
   incorrect: number;
   /** Not answered: passed, or the time ran out first. */
   passed: number;
-  /** Score 0–1 (each question 1 or 0). */
+  /** Score 0–1 (each question 1, its share of right statements, or 0). */
   fraction: number;
   /** Reached the pass mark (80 %). */
   pass: boolean;
@@ -129,12 +130,18 @@ export interface QuizSummary {
 export function quizSummary(results: readonly Pick<QuizQuestionResult, "answered" | "score">[], fallbackScore = 0): QuizSummary {
   const marks = results.map(resultMark);
   const correct = marks.filter((m) => m === "correct").length;
+  const partial = marks.filter((m) => m === "partial").length;
   const incorrect = marks.filter((m) => m === "incorrect").length;
   const passed = marks.filter((m) => m === "passed").length;
   const total = results.length;
   const points = results.reduce((sum, r) => sum + Math.min(1, Math.max(0, Number.isFinite(r.score) ? r.score : 0)), 0);
   const fraction = total > 0 ? points / total : Math.min(1, Math.max(0, Number.isFinite(fallbackScore) ? fallbackScore : 0));
-  const parts = [correct ? `${correct} right` : "", incorrect ? `${incorrect} not right` : "", passed ? `${passed} unanswered` : ""].filter(Boolean);
+  const parts = [
+    correct ? `${correct} right` : "",
+    partial ? `${partial} partly right` : "",
+    incorrect ? `${incorrect} not right` : "",
+    passed ? `${passed} unanswered` : "",
+  ].filter(Boolean);
   return {
     total,
     correct,

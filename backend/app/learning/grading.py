@@ -7,7 +7,9 @@ Public interface (stable):
     true_false_set_display(answer) -> str                   # 'FTT' -> '1 False · 2 True · 3 True'
     true_false_set_request(answer) -> str                   # 'Mark every statement true or false (3 statements).'
 
-true_false_set ("mark each statement true or false"): the key is one letter per statement, in order ('FTT'). The
+true_false_set ("mark each statement true or false"): the key is one letter per statement, in order ('FTT'). Each
+statement scores on its own from 3 statements up: 3 of 4 right earns 3/4 of the question (GradeResult.credit); a
+two-statement set stays all or nothing (a coin flip). The
 learner's response is read from T/F/true/false only — glued ('TFT'), separated ('T F T', 't,f,t', 'true false true')
 and optionally numbered ('1. T 2. F 3. T'); anything else, or a different number of marks, is invalid (asked again,
 never counted). A wrong answer names exactly the statements marked wrong ("Statement 2 is actually false; statement 3
@@ -89,6 +91,9 @@ class GradeResult:
     correct: bool
     feedback: str
     invalid: bool = False  # the learner's input could not be read at all (ask again; don't count it)
+    # share of the question earned when it is not fully right: a true_false_set scores each statement (the learner,
+    # 2026-10-11: "each true or false scored separately"); None = 1 when correct, 0 otherwise
+    credit: float | None = None
 
 
 class AnswerParseError(ValueError):
@@ -1490,8 +1495,12 @@ def _check_true_false_set(answer: str, response: str | None) -> GradeResult:
     if not wrong:
         return GradeResult(True, "Correct.")
     parts = [f"statement {k + 1} is actually {'true' if key[k] == 'T' else 'false'}" for k in wrong]
-    text = "; ".join(parts)
-    return GradeResult(False, text[0].upper() + text[1:] + ".")
+    right = len(key) - len(wrong)
+    if len(key) < 3:  # two statements are a choice question: one right is what a coin flip gets — no partial credit
+        text = "; ".join(parts)
+        return GradeResult(False, text[0].upper() + text[1:] + ".")
+    text = f"{right} of {len(key)} statements right: " + "; ".join(parts) + "."
+    return GradeResult(False, text, credit=right / len(key))
 
 
 def check_answer(

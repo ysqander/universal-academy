@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     question_id TEXT NOT NULL REFERENCES questions(id),
     skill_id TEXT NOT NULL REFERENCES skills(id),
     correct INTEGER NOT NULL,
-    status TEXT NOT NULL,                          -- correct | incorrect | self_graded | voided
+    status TEXT NOT NULL,                          -- correct | incorrect | partial (a true/false set) | self_graded | voided
     independent INTEGER NOT NULL DEFAULT 0,
     response TEXT NOT NULL DEFAULT '',
     hints_used INTEGER NOT NULL DEFAULT 0,

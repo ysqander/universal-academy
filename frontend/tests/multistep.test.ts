@@ -216,3 +216,14 @@ test("a variant resumed after leaving restores its trail at the step it stopped 
   assert.equal(stepReached(served[3]), false);
   assert.deepEqual(stepPips(trail), ["full", "half", "current", "todo"]);
 });
+
+test("a true/false set step with some statements right is 'partly right', not 'right with the hint'", () => {
+  const partly: StepResult = { ...result(0, 0.75), correct: false };
+  assert.equal(stepMark(partly.score, false, partly.correct), "partial");
+  assert.equal(STEP_MARK_LABEL.partial, "partly right");
+  assert.equal(stepMark(0.5, false, true), "half"); // right with the hint
+  assert.equal(stepMark(0.5, false, false), "partial"); // 2 of 4 statements right, no hint
+  const trail = initialTrail({ steps, step_index: 1, step_results: [partly] });
+  assert.deepEqual(stepPips(trail), ["partial", "current", "todo"]);
+  assert.equal(stepsSummary([partly], 3), "0.75 of 3 steps");
+});

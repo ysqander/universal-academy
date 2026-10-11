@@ -34,7 +34,8 @@ review  {"set": [qid...], "pos", "current", ...per-question records as above...,
          "log": [{"q", "kp", "res", "credit", "pts", "w", "ok", "void", "cap"}], "self_grades",
          "result": {..., "fire": [implicit events]}}
 
-res: correct (independent) | assisted (correct with help) | partial (multistep, some steps missed) | wrong.
+res: correct (independent) | assisted (correct with help) | partial (multistep, some steps missed; a true/false set with
+some statements right) | wrong.
 States written by earlier versions (no "pts"/"w"/"targets"/"stage", or no keys at all) are completed on load:
 points come from the task's attempts rows (independent 1, correct without reveal 0.5, else 0; self-graded
 free response from its grade), targets from the lesson (2 for legacy lessons).
@@ -1575,7 +1576,8 @@ def _guided_target(task_id: str, index: int, version: str | None) -> tuple[dict,
 def _guided_entry(index: int, rec: dict[str, Any]) -> dict[str, Any]:
     """A done guided step in the lesson log: scored like a question of weight 1."""
     pts = float(rec.get("pts") or 0.0)
-    res = "correct" if pts >= 1 - EPS else "assisted" if rec.get("correct") else "wrong"
+    # a statement set wrong twice still earns its right statements' share: partly right, not wrong
+    res = "correct" if pts >= 1 - EPS else "assisted" if rec.get("correct") else "partial" if pts > EPS else "wrong"
     return {
         "q": f"block:{index}", "kp": -1, "res": res, "pts": pts, "w": 1, "ok": bool(rec.get("correct")),
         "void": False, "scaffold": False, "cap": False, "guided": True,
@@ -1612,13 +1614,26 @@ def check_guided(task_id: str, index: int, body: BlockCheckRequest, now: datetim
         if not scored:
             rec.update(status="done", response=response, correct=result.correct, pts=None, feedback=result.feedback)
         elif result.correct:
-            pts = 1.0 if tries == 0 else HINT_POINTS
-            note = "" if tries == 0 else " On the second try, so ½ point."
+            # a second try earns ½ — or what a partly right first try earned, if that was more
+            first = float(rec.get("first_pts") or 0.0)
+            pts = 1.0 if tries == 0 else max(HINT_POINTS, first)
+            note = "" if tries == 0 else f" On the second try, so {_points_text(pts)}."
             rec.update(status="done", response=response, correct=True, pts=pts, feedback=result.feedback + note)
         elif tries == 0 and guided.second_try(check):
-            rec.update(status="retry", first_response=response, feedback=guided.not_yet_feedback(check, result))
+            # a partly right true_false_set keeps its share in case the second try earns less (it is never named)
+            rec.update(status="retry", first_response=response, feedback=guided.not_yet_feedback(check, result),
+                       first_pts=_points(False, 0, False, result.credit))  # fmt: skip
         else:
-            rec.update(status="done", response=response, correct=False, pts=0.0, feedback=result.feedback)
+            first = float(rec.get("first_pts") or 0.0)
+            now_pts = _points(False, tries, False, result.credit)  # a true_false_set's right statements (½ on a retry)
+            pts = max(first, now_pts)
+            if pts <= EPS:
+                note = ""
+            elif first > now_pts:
+                note = f" {_points_text(pts)}, kept from your first try."
+            else:
+                note = f" {_points_text(pts)} for the statements you got right" + (" (halved: second try)." if tries else ".")
+            rec.update(status="done", response=response, correct=False, pts=pts, feedback=result.feedback + note)
         if scored and rec["status"] == "done":
             st["log"].append(_guided_entry(index, rec))
         _save_state(task["id"], st)
@@ -1805,10 +1820,19 @@ def _step_check(step: dict[str, Any], sub: AnswerSubmit) -> grading.GradeResult 
     )
 
 
-def _points(correct: bool, hints: int, revealed: bool) -> float:
-    if revealed or not correct:
+def _points(correct: bool, hints: int, revealed: bool, credit: float | None = None) -> float:
+    """1 for a right answer, ½ with a hint, 0 after the solution was shown. A true_false_set that is not fully right
+    earns its share of right statements (`credit`, from the grader), halved with a hint as well."""
+    if revealed:
         return 0.0
-    return HINT_POINTS if hints > 0 else 1.0
+    earned = 1.0 if correct else max(0.0, min(1.0, credit or 0.0))
+    return earned * (HINT_POINTS if hints > 0 else 1.0)
+
+
+def _points_text(points: float) -> str:
+    """"0.75 point", "½ point", "1.5 points"."""
+    value = "½" if abs(points - 0.5) < EPS else f"{points:.2f}".rstrip("0").rstrip(".")
+    return f"{value} point{'' if points <= 1 + EPS else 's'}"
 
 
 def _carried(st: dict[str, Any]) -> str | None:
@@ -1861,11 +1885,13 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit, st: dict[str, Any], check: grad
             raise Invalid(check.feedback)
         correct, feedback = check.correct, check.feedback
     independent = correct and hints == 0 and not revealed
-    res = "correct" if independent else ("assisted" if correct else "wrong")
+    pts = _points(correct, hints, revealed, check.credit if check is not None else None)
+    partly = not correct and pts > EPS  # some statements of a true_false_set right
+    res = "correct" if independent else ("assisted" if correct else "partial" if partly else "wrong")
     response = str(sub.choice) if _is_choice(q) and sub.choice is not None else (sub.response or "")
     return _Graded(
-        correct, "correct" if correct else "incorrect", independent, feedback, res, response, revealed, hints,
-        _points(correct, hints, revealed), seconds, carried,
+        correct, "correct" if correct else "partial" if partly else "incorrect", independent, feedback, res, response,
+        revealed, hints, pts, seconds, carried,
     )  # fmt: skip
 
 
@@ -1880,7 +1906,9 @@ def _grade_step(index: int, step: dict[str, Any], sub: AnswerSubmit, st: dict[st
         if check.invalid:
             raise Invalid(check.feedback)
         correct, feedback = check.correct, check.feedback
-    score = _points(correct, int(hinted), revealed)
+    score = _points(correct, int(hinted), revealed, check.credit if check is not None else None)
+    if not correct and score > EPS:
+        feedback += f" {_points_text(score)} for this step."
     if correct and revealed:
         feedback += " The answer was shown first, so no point for this step."
     elif correct and hinted:
@@ -2060,6 +2088,8 @@ def _commit_answer(
         feedback += _CARRIED_NOTE[graded.carried]
     elif graded.res == "assisted" and q["kind"] != "multistep":
         feedback += _assisted_note(graded.revealed, helped=graded.revealed or graded.hints > 0)
+    elif graded.res == "partial" and graded.hints > 0 and q["kind"] != "multistep":
+        feedback += f" With a hint, so half of that share: {_points_text(graded.pts)}."
     if q["kind"] == "free_response" and sub.self_grade == "incorrect" and task["status"] == "active":
         feedback = feedback.rstrip(".") + ", then try the next one."
     if step is not None:

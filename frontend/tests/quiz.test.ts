@@ -352,3 +352,16 @@ test("a quiz that ran out while away: remembered per course until its results we
   forgetOpenQuiz("c1", blocked);
   assert.equal(openQuizId("c1", null), null);
 });
+
+test("a partly right quiz answer: its own mark, counted in the points", async () => {
+  const { quizSummary, resultMark } = await import("../src/lib/quiz.ts");
+  assert.equal(resultMark({ answered: true, score: 0.75 }), "partial");
+  const summary = quizSummary([
+    { answered: true, score: 1 },
+    { answered: true, score: 0.75 },
+    { answered: true, score: 0 },
+    { answered: false, score: 0 },
+  ]);
+  assert.equal(summary.fraction, 1.75 / 4);
+  assert.equal(summary.breakdown, "1 right · 1 partly right · 1 not right · 1 unanswered");
+});

@@ -36,9 +36,9 @@ _COUNT_THE_TRUE = re.compile(
 
 
 def is_choice_based(kind: str, n_choices: int = 0) -> bool:
-    """Guessable formats that count toward the choice-question cap: multiple choice, true/false, and a
-    true_false_set of only 2 statements (with 3 or more, guessing every letter right is unlikely)."""
-    return kind in CHOICE_KINDS or (kind == "true_false_set" and n_choices < 3)
+    """Guessable formats that count toward the choice-question cap: multiple choice, true/false and every
+    true_false_set — each statement scores on its own (2026-10-11), so marking at random earns half its points."""
+    return kind in CHOICE_KINDS or kind == "true_false_set"
 
 
 def choice_share(pools: list[list[QuestionDraft]]) -> float:

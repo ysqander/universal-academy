@@ -135,9 +135,10 @@ def right(qid: str, **extra) -> AnswerSubmit:
 
 
 def wrong_response(q: dict) -> str:
-    """A readable but wrong response: a true/false set with its first mark flipped, otherwise a wrong number."""
+    """A readable but wrong response: a true/false set with every mark flipped (a set with some marks right earns their
+    share — tests/test_partial_credit.py), otherwise a wrong number."""
     if q["kind"] == "true_false_set":
-        return ("F" if q["answer"][0] == "T" else "T") + q["answer"][1:]
+        return "".join("F" if c == "T" else "T" for c in q["answer"])
     return "98765"
 
 

@@ -245,7 +245,7 @@ class MultistepStepPublic(BaseModel):
 class StepResult(BaseModel):
     index: int
     correct: bool
-    score: float  # 1 independent, 0.5 with the hint, 0 wrong
+    score: float  # 1 independent, 0.5 with the hint, a true/false set's share of right statements, 0 wrong
     feedback: str
     answer_display: str
     explanation: str
@@ -297,7 +297,9 @@ class GuidedCheckState(BaseModel):
     first_response: str | None = None  # the wrong first answer (retry / done), as typed (choice: the option index)
     response: str | None = None  # done: the answer that ended the check (None: the answer was shown instead)
     correct: bool | None = None  # done: whether that answer was right (None: shown without an answer)
-    points: float | None = None  # done: 1 first try / 0.5 second try / 0 (wrong twice, or "Show answer")
+    # done: 1 first try / 0.5 second try / 0 (wrong twice, or "Show answer"); a statement set wrong twice keeps half
+    # its right statements' share
+    points: float | None = None
     revealed: bool = False  # done through "Show answer"
     feedback: str = ""  # the grader's message for the last answer (a "not yet" never names the wrong statements)
     hint: str = ""  # sent once the first answer was wrong
@@ -521,8 +523,9 @@ class AnswerSubmit(BaseModel):
 
 class AnswerResult(BaseModel):
     correct: bool
-    # "step": a multistep step, more to come; "recorded": a quiz answer was saved — correctness is shown at the end
-    status: Literal["correct", "incorrect", "self_graded", "voided", "step", "recorded"]
+    # "step": a multistep step, more to come; "recorded": a quiz answer was saved — correctness is shown at the end;
+    # "partial": some statements of a true_false_set right (score = their share)
+    status: Literal["correct", "incorrect", "partial", "self_graded", "voided", "step", "recorded"]
     independent: bool  # counted toward passing (no hints, no reveal)
     feedback: str  # short message, e.g. "Equivalent to the expected answer." / "Close: check the sign of the imaginary part."
     correct_answer: str  # answer_display

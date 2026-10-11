@@ -1,6 +1,7 @@
 // Scored guided steps of proof lessons (SPEC §6.3b): the inline checks the learner answers while working through the
 // proof count toward the lesson's 80 % like questions — 1 right first time, ½ right on the second try (typed answers
-// and statement sets get one; a choice check has one try), 0 wrong or after "Show answer" — then one variant problem
+// and statement sets get one; a choice check has one try), 0 wrong or after "Show answer" (a statement set wrong twice
+// keeps half its right statements' share: "Partly right") — then one variant problem
 // (the capstone slot, counting double) ends the lesson. The server keeps each step's record (InlineCheckPublic.state)
 // and sends the blocks after the first open step only once it is done. Everything here is pure formatting of what it
 // sends.
@@ -8,7 +9,7 @@ import type { ChoiceMark } from "../components/answers/AnswerInputs";
 import type { GuidedCheckState, InlineCheckPublic, Lesson, Task, TaskProgress } from "../types";
 import { keyIndexFromText, choiceMarksFromText } from "./choices.ts";
 import { STALE_LESSON_MESSAGE, stripStockVerdict } from "./feedback.ts";
-import { passMarkOf, percentLabel, type Stage } from "./score.ts";
+import { formatPoints, passMarkOf, percentLabel, type Stage } from "./score.ts";
 
 const EPS = 1e-9;
 const num = (n: unknown): number => (typeof n === "number" && Number.isFinite(n) ? n : 0);
@@ -63,14 +64,16 @@ export function stepPoints(state: Pick<GuidedCheckState, "points" | "correct" | 
   return state.tries > 1 ? 0.5 : 1;
 }
 
-/** The points line under a done step: "1 point", "½ point — second try", "0 points — answer shown", "0 points";
- * null for a step not scored this time (or not done yet). */
+/** The points line under a done step: "1 point", "½ point — second try", "0.33 point — partly right" (a statement set
+ * wrong twice keeps half its right statements' share), "0 points — answer shown", "0 points"; null for a step not
+ * scored this time (or not done yet). */
 export function guidedPointsLabel(state: GuidedCheckState | null): string | null {
   if (!state || state.status !== "done" || !state.scored) return null;
   if (state.voided) return "Not counted — the answer key was wrong";
   if (state.revealed) return "0 points — answer shown";
   const points = stepPoints(state);
   if (points >= 1) return "1 point";
+  if (points > 0 && state.correct === false) return `${formatPoints(points)} point — partly right`;
   if (points > 0) return "½ point — second try";
   return "0 points";
 }
@@ -101,6 +104,7 @@ export function guidedVerdict(state: GuidedCheckState | null): GuidedVerdict {
   if (!state.scored) return { tone: "neutral", title: "Not scored this time", points };
   if (state.revealed || state.correct === null) return { tone: "neutral", title: "Answer shown", points };
   if (state.correct) return stepPoints(state) >= 1 ? { tone: "correct", title: "Right", points } : { tone: "partial", title: "Right on the second try", points };
+  if (stepPoints(state) > 0) return { tone: "partial", title: "Partly right", points }; // some statements of a set right
   return { tone: "incorrect", title: "Not quite", points };
 }
 

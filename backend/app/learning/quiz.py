@@ -633,9 +633,10 @@ def _check_current(st: dict[str, Any], sub: AnswerSubmit) -> None:
         raise engine.Conflict("That question is not the current one — reload the quiz.")
 
 
-def _grade(q: dict[str, Any], sub: AnswerSubmit) -> bool:
-    """Correctness of a quiz answer (WITHOUT holding the lock). Unreadable input is a 422 (asked again, like in
-    lessons); a right value that is not simplified scores 0 — the "simplify" message would give the answer away."""
+def _grade(q: dict[str, Any], sub: AnswerSubmit) -> float:
+    """Points of a quiz answer, 0–1 (WITHOUT holding the lock): 1 right, a true_false_set's share of right statements,
+    else 0. Unreadable input is a 422 (asked again, like in lessons); a right value that is not simplified scores 0 —
+    the "simplify" message would give the answer away."""
     if engine._submitted_nothing(q["kind"], sub):
         raise engine.Invalid(engine._nothing_submitted_message(q["kind"], q["answer"]))
 
@@ -647,11 +648,11 @@ def _grade(q: dict[str, Any], sub: AnswerSubmit) -> bool:
 
     result = check(True)
     if not result.invalid:
-        return result.correct
+        return 1.0 if result.correct else max(0.0, min(1.0, result.credit or 0.0))
     if q["kind"] in ("numeric", "expression"):
         loose = check(False)
         if not loose.invalid and loose.correct:
-            return False
+            return 0.0
     raise engine.Invalid(result.feedback)
 
 
@@ -685,7 +686,8 @@ def submit_answer(task_id: str, sub: AnswerSubmit, now: datetime) -> AnswerResul
         _check_open(task, st, now)
         _check_current(st, sub)
         q = engine._question_row(sub.question_id)
-    correct = False if sub.skip else _grade(q, sub)  # SymPy runs outside the lock
+    pts = 0.0 if sub.skip else _grade(q, sub)  # SymPy runs outside the lock
+    correct = pts >= 1 - EPS
     with engine.lock:
         task = engine._task_row(task_id)
         st = load_state(task)
@@ -694,7 +696,7 @@ def submit_answer(task_id: str, sub: AnswerSubmit, now: datetime) -> AnswerResul
         seconds = _seconds(st, now)
         response = "" if sub.skip else _raw_response(q, sub)
         st["log"].append({
-            "q": q["id"], "skill": q["skill_id"], "pts": 1.0 if correct else 0.0, "answered": not sub.skip,
+            "q": q["id"], "skill": q["skill_id"], "pts": pts, "answered": not sub.skip,
             "skipped": bool(sub.skip), "response": response, "seconds": seconds,
         })  # fmt: skip
         _record_attempt(task, q, correct, response, seconds, now)
@@ -752,7 +754,7 @@ def _finish(task: dict[str, Any], st: dict[str, Any], now: datetime, *, timed_ou
     st["served"] = list(dict.fromkeys(st["served"] + st["set"]))  # the results show every question
     live = [e for e in st["log"] if e["q"] not in st["voided"]]
     correct = sum(1 for e in live if e["pts"] >= 1 - EPS)
-    score = correct / len(live) if live else 0.0
+    score = sum(e["pts"] for e in live) / len(live) if live else 0.0  # a true_false_set's right statements count
     minutes = int(st.get("time_limit") or 0) // 60
     amount = xp.quiz_xp(minutes, score)
     missed, credited, effects = _apply_effects(task, live, end)
@@ -900,7 +902,7 @@ def _rescore(task: dict[str, Any], st: dict[str, Any], skill_id: str, now: datet
     result = st["result"]
     live = [e for e in st["log"] if e["q"] not in st["voided"]]
     correct = sum(1 for e in live if e["pts"] >= 1 - EPS)
-    score = correct / len(live) if live else 0.0
+    score = sum(e["pts"] for e in live) / len(live) if live else 0.0  # a true_false_set's right statements count
     if not any(e["skill"] == skill_id for e in live):
         _undo_effects(task, result, skill_id)
     amount =max(int(task["xp_awarded"] or 0), xp.quiz_xp(int(st.get("time_limit") or 0) // 60, score))
@@ -983,7 +985,7 @@ def build_task(task: dict[str, Any], now: datetime | None = None) -> Task:
     entries = [e for e in st["log"] if e["q"] not in voided]
     answered = sum(1 for e in entries if e.get("answered") or e.get("skipped"))
     correct = sum(1 for e in entries if e["pts"] >= 1 - EPS) if finished else 0
-    points = float(correct)
+    points = float(sum(e["pts"] for e in entries)) if finished else 0.0  # a true_false_set's right statements count
     max_points = float(len(live)) if finished else 0.0
     rows = _quiz_rows(task["course_id"]) if finished and st["kind"] == "quiz" else []
     quiz = QuizInfo(

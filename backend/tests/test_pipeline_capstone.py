@@ -107,7 +107,7 @@ def test_v2_lesson_needs_a_valid_multistep_capstone():
     good = draft()
     assert content_problems(good) == []
     no_cap = good.model_copy(deep=True)
-    no_cap.capstone = no_cap.knowledge_points[0].questions[2]  # a plain numeric question
+    no_cap.capstone = next(q for q in no_cap.knowledge_points[0].questions if q.kind == "numeric")  # a plain numeric question
     assert content_problems(no_cap) == ["capstone: must be a multistep question (2–4 guided, machine-checked steps), not numeric"]
     with pytest.raises(InvalidLesson, match="capstone: must be a multistep question"):
         asyncio.run(validate_v2(no_cap, spec, []))

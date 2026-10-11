@@ -2,7 +2,7 @@
 // The learner sees each step's result before the next one; answered steps stay above as a compact trail.
 // The server records every step (QuestionPublic.step_index / step_results), so a reload resumes at the right step.
 import type { AnswerResult, MultistepStepPublic, QuestionPublic, StepResult } from "../types";
-import { halves } from "./score.ts";
+import { formatPoints } from "./score.ts";
 
 export interface StepTrail {
   total: number;
@@ -70,26 +70,28 @@ export function stepRevealed(result: Pick<StepResult, "correct" | "score" | "fee
 export const revealedStepIndexes = (results: readonly StepResult[]): Set<number> =>
   new Set(results.filter((r) => stepRevealed(r)).map((r) => r.index));
 
-export type StepMark = "full" | "half" | "none" | "shown";
+export type StepMark = "full" | "half" | "partial" | "none" | "shown";
 
-/** `revealed`: the step's solution was shown (0 points) — said as such, not as a wrong answer. */
-export const stepMark = (score: number, revealed = false): StepMark =>
-  score >= 1 ? "full" : score > 0 ? "half" : revealed ? "shown" : "none";
+/** `revealed`: the step's solution was shown (0 points) — said as such, not as a wrong answer. `correct`: the step's
+ * verdict — points without a right answer are a true/false set's right statements ("partly right"), not the hint's ½. */
+export const stepMark = (score: number, revealed = false, correct?: boolean | null): StepMark =>
+  score >= 1 ? "full" : score > 0 ? (correct === false ? "partial" : "half") : revealed ? "shown" : "none";
 
-export const STEP_MARK_GLYPH: Record<StepMark, string> = { full: "✓", half: "½", none: "✗", shown: "–" };
+export const STEP_MARK_GLYPH: Record<StepMark, string> = { full: "✓", half: "½", partial: "◐", none: "✗", shown: "–" };
 
 export const STEP_MARK_LABEL: Record<StepMark, string> = {
   full: "right",
   half: "right with the hint",
+  partial: "partly right",
   none: "not right",
   shown: "solution shown (0 points)",
 };
 
-/** Step points earned so far (1 / 0.5 / 0 each). */
+/** Step points earned so far (1 / 0.5 / a true/false set's share of right statements / 0 each). */
 export const earnedSteps = (results: readonly StepResult[]): number => results.reduce((sum, r) => sum + Math.min(1, Math.max(0, r.score || 0)), 0);
 
 /** "2½ of 3 steps". */
-export const stepsSummary = (results: readonly StepResult[], total: number): string => `${halves(earnedSteps(results))} of ${total} steps`;
+export const stepsSummary = (results: readonly StepResult[], total: number): string => `${formatPoints(earnedSteps(results))} of ${total} steps`;
 
 /** Pips over the steps: answered ones carry their mark, then the current one, then the rest. `revealed`: steps whose
  * solution was shown. */
@@ -97,7 +99,7 @@ export function stepPips(state: StepTrail, revealed: ReadonlySet<number> = new S
   const byIndex = new Map(state.results.map((r) => [r.index, r]));
   return Array.from({ length: state.total }, (_, i) => {
     const r = byIndex.get(i);
-    if (r) return stepMark(r.score, revealed.has(i));
+    if (r) return stepMark(r.score, revealed.has(i), r.correct);
     return i === activeStep(state) ? "current" : "todo";
   });
 }

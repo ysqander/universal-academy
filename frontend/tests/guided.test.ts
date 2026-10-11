@@ -277,3 +277,10 @@ test("no servable variant: no variant in the stepper, the card finishes the less
   assert.equal(end?.text, "80% is out of reach on this attempt. The lesson comes back after a pause with fresh questions.");
   assert.doesNotMatch(end?.text ?? "", /variant/);
 });
+
+test("a statement set wrong twice keeps half its right statements' share: partly right, never '½ point — second try'", () => {
+  const partly = done({ correct: false, tries: 2, points: 1 / 3, first_response: "TTT", response: "TTT" });
+  assert.equal(guidedPointsLabel(partly), "0.33 point — partly right");
+  assert.deepEqual(guidedVerdict(partly), { tone: "partial", title: "Partly right", points: "0.33 point — partly right" });
+  assert.equal(guidedPointsLabel(done({ correct: true, tries: 2, points: 0.5 })), "½ point — second try");
+});

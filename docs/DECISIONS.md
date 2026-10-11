@@ -236,7 +236,8 @@ blocking issues and a proof-track rule broken. Decision: keep the planner and th
   (`scripts/edit_lesson.py`).
 
 - **Typed answers first.** Multiple-choice + true/false together ≤ 40 % of a lesson (drafts above 50 % are rejected).
-  A `true_false_set` with ≥ 3 statements does not count as choice-based. Among the questions **served first** (the
+  Every `true_false_set` counts as choice-based (since 2026-10-11: each statement scores, so marking at random earns
+  half its points; before, a set of ≥ 3 statements did not count). Among the questions **served first** (the
   first `target_questions` of each knowledge point) at most one is choice-based and at least one asks for a typed
   answer (v1 and v2 prompts; a draft-time check for v2) (decided 2026-10-07: with target 1 per point and "no drill", the served questions had drifted to multiple
   choice answerable by elimination). A different demand with a value is typed (prediction → the value, spot the error
@@ -290,6 +291,17 @@ Dropping a step left dangling "the root from Step 2" references in S2d, and a wi
 A step may refer only to earlier steps that exist. Stored lessons: `scripts/regenerate.py --only capstone [--note …]`.
 
 ## 5. Scoring and progression (SPEC §6.3–§6.4)
+
+- **A true/false set scores each statement** (the learner, 2026-10-11: "I hope each true or false is scored
+  separately … and a total is added up"). A set of 3 or more statements earns the share of statements marked right
+  (3 of 4 → 0.75 point; halved with a hint, 0 after the solution) in lessons, reviews, quizzes, multistep steps and
+  scored proof steps; it is "Partly right" (`AnswerResult.status = "partial"`) and still a miss (one extra question
+  in a lesson, a remedial review after a quiz), but not "wrong" (no easier-step offer). A set of 1–2 statements stays
+  all or nothing: one right of two is what a coin flip earns. Until then a set scored 1 only when every statement was
+  right. `grading.GradeResult.credit`; points shown with decimals where needed (`formatPoints`: "0.75", "2½"). A
+  scored proof step keeps the better of its two tries (a partly right first try is never lost to the retry's ½), and
+  the feedback says when a hint halved the share. Because guessing now pays, every true/false set counts toward the
+  choice-question caps (§3).
 
 - **During a task the meter shows points against the plan** (the learner, 2026-10-11: "the score as a % before the
   end of the practice session is meaningless"): "2 of 6 points · pass at 5", the bar filling toward the pass line

@@ -329,8 +329,10 @@ export function GuidedCheck({ version, blockIndex, check, label, guided }: Guide
         {done && (
           <div ref={resultRef} tabIndex={-1} className="inline-check__result reveal">
             <p className="inline-check__verdict">
-              {verdict.tone === "correct" || verdict.tone === "partial" ? (
+              {verdict.tone === "correct" || (verdict.tone === "partial" && state?.correct === true) ? (
                 <Icon name="check" size={16} strokeWidth={2.25} />
+              ) : verdict.tone === "partial" ? (
+                <Icon name="steps" size={16} strokeWidth={2.25} />
               ) : verdict.tone === "incorrect" ? (
                 <Icon name="x" size={16} strokeWidth={2.25} />
               ) : (

@@ -146,15 +146,16 @@ def test_order_free_tuple_answers_become_sets():
     assert clean_question(single).answer == "(1+2*i)"
 
 
-def test_choice_share_counts_true_false_sets_of_two_only():
+def test_choice_share_counts_every_true_false_set():
     three = clean_question(question())
     two = clean_question(question(choices=["$1=1$", "$1=2$"], answer="TF", answer_display="T, F"))
     typed = clean_question(question(kind="numeric", choices=[], answer="3", prompt="Compute $1+2$."))
     mc = clean_question(question(kind="multiple_choice", choices=["a", "b", "c"], correct_choice=0, answer=""))
-    assert choice_share([[three, typed]]) == 0
+    # each statement scores on its own (2026-10-11): marking at random earns half — every set is a choice question
+    assert choice_share([[three, typed]]) == 0.5
     assert choice_share([[two, typed]]) == 0.5
-    assert choice_share([[mc, three, three, typed]]) == 0.25
-    assert not any("multiple choice" in n for n in format_warnings([[three, three, typed]]))
+    assert choice_share([[mc, three, three, typed]]) == 0.75
+    assert not any("multiple choice" in n for n in format_warnings([[three, typed, typed]]))
     assert any("same truth value" in n for n in format_warnings([[clean_question(question(answer="TTT", answer_display="T, T, T"))]]))
 
 

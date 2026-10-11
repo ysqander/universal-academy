@@ -63,7 +63,7 @@ TF_SET_KIND = (
     'true_false_set: "Mark each statement true or false" — choices holds the 2–5 statements (each self-contained, '
     'without its own number); answer = one letter per statement in order, T or F (e.g. "FTT"); correct_choice null; '
     "tolerance null. Mix true and false statements; the hints and the solution address every statement by its "
-    "number (why it is true, or a counterexample). With 3 or more statements it is not a guessable choice question. "
+    "number (why it is true, or a counterexample). Each statement scores on its own, so a true_false_set counts as a choice question (marking at random earns half its points). "
     "Each statement is a complete claim, true or false on its own: never a bare value, vector or input that a phrase "
     "in the prompt completes (the learner, 2026-10-11, misread 'Mark each statement true or false: testing "
     "$1\\otimes v=v$ at this vector exposes the failure' with the statement '$v=(3,3)$' as 'does $1\\otimes v=v$ "
@@ -117,7 +117,7 @@ TYPED_DEMAND_RULE = (
 
 SERVED_FIRST_RULE = (
     "Among the questions served first (the first target_questions of each knowledge point) at most one is "
-    "choice-based (multiple_choice, true_false, or a true_false_set of only 2 statements), and at least one is a typed "
+    "choice-based (multiple_choice, true_false or true_false_set), and at least one is a typed "
     "independent answer (a multistep question counts when at least one of its steps is typed)."
 )
 

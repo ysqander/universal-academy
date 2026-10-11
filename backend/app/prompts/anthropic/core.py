@@ -148,7 +148,7 @@ QUESTIONS
   true_false whose solution gives the reason or a counterexample, or true_false_set for several related claims.
   multiple_choice only when choosing among options IS the skill (which hypothesis is missing, which step is
   invalid, which object fits a definition). Choice-based questions (multiple_choice, true_false and a
-  true_false_set of only 2 statements) are guessable: at most 40% of the lesson's questions, and at most one of
+  true_false_set — each statement scores, so guessing pays) are guessable: at most 40% of the lesson's questions, and at most one of
   each per knowledge point. Even conceptual knowledge points can usually be checked with typed answers: ask for a
   concrete instance (compute the element, give the length, the coordinate, the missing value); "explain why"
   becomes a multistep walkthrough.
@@ -310,7 +310,7 @@ passage and the questions that already exist.
 - Machine-checkable, and the learner produces the answer: computations → numeric/expression,
   conceptual claims → true_false (reason or counterexample in the solution) or true_false_set for several related
   claims, multiple_choice only when choosing is the skill; choice-based questions (multiple_choice, true_false, a
-  true_false_set of only 2 statements) at most 40% — prefer typed answers. {TYPED_DEMAND_RULE} numeric: a plain number in SymPy
+  true_false_set — each statement scores, so guessing pays) at most 40% — prefer typed answers. {TYPED_DEMAND_RULE} numeric: a plain number in SymPy
   syntax. expression: SymPy syntax with ** for powers, * for products, i for the imaginary unit, tuples
   "(1, -2, 3)" for lists, and the prompt states the form to enter. {COMPLEX_FORM_RULE} {UNORDERED_RULE}
   multiple_choice: 3–5 choices with

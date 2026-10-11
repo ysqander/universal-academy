@@ -92,7 +92,7 @@ def _get_client() -> AsyncOpenAI:
     global _client
     if _client is None:
         if not settings.openai_api_key:
-            raise LLMError("OPENAI_API_KEY is not set — enter it with the key icon in the app header (API keys), or add it to .env.")
+            raise LLMError("OPENAI_API_KEY is not set — add it to the .env file in the project root.")
         _client = AsyncOpenAI(api_key=settings.openai_api_key, max_retries=5, timeout=900.0)
     return _client
 
@@ -232,7 +232,7 @@ async def structured(
         except openai.BadRequestError as e:  # not retryable: bad schema / param / image
             raise LLMError(f"OpenAI rejected the request ({model}): {e.message}") from e
         except openai.AuthenticationError as e:
-            raise LLMError("OpenAI authentication failed — check the OpenAI key (key icon in the app header, or OPENAI_API_KEY in .env).") from e
+            raise LLMError("OpenAI authentication failed — check OPENAI_API_KEY in .env.") from e
         except openai.RateLimitError as e:
             if getattr(e, "code", None) == "insufficient_quota":
                 raise LLMError("OpenAI account is out of credits (insufficient_quota).") from e

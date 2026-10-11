@@ -605,7 +605,7 @@ class Health(BaseModel):
     openai: bool
     anthropic: bool = False
     provider: str = "openai"  # UA_LLM_PROVIDER (a role may override it: see models)
-    llm_ready: bool = False  # every provider the roles use has its key, or the fake LLM answers
+    llm_ready: bool = False  # every key a build needs is set (the providers in use + NVIDIA), or the fake LLM answers
     missing_keys: list[str] = []  # e.g. ["ANTHROPIC_API_KEY"]
     nvidia: bool
     fake_llm: bool
@@ -617,36 +617,6 @@ class Health(BaseModel):
 
 Visualization.model_rebuild()
 Lesson.model_rebuild()
-
-
-# ---------- API keys entered in the app (GET/PUT /api/settings/keys; app/api/keys.py) ----------
-
-ApiKeyName = Literal["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "NVIDIA_API_KEY"]
-
-
-class ApiKeyStatus(BaseModel):
-    """One key, never the key itself: set or not, its last 4 characters, and where it comes from."""
-
-    set: bool
-    last4: str | None = None
-    source: Literal["app", "env"] | None = None  # "app": saved in the app (api-keys.json); "env": .env / environment
-
-
-class ApiKeys(BaseModel):
-    keys: dict[ApiKeyName, ApiKeyStatus]
-    provider: Literal["openai", "anthropic"]  # UA_LLM_PROVIDER (a role may override it: see Health.models)
-    agent_route: bool = False  # Claude Code agents answer the model calls: keys are not used
-    fake_llm: bool = False
-    llm_ready: bool = False
-    missing_keys: list[str] = []
-    file: str  # where keys saved in the app are kept (<data dir>/api-keys.json)
-
-
-class ApiKeysUpdate(BaseModel):
-    """PUT /api/settings/keys: any of the keys (an empty string removes the saved one) and/or the provider."""
-
-    keys: dict[ApiKeyName, str] = {}
-    provider: Literal["openai", "anthropic"] | None = None
 
 
 class ExampleCourse(BaseModel):

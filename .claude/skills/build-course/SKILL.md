@@ -1,6 +1,6 @@
 ---
 name: build-course
-description: Build a Universal Academy course with no API key — Claude Code agents answer every model call of the build the app runs (the UA_AGENT_DIR route). Use when the user runs /build-course or asks to build, generate or finish a course through Claude Code.
+description: Build a Universal Academy course with no OpenAI or Anthropic key — Claude Code agents answer every model call of the build the app runs (the UA_AGENT_DIR route). Use when the user runs /build-course or asks to build, generate or finish a course through Claude Code.
 ---
 
 # Build a course through Claude Code
@@ -11,13 +11,15 @@ the requests and one agent answers each (backend/app/agent_llm.py). This skill r
 1. **Find the repo root**: `git rev-parse --show-toplevel` (the folder with `run.sh`). Call it ROOT below.
 
 2. **Check the app**: `curl -s http://127.0.0.1:8000/api/health` (another port if the user set `UA_PORT`). It must
-   answer with `"agent_route": true`.
+   answer with `"agent_route": true` and an empty `"missing_keys"`. If `missing_keys` lists `NVIDIA_API_KEY`, stop and
+   tell the user to add it to `.env` (a free key from https://build.nvidia.com; the page-layout model runs in every
+   build) and restart the app — never read or edit `.env` yourself.
    If it does not answer, or `agent_route` is false, stop and tell the user:
    - stop the app if it runs (Ctrl-C in its terminal), then start it from ROOT with `UA_AGENT_DIR=.agent-broker ./run.sh`;
    - in the app (http://localhost:8000): add the PDF in the Library, pick a chapter, press **Build course**;
    - then run /build-course again (the broker waits about 30 minutes for the first request, so either order works).
 
-3. **Tell the user**, in two lines: the build runs on their Claude Code plan's usage, not an API key; a chapter takes a
+3. **Tell the user**, in two lines: the build runs on their Claude Code plan's usage, not an OpenAI or Anthropic key; a chapter takes a
    while, often hours (one agent per model call: each page, the knowledge graph, every stage of every lesson, the questions and
    their checks). Progress shows in the app's build view. Keep the app and this session open.
 

@@ -93,14 +93,19 @@ def test_an_answer_published_without_validation_is_rejected_and_asked_again(tmp_
     assert "statement" in next((tmp_path / "errors").glob("*.txt")).read_text()  # the rejection was recorded
 
 
-def test_agent_mode_uses_no_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agent_mode_uses_no_llm_key_but_still_needs_the_layout_key(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.config import Settings
 
     monkeypatch.setenv("UA_AGENT_DIR", "/tmp/agents")
+    monkeypatch.setenv("UA_FAKE_LLM", "0")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("NVIDIA_API_KEY", "")
     settings = Settings()
-    assert settings.agent_dir == "/tmp/agents" and settings.llm_ready
-    assert settings.openai_api_key == "" and settings.anthropic_api_key == "" and settings.nvidia_api_key == ""
+    assert settings.agent_dir == "/tmp/agents" and settings.openai_api_key == "" and settings.anthropic_api_key == ""
+    assert settings.missing_keys == ["NVIDIA_API_KEY"] and not settings.llm_ready  # page layout is not an option
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+    settings = Settings()
+    assert settings.nvidia_api_key == "nvapi-test" and settings.missing_keys == [] and settings.llm_ready
 
 
 def _request(root: Path, rid: str) -> Path:

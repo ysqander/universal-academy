@@ -25,7 +25,8 @@ def test_health_names_the_provider_and_the_missing_keys_never_the_keys(monkeypat
     finally:
         object.__setattr__(settings, "fake_llm", True)
         object.__setattr__(settings, "llm_provider", "openai")
-    assert body["provider"] == "anthropic" and body["llm_ready"] is False and body["missing_keys"] == ["ANTHROPIC_API_KEY"]
+    assert body["provider"] == "anthropic" and body["llm_ready"] is False
+    assert body["missing_keys"] == ["ANTHROPIC_API_KEY", "NVIDIA_API_KEY"]  # the layout model is part of every build
     assert body["models"]["lesson"].startswith("anthropic:claude-opus-5-5")
     assert "sk-" not in str(body)
 

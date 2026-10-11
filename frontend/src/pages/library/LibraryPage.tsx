@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { listBooks, listCourses } from "../../api";
-import { ApiKeysDialog } from "../../components/ApiKeysDialog";
 import { Icon } from "../../components/Icon";
 import { ErrorState } from "../../components/StateMessage";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
@@ -36,7 +35,6 @@ export function LibraryPage() {
   const noBooks = books.data !== undefined && books.data.length === 0;
   const missingKeys = health.data && !health.data.llm_ready ? health.data.missing_keys : [];
   const missingKey = missingKeys.length > 0;
-  const [keysOpen, setKeysOpen] = useState(false);
 
   if (unreachable) {
     return (
@@ -71,14 +69,11 @@ export function LibraryPage() {
           <Icon name="warning" size={18} />
           <span>
             <strong>{missingKeys.join(" and ")} {missingKeys.length > 1 ? "are" : "is"} not set.</strong> Importing books works, but
-            building a course needs {missingKeys.length > 1 ? "the keys" : "the key"}.
+            building a course needs {missingKeys.length > 1 ? "them" : "it"} in the project's <code>.env</code> (see{" "}
+            <code>.env.example</code>), then a restart.
           </span>
-          <button type="button" className="btn btn--sm library__notice-action" onClick={() => setKeysOpen(true)}>
-            <Icon name="key" size={16} /> Enter API {missingKeys.length > 1 ? "keys" : "key"}
-          </button>
         </div>
       )}
-      <ApiKeysDialog open={keysOpen} onClose={() => setKeysOpen(false)} />
 
       {hasCourses && (
         <section className="library__section" aria-labelledby="courses-heading">

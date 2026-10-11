@@ -21,16 +21,6 @@
 
 .library__notice {
   margin-top: calc(-1 * var(--space-5));
-  flex-wrap: wrap;
-}
-
-.library__notice > span {
-  flex: 1 1 260px;
-}
-
-.library__notice-action {
-  flex: none;
-  margin-left: auto;
 }
 
 .library__notice code {

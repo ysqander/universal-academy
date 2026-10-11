@@ -48,8 +48,12 @@ key.
 
 ### 2. Build with an API key
 
-1. Click the **key icon** in the app header to open **API keys**, and paste an **OpenAI** or **Anthropic** key.
-   Optionally add an **NVIDIA** key for better page layout (Nemotron Parse finds figures and reading order).
+1. Put your keys in `.env` at the project root (`./run.sh` creates it from `.env.example` on first start), then
+   restart the app:
+   - `ANTHROPIC_API_KEY` (with `UA_LLM_PROVIDER=anthropic`) or `OPENAI_API_KEY` (the default provider) — the model
+     that reads the pages and writes the graph, lessons and questions;
+   - `NVIDIA_API_KEY` — NVIDIA Nemotron Parse finds each page's layout (text blocks, figures, formulas, reading
+     order). Every build uses it; a free key is available at [build.nvidia.com](https://build.nvidia.com).
 2. In the **Library**, drop a PDF (or paste a path on the machine running the app). A book that is already in your
    library is opened instead of being added twice.
 3. Pick a chapter in the outline (shift-click or "Select several" for consecutive sections), check the page
@@ -58,14 +62,12 @@ key.
 Cost depends on the model and on the length of the chapter. When a build ends, its **Build log** (on the course page)
 shows the estimated cost of that build.
 
-Keys entered in the app are saved to `<data folder>/api-keys.json` (readable only by your user) and take precedence
-over `.env`. You can also put them in `.env` at the project root instead (copy `.env.example`), which is also where
-you choose the provider and models (see [Configuration](#configuration)).
+`.env` is also where you choose the provider and models (see [Configuration](#configuration)).
 
-### 3. Build with Claude Code (no API key)
+### 3. Build with Claude Code (no OpenAI or Anthropic key)
 
 If you use [Claude Code](https://claude.com/claude-code), its agents can answer the app's model calls instead of an
-API:
+API. Only `NVIDIA_API_KEY` is needed in `.env` (page layout, see above):
 
 ```bash
 UA_AGENT_DIR=.agent-broker ./run.sh
@@ -80,8 +82,7 @@ until the build finishes. If the build stops, run `/build-course` again and pres
 
 ## Configuration
 
-Settings are read from `.env` at the project root (see `.env.example`), and environment variables override them. API
-keys and the provider saved in the app's **API keys** dialog override both.
+Settings are read from `.env` at the project root (see `.env.example`), and environment variables override them.
 
 - **Provider and models:** `UA_LLM_PROVIDER=openai` (the default) or `anthropic` runs every model role on one provider.
   `UA_PROVIDER_VISION|GRAPH|LESSON|VIZ|VERIFY` overrides a single role, for example so that Claude writes and GPT
@@ -97,7 +98,7 @@ keys and the provider saved in the app's **API keys** dialog override both.
 
 | What | Where |
 | --- | --- |
-| Database, course files, page renders, `api-keys.json` | the data folder: `~/Library/Application Support/UniversalAcademy` on macOS, `$XDG_DATA_HOME/UniversalAcademy` on Linux (default `~/.local/share/UniversalAcademy`), `%APPDATA%\UniversalAcademy` on Windows. Set `UA_DATA_DIR` to use another folder. |
+| Database, course files, page renders | the data folder: `~/Library/Application Support/UniversalAcademy` on macOS, `$XDG_DATA_HOME/UniversalAcademy` on Linux (default `~/.local/share/UniversalAcademy`), `%APPDATA%\UniversalAcademy` on Windows. Set `UA_DATA_DIR` to use another folder. |
 | Book PDFs | `books/<book_id>/book.pdf` in this folder (`UA_BOOKS_DIR` overrides it; not in git) |
 | Daily database snapshot | `backups/` in this folder, written by `run.sh` and kept for 14 days |
 
@@ -108,9 +109,9 @@ because otherwise the database still lists it. More detail is in [books/README.m
 
 - Everything runs on your computer. The app listens on `127.0.0.1` only, unless you set `UA_HOST`.
 - There are no accounts, no telemetry and no analytics.
-- Your API keys stay on your machine, in `.env` or `<data folder>/api-keys.json`.
+- Your API keys stay on your machine, in `.env` (git ignores it).
 - When a course is built (and when the app writes fresh questions for a skill you are reviewing), the page images and
-  text the model needs are sent to the provider you chose (OpenAI, Anthropic, NVIDIA), or to Claude Code on the Claude
+  text the model needs are sent to the provider you chose (OpenAI or Anthropic) and the page images to NVIDIA (layout), or to Claude Code on the Claude
   Code route. Nothing else leaves your machine.
 
 ## Development
@@ -137,7 +138,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before you change lessons, questions, sco
 
 ```
 backend/            FastAPI + SQLite (Python 3.12, uv)
-  app/api/          HTTP routers: books, courses, study, keys (API keys dialog), examples
+  app/api/          HTTP routers: books, courses, study, examples
   app/bundle.py     course bundles: export and import of the example course
   app/ingest/       PDF outline, page renders, figure candidates, page parsing
   app/pipeline/     course build: parse → graph → lessons → visuals → verify

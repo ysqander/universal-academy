@@ -621,33 +621,6 @@ export interface Health {
   agent_route: boolean; // UA_AGENT_DIR: model calls are answered by Claude Code agents (/build-course)
 }
 
-// ---------- API keys entered in the app (GET/PUT /api/settings/keys) ----------
-
-export type ApiKeyName = "OPENAI_API_KEY" | "ANTHROPIC_API_KEY" | "NVIDIA_API_KEY";
-
-/** One key, never the key itself: set or not, its last 4 characters, and where it comes from. */
-export interface ApiKeyStatus {
-  set: boolean;
-  last4: string | null;
-  source: "app" | "env" | null; // "app": saved in the app (api-keys.json); "env": .env / environment
-}
-
-export interface ApiKeys {
-  keys: Record<ApiKeyName, ApiKeyStatus>;
-  provider: "openai" | "anthropic"; // UA_LLM_PROVIDER (a role may override it: see Health.models)
-  agent_route: boolean; // Claude Code agents answer the model calls: keys are not used
-  fake_llm: boolean;
-  llm_ready: boolean;
-  missing_keys: string[];
-  file: string; // where keys saved in the app are kept (<data dir>/api-keys.json)
-}
-
-/** PUT /api/settings/keys: any of the keys (an empty string removes the saved one) and/or the provider. */
-export interface ApiKeysUpdate {
-  keys?: Partial<Record<ApiKeyName, string>>;
-  provider?: "openai" | "anthropic" | null;
-}
-
 // ---------- Example courses (GET /api/examples, POST /api/examples/{name}/import) ----------
 
 /** A course bundle shipped in the repo's examples/<name>/ (backend app/bundle.py), studied without a key. */

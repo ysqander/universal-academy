@@ -3,7 +3,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# No .env needed: API keys can be entered in the app (key icon in the header); .env (see .env.example) is optional.
+if [ ! -f "$ROOT/.env" ]; then
+  cp "$ROOT/.env.example" "$ROOT/.env"
+  echo "Created .env from .env.example. Add your keys to it — ANTHROPIC_API_KEY or OPENAI_API_KEY (UA_LLM_PROVIDER picks"
+  echo "the provider) and NVIDIA_API_KEY (page layout) — then run ./run.sh again. Studying the example course needs no key."
+  exit 1
+fi
 
 cd "$ROOT/backend"
 [ -d .venv ] || uv sync
@@ -44,9 +49,9 @@ if [ -f "$DATA_DIR/academy.sqlite3" ]; then
   ls -1t "$ROOT"/backups/academy-*.sqlite3 2>/dev/null | tail -n +15 | while read -r old; do rm -f "$old"; done
 fi
 
-{ read -r BOOKS_DIR; read -r LLM_READY; } < <(.venv/bin/python -c 'from app.config import settings; print(settings.books_dir); print(int(settings.llm_ready))')
+{ read -r BOOKS_DIR; read -r LLM_READY; read -r MISSING; } < <(.venv/bin/python -c 'from app.config import settings; print(settings.books_dir); print(int(settings.llm_ready)); print(" ".join(settings.missing_keys))')
 echo "Starting Universal Academy at http://localhost:$PORT (Ctrl-C to stop) — data in $DATA_DIR, books in $BOOKS_DIR"
 if [ "$LLM_READY" = 0 ]; then
-  echo "No API key yet: open the app and click the key icon in the header to enter one (or build courses with Claude Code — see README)."
+  echo "Building a course needs keys missing from .env: $MISSING (see .env.example). Studying works without them."
 fi
 exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT"

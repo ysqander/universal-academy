@@ -55,7 +55,18 @@ _active: set[str] = set()  # courses whose run_build is executing in this proces
 # ---------------------------------------------------------------------------
 
 
+def missing_keys_message() -> str | None:
+    """Why a build cannot run: keys missing from .env (see Settings.missing_keys), else None."""
+    missing = settings.missing_keys
+    if not missing:
+        return None
+    return (f"Add {' and '.join(missing)} to the project's .env file (see .env.example) and restart the app: "
+            "building a course needs " + ("them." if len(missing) > 1 else "it."))
+
+
 def create_course(req: CourseCreate) -> str:
+    if (message := missing_keys_message()) is not None:
+        raise ValueError(message)
     book = db.query_one("SELECT id, title, page_count, page_labels_json, pdf_path FROM books WHERE id = ?", (req.book_id,))
     if book is None:
         raise ValueError(f"Book {req.book_id} does not exist.")
@@ -124,6 +135,8 @@ def resume_build(course_id: str) -> JobStatus:
     """ValueError when the stages still to run need the book's PDF and it is missing."""
     course = load_course(course_id)
     if not (course_id in _active or (course_id in _tasks and not _tasks[course_id].done())):
+        if (message := missing_keys_message()) is not None:
+            raise ValueError(message)
         tracker = JobTracker.load(course_id)
         needs_pdf = any(stage.status != "done" for key, stage in tracker.stages.items() if key in ("render", "parse"))
         book = db.query_one("SELECT pdf_path, page_count FROM books WHERE id = ?", (course.book_id,))

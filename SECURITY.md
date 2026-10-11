@@ -7,10 +7,8 @@ Universal Academy is a local, single-user app. It has no login and no user accou
   can read your courses, use your API keys through the app (which costs you money) and add or delete books. Do this
   only on a network you trust, and never on a public one or directly on the internet. Importing a book by file path is
   limited to the machine that runs the app; uploads work from anywhere the app can be reached.
-- **API keys:** keys are kept on your machine, in `.env` at the project root or in `<data folder>/api-keys.json`
-  (file mode 600) when you enter them in the app (header key icon → **API keys**). The app never sends a key back to
-  the browser; it shows only whether a key is set and its last 4 characters. Keep `.env` out of git (it is in
-  `.gitignore`).
+- **API keys:** keys live in `.env` at the project root, on your machine. The app never sends a key to the browser
+  (it only reports which keys are missing). Keep `.env` out of git (it is in `.gitignore`).
 - **Model providers:** building a course sends the chapter's page images and text to the provider you configured
   (OpenAI, Anthropic, NVIDIA), or to Claude Code on the Claude Code route.
 
